@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App Switcher 面板 · v0 设计图纸</title>
+<style>
+/* ————————————————————————————————
+   Design Tokens(与已确认的 Design System 一一对应)
+   冻结后将逐项翻译为 NSVisualEffectView / SwiftUI 等价物
+   ———————————————————————————————— */
+:root {
+  --panel-bg: rgba(244, 244, 246, 0.62);      /* 图纸近似 .ultraThin 毛玻璃 */
+  --panel-blur: blur(40px) saturate(1.8);
+  --panel-radius: 16px;
+  --panel-shadow: 0 12px 40px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.08);
+
+  --icon-size: 64px;
+  --cell-size: 80px;                           /* 图标 + 选中块的容器 */
+  --cell-radius: 12px;
+  --sel-block: rgba(255, 255, 255, 0.55);      /* 原生⌘Tab 半透明白底选中块 */
+
+  --ink: #1d1d1f;                              /* apple-hig: not-quite-black */
+  --ink-muted: #86868b;
+  --hairline: rgba(0, 0, 0, 0.06);
+
+  --card-w: 240px;
+  --card-radius: 8px;
+  --card-bar-h: 22px;
+  --sel-card-ring: 0 0 0 2px rgba(255,255,255,0.9), 0 0 0 3.5px rgba(0,0,0,0.10);
+
+  --font: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+
+  --motion-panel: 0.12s cubic-bezier(0.2, 0.8, 0.2, 1); /* 面板弹出 120ms */
+  --motion-row: 0.08s ease-out;                          /* 缩略行弹出 80ms */
+  --motion-sel: 0.1s ease;                               /* 选中切换 100ms */
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  background: linear-gradient(160deg, #4b4b50 0%, #35353a 60%, #2c2c31 100%);
+  min-height: 100vh;
+  padding: 56px 40px 64px;
+  color: #e8e8ea;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page-head { max-width: 980px; margin: 0 auto 40px; }
+.page-head h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.2px; }
+.page-head p  { font-size: 13px; color: rgba(232,232,234,0.55); margin-top: 6px; line-height: 1.5; }
+
+.replay {
+  margin-top: 14px;
+  font: inherit; font-size: 12px;
+  color: rgba(232,232,234,0.85);
+  background: rgba(255,255,255,0.08);
+  border: 0.5px solid rgba(255,255,255,0.18);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.replay:hover { background: rgba(255,255,255,0.14); }
+
+/* ———— 帧容器 ———— */
+.frame { max-width: 980px; margin: 0 auto 72px; }
+.frame-label {
+  font-size: 12px; color: rgba(232,232,234,0.5);
+  margin-bottom: 14px; display: flex; gap: 10px; align-items: baseline;
+}
+.frame-label b { color: rgba(232,232,234,0.85); font-weight: 600; }
+.frame-hint { font-size: 12px; color: rgba(232,232,234,0.4); margin-top: 14px; line-height: 1.6; }
+.frame-hint kbd {
+  font-family: inherit; font-size: 11px;
+  border: 0.5px solid rgba(255,255,255,0.25); border-bottom-width: 1.5px;
+  border-radius: 4px; padding: 1px 5px; background: rgba(255,255,255,0.06);
+}
+
+/* ———— 面板本体(两帧共用同一套 token) ———— */
+.stage { display: flex; justify-content: center; padding: 36px 0; }
+
+.switcher {
+  background: var(--panel-bg);
+  -webkit-backdrop-filter: var(--panel-blur);
+  backdrop-filter: var(--panel-blur);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  padding: 18px 24px 22px;
+  animation: panelIn var(--motion-panel) both;
+}
+@keyframes panelIn {
+  from { opacity: 0; transform: scale(0.96) translateY(5px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.app-name {
+  font-size: 13px; font-weight: 400; color: var(--ink);
+  text-align: center; margin-bottom: 14px;
+}
+
+/* ———— 图标层 ———— */
+.strip { display: flex; gap: 6px; }
+.icon-cell {
+  width: var(--cell-size); height: var(--cell-size);
+  border-radius: var(--cell-radius);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; cursor: default; user-select: none;
+}
+.icon-cell::before {                       /* 选中块:独立层,可过渡淡入淡出 */
+  content: '';
+  position: absolute; inset: 0;
+  background: var(--sel-block);
+  border-radius: var(--cell-radius);
+  box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.4);
+  opacity: 0;
+  transition: opacity var(--motion-sel);
+}
+.icon-cell.sel::before { opacity: 1; }
+
+.app-icon {
+  width: var(--icon-size); height: var(--icon-size);
+  border-radius: 15px;                     /* macOS 图标圆角率 ≈ 22.5% */
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 600; color: #fff;
+  position: relative;
+  box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.15);
+}
+/* 占位图标 = 首字母徽标(图纸阶段显式声明:非最终素材,真实系统图标施工期注入) */
+.app-icon.placeholder::after {
+  content: 'icon';
+  position: absolute; right: 5px; bottom: 3px;
+  font-size: 8px; font-weight: 400; color: rgba(255,255,255,0.5);
+}
+
+/* ———— 展开层:窗口缩略卡 ———— */
+.preview-row {
+  margin-top: 16px; padding-top: 16px;
+  border-top: 0.5px solid var(--hairline);
+  display: flex; gap: 12px; justify-content: center;
+  animation: rowIn var(--motion-row) both;
+}
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.win-card {
+  width: var(--card-w);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 2px 8px rgba(0,0,0,0.08);
+  cursor: default; user-select: none;
+}
+.win-card.sel { box-shadow: var(--sel-card-ring); }
+
+.win-bar {
+  height: var(--card-bar-h);
+  display: flex; align-items: center; padding: 0 10px;
+  font-size: 11px; color: var(--ink);
+  background: rgba(0,0,0,0.03);
+  border-bottom: 0.5px solid var(--hairline);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.win-shot {
+  aspect-ratio: 16 / 10;
+  background:
+    repeating-conic-gradient(rgba(0,0,0,0.035) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px,
+    linear-gradient(180deg, #ececef, #e2e2e6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--ink-muted);
+}
+
+/* ———— 页脚:假设声明 ———— */
+.assumptions {
+  max-width: 980px; margin: 0 auto;
+  border-top: 0.5px solid rgba(255,255,255,0.14);
+  padding-top: 20px;
+  font-size: 12px; line-height: 1.9; color: rgba(232,232,234,0.55);
+}
+.assumptions b { color: rgba(232,232,234,0.85); }
+.assumptions li { margin-left: 18px; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>App Switcher 面板 · v0 设计图纸</h1>
+  <p>两帧静态态 · 锚:macOS 原生 ⌘Tab(参照 DockDoor CmdTab enhancement)· 仅验形态与动画节奏,毛玻璃质感以原生施工为准。图标与窗口截图均为占位素材。</p>
+  <button class="replay" id="replay">↻ 重放弹出动画(120ms 面板 / 80ms 缩略行)</button>
+</div>
+
+<!-- ═══════════ 帧 A:图标层平移态 ═══════════ -->
+<section class="frame" data-screen-label="A">
+  <div class="frame-label"><b>帧 A</b><span>图标层平移态 — 移到选择会即时跟手(hover 演示选中切换 100ms)</span></div>
+  <div class="stage">
+    <div class="switcher js-anim">
+      <div class="app-name" id="nameA">IntelliJ IDEA</div>
+      <div class="strip" id="stripA">
+        <div class="icon-cell" data-name="Finder"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#4aa3f0,#2376c9)">F</div></div>
+        <div class="icon-cell" data-name="Google Chrome"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#f6c445,#e0801f)">C</div></div>
+        <div class="icon-cell sel" data-name="IntelliJ IDEA"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#4b4b52,#232328);color:#71c2f5">IJ</div></div>
+        <div class="icon-cell" data-name="Terminal"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#3a3a3f,#151517);color:#7ee08a">&gt;_</div></div>
+        <div class="icon-cell" data-name="Slack"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#8e6cc8,#5b3f96)">S</div></div>
+        <div class="icon-cell" data-name="WeChat"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#58c15c,#2f8f33)">W</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="frame-hint">按 <kbd>⌥</kbd> 呼出面板 · <kbd>Tab</kbd> 后移 / <kbd>⇧ Tab</kbd> 前移 · 释放 <kbd>⌥</kbd> 确认聚焦 · <kbd>Esc</kbd> 放弃</div>
+</section>
+
+<!-- ═══════════ 帧 B:展开层态(选中 IDEA,弹出本屏两个窗口) ═══════════ -->
+<section class="frame" data-screen-label="B">
+  <div class="frame-label"><b>帧 B</b><span>展开层态 — 停在 IDEA 上,弹出该 App 在本屏的窗口缩略(C 在另一屏,不出现)</span></div>
+  <div class="stage">
+    <div class="switcher js-anim">
+      <div class="app-name">IntelliJ IDEA</div>
+      <div class="strip">
+        <div class="icon-cell" data-name="Finder"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#4aa3f0,#2376c9)">F</div></div>
+        <div class="icon-cell" data-name="Google Chrome"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#f6c445,#e0801f)">C</div></div>
+        <div class="icon-cell sel" data-name="IntelliJ IDEA"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#4b4b52,#232328);color:#71c2f5">IJ</div></div>
+        <div class="icon-cell" data-name="Terminal"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#3a3a3f,#151517);color:#7ee08a">&gt;_</div></div>
+        <div class="icon-cell" data-name="Slack"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#8e6cc8,#5b3f96)">S</div></div>
+        <div class="icon-cell" data-name="WeChat"><div class="app-icon placeholder" style="background:linear-gradient(180deg,#58c15c,#2f8f33)">W</div></div>
+      </div>
+      <div class="preview-row" id="previewRow">
+        <div class="win-card sel" data-win="trade-galaxy — OrderService.java">
+          <div class="win-bar">trade-galaxy — OrderService.java</div>
+          <div class="win-shot">窗口缩略图 · 占位 16:10</div>
+        </div>
+        <div class="win-card" data-win="train-agent-gateway — pom.xml">
+          <div class="win-bar">train-agent-gateway — pom.xml</div>
+          <div class="win-shot">窗口缩略图 · 占位 16:10</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="frame-hint">
+    悬停缩略卡 = 选中跟手(鼠标最大优先) · <kbd>←</kbd> <kbd>→</kbd> 同样可切换 · 释放 <kbd>⌥</kbd> 聚焦选中的那一扇窗
+    —— 点击两张卡片试试选中态切换(100ms)
+  </div>
+</section>
+
+<!-- ═══════════ 假设声明(v0 显式列出,供纠偏) ═══════════ -->
+<div class="assumptions">
+  <b>v0 假设(每条都可被推翻):</b>
+  <ul>
+    <li>浅色材质优先出;深色模式 = 同套 token 的暗变体,图纸 v1 再补(原生 vibrancy 自适应,token 结构不变)</li>
+    <li>展开层的锚接方式采用 <b>内嵌</b>(缩略行长在背板内部,与图标共享同一块毛玻璃);备选 = DockDoor 式<b>独立浮条</b>悬于背板正下 —— 这是 v0 留给你的唯一布局分叉</li>
+    <li>选中态全部中性化:图标层 = 半透明白块,卡片层 = 白描边 + 发丝外环;不引入 systemBlue</li>
+    <li>卡片标题行复用窗口标题("项目名 — 文件"),不含关闭/最小化按钮 —— 面板是切换器不是窗口管理器</li>
+    <li>占位图标 = 首字母徽标并带 `icon` 水印,施工期注入真实系统图标(`NSRunningApplication.icon`)</li>
+    <li>预览行最多展开 N 张(N 暂定 6,超出折出箭头)—— v0 只画 2 张,数量策略待定</li>
+  </ul>
+</div>
+
+<script>
+// hover 即选中(鼠标最大优先的现场演示):帧 A 图标层
+const stripA = document.getElementById('stripA');
+const nameA = document.getElementById('nameA');
+stripA.querySelectorAll('.icon-cell').forEach(cell => {
+  cell.addEventListener('mouseenter', () => {
+    stripA.querySelectorAll('.icon-cell').forEach(c => c.classList.remove('sel'));
+    cell.classList.add('sel');
+    nameA.textContent = cell.dataset.name;
+  });
+});
+
+// 点击切换选中窗口(帧 B 展开层)
+document.querySelectorAll('#previewRow .win-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('#previewRow .win-card').forEach(c => c.classList.remove('sel'));
+    card.classList.add('sel');
+  });
+});
+
+// 重放动画:移除再强制重排加回
+document.getElementById('replay').addEventListener('click', () => {
+  document.querySelectorAll('.js-anim, .preview-row').forEach(el => {
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+  });
+});
+</script>
+
+</body>
+</html>
