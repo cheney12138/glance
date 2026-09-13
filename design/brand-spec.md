@@ -35,7 +35,7 @@ brand-fidelity: 9/10       # 违例即丑:禁渐变/禁品牌色/禁 emoji 图�
 | 图标 | 64×64,macOS squircle | `NSRunningApplication.icon`(真实图标,施工期注入) |
 | 图标容器 | 80×80,圆角 12 | 同 |
 | 选中块 | `rgba(255,255,255,.55)` 半透明 | SwiftUI `RoundedRectangle(12).fill(.white.opacity(0.35))`(深色下近似,施工时校准) |
-| 缩略卡 | 宽 240、标题行 22px 高 11px 字、圆角 8、16:10 | 同 |
+| 缩略卡 | 宽 **320**、标题行 22px 高 11px 字、图片区 16:10(200pt)、圆角 8 | 同(宽度 240→320:T6 实机校准,240 在文字密集场景不可读) |
 | 卡片选中 | 2px 白环 + 0.5px 外发丝 | `StrokeBorder` 双层;深色下用 `.white.opacity(0.9)` 主环 |
 | 卡片标题 | 窗口标题(项目名 — 文件) | 单行行省略 `.truncatingTail` |
 | 发丝线 | 0.5px `rgba(0,0,0,.06)` | `Color(.separatorColor)` |

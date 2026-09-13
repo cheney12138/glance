@@ -14,8 +14,9 @@
 		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
 		5A0000000000000000000016 /* WindowEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000027 /* WindowEnumerator.swift */; };
 		5A0000000000000000000017 /* MruEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000028 /* MruEvidence.swift */; };
-		5A0000000000000000000018 /* DebugSessionLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000029 /* DebugSessionLogger.swift */; };
 		5A0000000000000000000019 /* Snapshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000030 /* Snapshotter.swift */; };
+		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
+		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,8 +28,9 @@
 		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
 		5A0000000000000000000027 /* WindowEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowEnumerator.swift; sourceTree = "<group>"; };
 		5A0000000000000000000028 /* MruEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MruEvidence.swift; sourceTree = "<group>"; };
-		5A0000000000000000000029 /* DebugSessionLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSessionLogger.swift; sourceTree = "<group>"; };
 		5A0000000000000000000030 /* Snapshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshotter.swift; sourceTree = "<group>"; };
+		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
+		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +60,7 @@
 				5A0000000000000000000034 /* Permissions */,
 				5A0000000000000000000036 /* Trigger */,
 				5A0000000000000000000037 /* Inventory */,
+				5A0000000000000000000038 /* Panel */,
 			);
 			path = "Sources/mac-switcher";
 			sourceTree = "<group>";
@@ -100,10 +103,18 @@
 			children = (
 				5A0000000000000000000027 /* WindowEnumerator.swift */,
 				5A0000000000000000000028 /* MruEvidence.swift */,
-				5A0000000000000000000029 /* DebugSessionLogger.swift */,
 				5A0000000000000000000030 /* Snapshotter.swift */,
 			);
 			path = Inventory;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000038 /* Panel */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000039 /* PanelController.swift */,
+				5A0000000000000000000040 /* PanelView.swift */,
+			);
+			path = Panel;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -181,8 +192,9 @@
 				5A0000000000000000000015 /* HotkeyTap.swift in Sources */,
 				5A0000000000000000000016 /* WindowEnumerator.swift in Sources */,
 				5A0000000000000000000017 /* MruEvidence.swift in Sources */,
-				5A0000000000000000000018 /* DebugSessionLogger.swift in Sources */,
 				5A0000000000000000000019 /* Snapshotter.swift in Sources */,
+				5A0000000000000000000020 /* PanelController.swift in Sources */,
+				5A0000000000000000000044 /* PanelView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

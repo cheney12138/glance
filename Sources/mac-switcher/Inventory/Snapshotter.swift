@@ -32,9 +32,11 @@ final class Snapshotter: ObservableObject {
                     continue
                 }
                 let config = SCStreamConfiguration()
-                config.height = 320
+                // 出图规格:宽 720px(240pt 卡片 ≈3x retina 余量),高按窗口比例,
+                // 上下封顶防极端形状(竖条/横幅)出 4000px 大图(T6 实机现形:320px 高糊成马赛克)
                 let aspect = w.bounds.width / max(w.bounds.height, 1)
-                config.width = max(Int(320 * aspect), 48)
+                config.width = 720
+                config.height = min(max(Int(720 / aspect), 48), 1500)
                 config.showsCursor = false
                 config.scalesToFit = true
                 do {
