@@ -4,7 +4,7 @@ import CoreGraphics
 /// 权限门禁:辅助功能 + 屏幕录制两项系统权限的检测 / 申请 / 轮询。
 /// 门禁语义:任一项缺失即未就绪,后续 T3 起的功能模块只读 `allGranted`,不各自再查。
 @MainActor
-final class PermissionMonitor: ObservableObject {
+final class PermissionMonitor: ObservableObject {			
     @Published private(set) var accessibilityGranted = false
     @Published private(set) var screenCaptureGranted = false
 
@@ -17,7 +17,7 @@ final class PermissionMonitor: ObservableObject {
     func refresh() {
         accessibilityGranted = AXIsProcessTrusted()
         screenCaptureGranted = CGPreflightScreenCaptureAccess()
-        if allGranted {
+        if allGranted {	
             stopPolling()
         } else {
             startPolling()

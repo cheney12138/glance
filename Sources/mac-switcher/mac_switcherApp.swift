@@ -7,6 +7,7 @@ import SwiftUI
 struct MacSwitcherApp: App {
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
+    private let hotkeys = HotkeyTapCenter()
 
     var body: some Scene {
         MenuBarExtra {
@@ -23,6 +24,11 @@ struct MacSwitcherApp: App {
                 .onAppear {
                     permissions.refresh()
                     if !permissions.allGranted { showPermissions() }
+                    if permissions.allGranted { hotkeys.start() }
+                }
+                // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
+                .onChange(of: permissions.allGranted) { _, granted in
+                    if granted { hotkeys.start() }
                 }
         }
         .menuBarExtraStyle(.menu)

@@ -11,6 +11,7 @@
 		5A0000000000000000000012 /* PermissionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000023 /* PermissionMonitor.swift */; };
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
+		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +20,7 @@
 		5A0000000000000000000023 /* PermissionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionMonitor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000025 /* CursorScreenAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorScreenAnchor.swift; sourceTree = "<group>"; };
+		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -46,6 +48,7 @@
 				5A0000000000000000000021 /* mac_switcherApp.swift */,
 				5A0000000000000000000035 /* Shared */,
 				5A0000000000000000000034 /* Permissions */,
+				5A0000000000000000000036 /* Trigger */,
 			);
 			path = "Sources/mac-switcher";
 			sourceTree = "<group>";
@@ -65,6 +68,14 @@
 				5A0000000000000000000025 /* CursorScreenAnchor.swift */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000036 /* Trigger */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000026 /* HotkeyTap.swift */,
+			);
+			path = Trigger;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000033 /* Products */ = {
@@ -147,6 +158,7 @@
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,
 				5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */,
+				5A0000000000000000000015 /* HotkeyTap.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
