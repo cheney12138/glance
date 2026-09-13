@@ -1,6 +1,65 @@
 import CoreGraphics
 import AppKit
 
+/// 触发键配置(T9 设置面板录制式改键;默认 ⌥Tab)。修饰键只允许 ⌥/⌘/⌃——
+/// ⇧ 被永久征用为"反向"语义,不许当触发修饰键
+struct TriggerConfig: Equatable {
+    var keyCode: Int64
+    var modifierMask: CGEventFlags
+    var modifierKeyCodes: Set<Int64>
+    var modifierSymbol: String // ⌥ ⌘ ⌃
+    var keyName: String
+
+    var display: String { modifierSymbol + keyName }
+
+    static let `default` = TriggerConfig(
+        keyCode: 0x30, modifierMask: .maskAlternate,
+        modifierKeyCodes: [0x3A, 0x3D], modifierSymbol: "⌥", keyName: "Tab"
+    )
+
+    static func load() -> TriggerConfig {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "trigger.keyCode") != nil,
+              let mod = d.string(forKey: "trigger.modifier") else { return .default }
+        let keyCode = Int64(d.integer(forKey: "trigger.keyCode"))
+        switch mod {
+        case "command":
+            return TriggerConfig(keyCode: keyCode, modifierMask: .maskCommand,
+                                 modifierKeyCodes: [0x37, 0x36], modifierSymbol: "⌘", keyName: keyName(of: keyCode))
+        case "control":
+            return TriggerConfig(keyCode: keyCode, modifierMask: .maskControl,
+                                 modifierKeyCodes: [0x3B, 0x3E], modifierSymbol: "⌃", keyName: keyName(of: keyCode))
+        case "option":
+            return TriggerConfig(keyCode: keyCode, modifierMask: .maskAlternate,
+                                 modifierKeyCodes: [0x3A, 0x3D], modifierSymbol: "⌥", keyName: keyName(of: keyCode))
+        default:
+            return .default
+        }
+    }
+
+    /// 展示用的键名(够用即可,不追求全键盘表)
+    static func keyName(of keyCode: Int64) -> String {
+        switch keyCode {
+        case 0x30: return "Tab"
+        case 0x31: return "Space"
+        case 0x24: return "↩"
+        default:
+            if let name = [
+                0x00: "A", 0x01: "S", 0x02: "D", 0x03: "F", 0x04: "H", 0x05: "G",
+                0x06: "Z", 0x07: "X", 0x08: "C", 0x09: "V", 0x0B: "B", 0x0C: "Q",
+                0x0D: "W", 0x0E: "E", 0x0F: "R", 0x10: "Y", 0x11: "T", 0x12: "1",
+                0x13: "2", 0x14: "3", 0x15: "4", 0x16: "6", 0x17: "5", 0x18: "=",
+                0x19: "9", 0x1A: "7", 0x1B: "-", 0x1C: "8", 0x1D: "0", 0x1E: "]",
+                0x1F: "O", 0x20: "U", 0x21: "[", 0x22: "I", 0x23: "P", 0x25: "L",
+                0x26: "J", 0x27: "'", 0x28: "K", 0x29: ";", 0x2A: "\\", 0x2B: ",",
+                0x2C: "/", 0x2D: "N", 0x2E: "M", 0x2F: ".", 0x32: "`",
+            ][Int(keyCode)] { return name }
+            return "键\(keyCode)"
+        }
+    }
+}
+
+
 /// ⌥Tab 触发层(ADR 无关,纯输入管线)。
 /// 状态机:idle ─⌥按下→ armed ─首次 Tab→ navigating ─⌥释放→(确认)idle
 ///                                              └─Esc→(放弃)idle
@@ -31,13 +90,12 @@ final class HotkeyTapCenter {
     private var tap: CFMachPort?
     private var runloopSource: CFRunLoopSource?
 
-    private static let keyTab: Int64 = 0x30
     private static let keyLeft: Int64 = 0x7B
     private static let keyRight: Int64 = 0x7C
     private static let keyEsc: Int64 = 0x35
     private static let keyReturn: Int64 = 0x24
-    private static let optionKeys: Set<Int64> = [0x3A, 0x3D] // 左右 ⌥
-    private static let navKeys: Set<Int64> = [keyTab, keyLeft, keyRight, keyEsc, keyReturn]
+    /// 导航期被吞的固定键(触发主键由 TriggerConfig 动态给)
+    private static let navKeys: Set<Int64> = [keyLeft, keyRight, keyEsc, keyReturn]
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
@@ -80,6 +138,7 @@ final class HotkeyTapCenter {
     /// 注意:tap 的 runloop source 挂在主 runloop,回调就在主线程,可以安全动 @MainActor 状态。
     fileprivate func handle(_ event: CGEvent) -> Bool {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let config = TriggerConfig.load() // 每次事件现读:改键即时生效,不用重启
 
         // ⌘+左键:补焦耳朵。导航态里挂起;事件本身永远放行,补不补焦由回调决定
         if event.type == .leftMouseDown {
@@ -89,16 +148,16 @@ final class HotkeyTapCenter {
             return false
         }
 
-        // ⌥ 的按下/释放只看 flagsChanged:纯修饰键没有 keyDown
-        if event.type == .flagsChanged, Self.optionKeys.contains(keyCode) {
-            let optionDown = event.flags.contains(.maskAlternate)
-            switch (state, optionDown) {
+        // 触发修饰键的按下/释放只看 flagsChanged:纯修饰键没有 keyDown
+        if event.type == .flagsChanged, config.modifierKeyCodes.contains(keyCode) {
+            let modifierDown = event.flags.contains(config.modifierMask)
+            switch (state, modifierDown) {
             case (.idle, true):
-                state = .armed // 裸按 ⌥ 只待命,什么都不发生
+                state = .armed // 裸按触发修饰键只待命,什么都不发生
             case (.armed, false):
                 state = .idle  // 待命期放手:恢复原状
             case (.navigating, false):
-                // 钉住:松 ⌥ 不确认、不退出导航态——面板与它的"脑子"一起钉住,
+                // 钉住:松手不确认、不退出导航态——面板与它的"脑子"一起钉住,
                 // 否则面板还在台上、状态机已经下班,Tabs/Esc 全漏给前台 App(实机现形)
                 if pinPanel { break }
                 state = .idle
@@ -109,8 +168,8 @@ final class HotkeyTapCenter {
             return false
         }
 
-        // 非导航期:Tab 可以开导航(armed→navigating),其他键一概放行
-        if state == .armed, event.type == .keyDown, keyCode == Self.keyTab {
+        // 非导航期:触发主键开导航(armed→navigating),其他键一概放行
+        if state == .armed, event.type == .keyDown, keyCode == config.keyCode {
             state = .navigating
             emit(.begin)                                     // 面板出现
             emit(event.flags.contains(.maskShift) ? .prev : .next) // 原生语义:首个和弦即落在"上一个"位
@@ -119,22 +178,22 @@ final class HotkeyTapCenter {
 
         guard state == .navigating else { return false }
 
-        // 导航期:四个导航键的 down+up 全吞(keyUp 不吞会把半个键漏给前台 App)
-        guard Self.navKeys.contains(keyCode) else { return false }
+        // 导航期:导航键与触发主键的 down+up 全吞(keyUp 不吞会把半个键漏给前台 App)
+        guard Self.navKeys.contains(keyCode) || keyCode == config.keyCode else { return false }
         guard event.type == .keyDown else { return true }
 
-        switch keyCode {
-        case Self.keyTab:
+        if keyCode == config.keyCode {
             emit(event.flags.contains(.maskShift) ? .prev : .next)
-        case Self.keyLeft: emit(.windowLeft)
-        case Self.keyRight: emit(.windowRight)
-        case Self.keyReturn:
+        } else if keyCode == Self.keyLeft {
+            emit(.windowLeft)
+        } else if keyCode == Self.keyRight {
+            emit(.windowRight)
+        } else if keyCode == Self.keyReturn {
             state = .idle
             emit(.confirm) // 钉住模式的确认键(松手已让位给"保持打开")
-        case Self.keyEsc:
+        } else if keyCode == Self.keyEsc {
             state = .idle
             emit(.cancel)
-        default: break
         }
         return true
     }

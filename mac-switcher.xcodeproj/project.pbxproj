@@ -19,6 +19,8 @@
 		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
 		5A0000000000000000000045 /* WindowFocuser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000046 /* WindowFocuser.swift */; };
 		5A0000000000000000000048 /* CmdClickFix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000049 /* CmdClickFix.swift */; };
+		5A0000000000000000000073 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000071 /* SettingsStore.swift */; };
+		5A0000000000000000000074 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000072 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,6 +37,8 @@
 		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000046 /* WindowFocuser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowFocuser.swift; sourceTree = "<group>"; };
 		5A0000000000000000000049 /* CmdClickFix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmdClickFix.swift; sourceTree = "<group>"; };
+		5A0000000000000000000071 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		5A0000000000000000000072 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +70,7 @@
 				5A0000000000000000000037 /* Inventory */,
 				5A0000000000000000000038 /* Panel */,
 				5A0000000000000000000047 /* Focus */,
+				5A0000000000000000000070 /* Settings */,
 			);
 			path = "Sources/mac-switcher";
 			sourceTree = "<group>";
@@ -129,6 +134,15 @@
 				5A0000000000000000000049 /* CmdClickFix.swift */,
 			);
 			path = Focus;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000070 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000071 /* SettingsStore.swift */,
+				5A0000000000000000000072 /* SettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -211,6 +225,8 @@
 				5A0000000000000000000044 /* PanelView.swift in Sources */,
 				5A0000000000000000000045 /* WindowFocuser.swift in Sources */,
 				5A0000000000000000000048 /* CmdClickFix.swift in Sources */,
+				5A0000000000000000000073 /* SettingsStore.swift in Sources */,
+				5A0000000000000000000074 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

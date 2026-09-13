@@ -19,8 +19,7 @@ struct MacSwitcherApp: App {
                 pinPanelDebug.toggle()
             }
             Divider()
-            Button("设置…") {}
-                .disabled(true) // T9 占位
+            Button("设置…") { showSettings() }
             Divider()
             Button("退出 mac-switcher") {
                 NSApplication.shared.terminate(nil)
@@ -47,16 +46,28 @@ struct MacSwitcherApp: App {
             PermissionGuideView(monitor: permissions)
         }
         .windowResizability(.contentSize)
+
+        Window("mac-switcher 设置", id: "settings") {
+            SettingsView(store: SettingsStore.shared, permissions: permissions)
+        }
+        .windowResizability(.contentSize)
     }
 
-    /// LSUIElement 应用的窗口不会自动到前台,先 activate 再开窗
-    private func showPermissions() {
+    /// LSUIElement 应用的窗口不会自动到前台。macOS 14 起 activate 降级为"请求",
+    /// 且零窗 agent 的激活请求会被压制(实机现形:首次点设置躺在后面,二次正常)。
+    /// 所以开窗后补一剂:再激活 + 显式 makeKeyAndOrderFront + orderFrontRegardless
+    private func showWindow(id: String) {
         NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: "permissions")
-        // openWindow 内部异步,窗口对象要到下一圈 runloop 才挂得上,稍后把它钉到光标屏
+        openWindow(id: id)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue == "permissions" }) else { return }
+            guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue == id }) else { return }
+            NSApp.activate(ignoringOtherApps: true)
             CursorScreenAnchor.center(w)
+            w.makeKeyAndOrderFront(nil)
+            w.orderFrontRegardless()
         }
     }
+
+    private func showPermissions() { showWindow(id: "permissions") }
+    private func showSettings() { showWindow(id: "settings") }
 }
