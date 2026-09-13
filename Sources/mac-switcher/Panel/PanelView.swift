@@ -1,83 +1,55 @@
 import SwiftUI
 import AppKit
 
-/// 切换器面板。全部度量与材质以 design/brand-spec.md 为准——改样式先改规格,不改这里。
+/// 切换器主面板 v0.2(只装 App 长条;窗口预览已独立成 PreviewPanelView 浮窗——
+/// 评审拍板:凑在一个容器里天然对齐不了图标)。
+/// 全部度量以 design/brand-spec.md(v0.2 修订)为准。
 struct PanelView: View {
     @ObservedObject var controller: PanelController
-    @ObservedObject var snapshotter: Snapshotter
 
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     var body: some View {
         ZStack {
-            // 毛玻璃背板(.underWindowBackground ≈ 图纸 backdrop-filter;深浅由系统接管)
-            VisualEffectBackground(material: .underWindowBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // ★材质更轻亮:.popover 替代 .underWindowBackground(治"灰蒙蒙")
+            VisualEffectBackground(material: .popover)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             VStack(spacing: 0) {
                 Text(controller.currentGroup?.appName ?? "")
-                    .font(.system(size: 13))
+                    .font(.system(size: 15, weight: .medium)) // ★名 13→15 medium
                     .foregroundStyle(.primary)
-                    .frame(height: 16)
-                    .padding(.bottom, 14)
+                    .frame(height: 18)
+                    .padding(.bottom, 20)                        // ★与图标层呼吸加大
 
                 iconStrip
-
-                if expandedCards.isEmpty {
-                    Spacer(minLength: 0).frame(height: 0)
-                } else {
-                    previewRow
-                        .padding(.top, 16)
-                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-                }
             }
-            .padding(.top, 18)
-            .padding(.bottom, 22)
-            .padding(.horizontal, 24)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: expandedCount)
+            .padding(.top, 22)
+            .padding(.bottom, 26)
+            .padding(.horizontal, 30)
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
-        .padding(28) // 阴影呼吸区
-        .shadow(color: .black.opacity(0.18), radius: 20, y: 6) // brand-spec:0 12px 40px 近似
+        .padding(28) // 阴影呼吸区——必须与 PanelController.paddedSize 口径一致
+        .shadow(color: .black.opacity(0.16), radius: 25, y: 8)
     }
 
-    // MARK: - 图标层
+    // MARK: - 图标层(★图标 72 / 格 84 / 距 20 / 无形容器)
 
     private var iconStrip: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 20) {
             ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                 IconCell(group: group, selected: i == controller.appIndex, reduceMotion: reduceMotion)
                     .onHover { inside in if inside { controller.hoverApp(i) } }
-                    // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(列表按 z 序,首窗即该 App 最前)
+                    // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
                     .onTapGesture {
                         if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
                     }
             }
         }
     }
-
-    // MARK: - 展开层
-
-    private var expandedCount: Int { controller.currentGroup?.windows.count ?? 0 }
-    private var expandedCards: [WindowRecord] { controller.currentGroup?.windows ?? [] }
-
-    private var previewRow: some View {
-        HStack(spacing: 12) {
-            ForEach(Array(expandedCards.enumerated()), id: \.element.wid) { i, w in
-                WindowCard(
-                    record: w,
-                    image: snapshotter.cache[w.wid],
-                    selected: i == controller.winIndex,
-                    reduceMotion: reduceMotion
-                )
-                .onHover { inside in if inside { controller.hoverWindow(i) } }
-                .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
-            }
-        }
-    }
 }
 
-// MARK: - 图标格(80 容器 / 64 图标 / 半透明白块选中)
+// MARK: - 图标格(★选中 = 极轻灰托底,无描边)
 
 private struct IconCell: View {
     let group: AppGroup
@@ -87,67 +59,18 @@ private struct IconCell: View {
     var body: some View {
         ZStack {
             if selected {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.white.opacity(0.35))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(.white.opacity(0.4), lineWidth: 0.5)
-                    )
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.primary.opacity(0.08)) // 深浅双色自适应;不描边
             }
             IconProvider.image(for: group.pid)
+                .renderingMode(.original)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 64, height: 64)
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .shadow(color: .black.opacity(0.14), radius: 4, y: 2)
         }
-        .frame(width: 80, height: 80)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: selected)
-    }
-}
-
-// MARK: - 窗口缩略卡(240 宽 / 22 标题行 / 2px 白环选中)
-
-private struct WindowCard: View {
-    let record: WindowRecord
-    let image: NSImage?
-    let selected: Bool
-    let reduceMotion: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Text(record.title)
-                .font(.system(size: 11))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(Color.primary.opacity(0.03))
-
-            ZStack {
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle().fill(Color.gray.opacity(0.15))
-                    Text("截图中…").font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 320, height: 200)
-            .clipped()
-        }
-        .frame(width: 320)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.white.opacity(selected ? 0.9 : 0), lineWidth: 2)
-                .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 0.5)
-        )
+        .frame(width: 84, height: 84)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: selected)
     }
 }
@@ -166,17 +89,17 @@ struct VisualEffectBackground: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
-/// 真实 App 图标(NSRunningApplication.icon),pid 维度缓存
+/// 真实 App 图标(NSRunningApplication.icon),pid 维度缓存。
+/// .original:阻止 SwiftUI 把图标当模板图——非 key 窗口里模板图会被染灰
 enum IconProvider {
     private static var cache: [pid_t: NSImage] = [:]
 
     static func image(for pid: pid_t) -> Image {
-        if let img = cache[pid] { return Image(nsImage: img).renderingMode(.original) }
+        if let img = cache[pid] { return Image(nsImage: img) }
         let img = NSRunningApplication(processIdentifier: pid)?.icon
             ?? NSImage(named: NSImage.applicationIconName)
             ?? NSImage()
         cache[pid] = img
-        // original:阻止 SwiftUI 把图标当模板图——非 key 窗口里模板图会被染灰(T6 实机现形)
-        return Image(nsImage: img).renderingMode(.original)
+        return Image(nsImage: img)
     }
 }

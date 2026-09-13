@@ -1,6 +1,7 @@
-# mac-switcher
+# Glance
 
-macOS 窗口级 App 切换器:鼠标在哪块屏,就只看哪块屏的窗;选中哪扇窗,就只拉起哪扇窗。
+macOS 窗口级 App 切换器(产品名 Glance,工程代号 mac-switcher,bundle id 不变):
+鼠标在哪块屏,就只看哪块屏的窗;选中哪扇窗,就只拉起哪扇窗。
 术语见 `CONTEXT.md`,样式契约见 `design/brand-spec.md`,决策见 `docs/adr/`。
 
 ## 开发

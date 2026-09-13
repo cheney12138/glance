@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App Switcher 面板 · v0.2 对照图纸(左 v0.1 现状 / 右 v0.2 对标)</title>
+<style>
+/* ════════════════════════════════════════════
+   v0.2 tokens(标 ★ 处 = 与 v0.1 的差异,DockDoor 实物校准)
+   ════════════════════════════════════════════ */
+:root {
+  --ink: #1d1d1f;
+  --ink-muted: #86868b;
+  --hairline: rgba(0,0,0,0.06);
+  --font: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font);
+  background: linear-gradient(160deg, #4b4b50 0%, #35353a 60%, #2c2c31 100%);
+  min-height: 100vh; padding: 48px 32px 64px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page-head { max-width: 1280px; margin: 0 auto 36px; color: #e8e8ea; }
+.page-head h1 { font-size: 20px; font-weight: 600; }
+.page-head p { font-size: 12.5px; color: rgba(232,232,234,0.55); margin-top: 6px; line-height: 1.6; }
+.legend { display: flex; gap: 18px; margin-top: 12px; font-size: 12px; color: rgba(232,232,234,0.7); }
+.legend span::before { content: '★'; color: #ffd60a; margin-right: 5px; }
+
+/* 对照画板 */
+.compare { max-width: 1280px; margin: 0 auto 56px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.side-label { font-size: 12px; color: rgba(232,232,234,0.5); margin-bottom: 12px; }
+.side-label b { color: rgba(232,232,234,0.9); }
+.side-body {
+  border-radius: 14px; padding: 36px 24px;
+  background: rgba(255,255,255,0.04);
+  border: 0.5px solid rgba(255,255,255,0.1);
+  display: flex; flex-direction: column; align-items: center; gap: 30px;
+}
+
+/* ══════════ v0.1 现状(粗糙版,与线上一致) ══════════ */
+.v01 .switcher {
+  background: rgba(244,244,246,0.62);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  backdrop-filter: blur(40px) saturate(1.8);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.08);
+  padding: 18px 24px 22px;
+}
+.v01 .app-name { font-size: 13px; color: var(--ink); text-align: center; margin-bottom: 14px; }
+.v01 .strip { display: flex; gap: 6px; }
+.v01 .cell {
+  width: 80px; height: 80px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.v01 .cell.sel::before {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(255,255,255,0.55);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.4);
+}
+.v01 .icon { width: 64px; height: 64px; border-radius: 15px; position: relative;
+  box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.15); object-fit: cover; }
+.v01 .preview { margin-top: 16px; padding-top: 16px; border-top: 0.5px solid var(--hairline); display: flex; gap: 12px; }
+.v01 .card {
+  width: 320px; border-radius: 8px; overflow: hidden; background: #fff;
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 2px 8px rgba(0,0,0,0.08);
+}
+.v01 .card.sel { box-shadow: 0 0 0 2px rgba(255,255,255,0.9), 0 0 0 3.5px rgba(0,0,0,0.10); }
+.v01 .card .bar {
+  height: 22px; display: flex; align-items: center; padding: 0 10px;
+  font-size: 11px; color: var(--ink); background: rgba(0,0,0,0.03);
+  border-bottom: 0.5px solid var(--hairline);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.v01 .card img { width: 320px; height: 200px; object-fit: cover; display: block; }
+
+/* ══════════ v0.2(★ 对标 DockDoor) ══════════ */
+.v02 .switcher {
+  background: rgba(248,248,250,0.55);                  /* ★④ 材质更轻更亮 */
+  -webkit-backdrop-filter: blur(30px) saturate(1.3);
+  backdrop-filter: blur(30px) saturate(1.3);
+  border-radius: 20px;                                  /* ★④ 圆角 16→20 */
+  box-shadow: 0 18px 50px rgba(0,0,0,0.16), 0 0 0 0.5px rgba(0,0,0,0.06);
+  padding: 22px 30px 26px;                              /* ★④ 内部呼吸加大 */
+}
+.v02 .app-name { font-size: 15px; font-weight: 500; color: var(--ink); text-align: center; margin-bottom: 20px; } /* ★⑤ 名更大、呼吸更大 */
+.v02 .strip { display: flex; gap: 20px; align-items: flex-end; } /* ★① 间距 6→20 */
+.v02 .cell {
+  width: 84px; height: 84px; border-radius: 18px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.v02 .cell.sel::before {                                /* ★② 极轻灰托底,无描边 */
+  content: ''; position: absolute; inset: 0;
+  background: rgba(0,0,0,0.06);
+  border-radius: 18px;
+}
+.v02 .icon {
+  width: 72px; height: 72px; border-radius: 17px; position: relative; object-fit: cover; /* ★① 图标 64→72 */
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12), inset 0 0 0 0.5px rgba(0,0,0,0.06);
+}
+.v02 .preview { margin-top: 22px; padding-top: 6px; border-top: 0; display: flex; gap: 16px; }  /* ★③ 去掉发丝分割线,卡片自撑腰 */
+.v02 .card {
+  width: 320px; border-radius: 12px; overflow: hidden; background: #fff;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12), 0 0 0 0.5px rgba(0,0,0,0.05);   /* ★③ 软阴影取代描边 */
+}
+.v02 .card.sel { box-shadow: 0 6px 24px rgba(0,0,0,0.12), 0 0 0 2px rgba(255,255,255,0.95); }
+.v02 .card .bar {                                       /* ★③ 标题区独立成段 */
+  height: 30px; display: flex; align-items: center; padding: 0 14px;
+  font-size: 13px; color: var(--ink);
+  border-bottom: 1px solid rgba(0,0,0,0.07);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.v02 .card img { width: 320px; height: 200px; object-fit: cover; display: block; }
+
+/* 键盘 hint */
+.frame-hint { max-width: 1280px; margin: -28px auto 56px; font-size: 12px; color: rgba(232,232,234,0.4); }
+.frame-hint kbd { font-family: inherit; font-size: 11px; border: 0.5px solid rgba(255,255,255,0.25); border-bottom-width: 1.5px; border-radius: 4px; padding: 1px 5px; background: rgba(255,255,255,0.06); }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>面板 v0.2 对照图纸</h1>
+  <p>真实素材(本机 /Applications 图标 + 真实窗口截图)。左栏 = v0.1 线上现状,右栏 = v0.2 对标 DockDoor。审完标 ★ 的四组差异,说"施工"我就改 SwiftUI。</p>
+  <div class="legend">
+    <span>图标 64→72、格距 6→20、"无形容器"</span>
+    <span>选中白块描边 → 极轻灰托底</span>
+    <span>标题区独立成段、发丝线→软阴影</span>
+    <span>背板材质更轻亮、圆角 20</span>
+  </div>
+</div>
+
+<!-- ═══════ 帧 A:图标层 ═══════ -->
+<div class="compare" data-screen-label="A">
+  <div>
+    <div class="side-label"><b>A1</b> v0.1 现状</div>
+    <div class="side-body v01">
+      <div class="switcher">
+        <div class="app-name">IntelliJ IDEA</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="side-label"><b>A2</b> v0.2 对标 DockDoor</div>
+    <div class="side-body v02">
+      <div class="switcher">
+        <div class="app-name">IntelliJ IDEA</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ 帧 B:展开层(单窗卡) ═══════ -->
+<div class="compare" data-screen-label="B">
+  <div>
+    <div class="side-label"><b>B1</b> v0.1 现状</div>
+    <div class="side-body v01">
+      <div class="switcher">
+        <div class="app-name">IntelliJ IDEA</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+        <div class="preview">
+          <div class="card sel">
+            <div class="bar">trade-galaxy-server – TrainXProductOrderServiceImpl.java</div>
+            <img src="assets/win-a.png">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="side-label"><b>B2</b> v0.2 对标 DockDoor</div>
+    <div class="side-body v02">
+      <div class="switcher">
+        <div class="app-name">IntelliJ IDEA</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+        <div class="preview">
+          <div class="card sel">
+            <div class="bar">trade-galaxy-server – TrainXProductOrderServiceImpl.java</div>
+            <img src="assets/win-a.png">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ 帧 C:展开层(双窗卡) ═══════ -->
+<div class="compare" data-screen-label="C">
+  <div>
+    <div class="side-label"><b>C1</b> v0.1 现状</div>
+    <div class="side-body v01">
+      <div class="switcher">
+        <div class="app-name">Sublime Text</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+        <div class="preview">
+          <div class="card sel"><div class="bar">raft-zh_cn.md</div><img src="assets/win-b.png"></div>
+          <div class="card"><div class="bar">1. 千行代码bug率, 口径以缺陷为准…</div><img src="assets/win-c.png"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="side-label"><b>C2</b> v0.2 对标 DockDoor</div>
+    <div class="side-body v02">
+      <div class="switcher">
+        <div class="app-name">Sublime Text</div>
+        <div class="strip">
+          <div class="cell"><img class="icon" src="assets/chrome.png"></div>
+          <div class="cell sel"><img class="icon" src="assets/sublime.png"></div>
+          <div class="cell"><img class="icon" src="assets/idea.png"></div>
+          <div class="cell"><img class="icon" src="assets/xcode.png"></div>
+          <div class="cell"><img class="icon" src="assets/obsidian.png"></div>
+        </div>
+        <div class="preview">
+          <div class="card sel"><div class="bar">raft-zh_cn.md</div><img src="assets/win-b.png"></div>
+          <div class="card"><div class="bar">1. 千行代码bug率, 口径以缺陷为准…</div><img src="assets/win-c.png"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="frame-hint">深色模式下托底灰与软阴影由 NSVisualEffectView vibrancy 自动适配,token 只有一份。图纸只验形态,毛玻璃质感以原生施工为准。</div>
+
+</body>
+</html>

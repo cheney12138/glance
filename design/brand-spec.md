@@ -20,7 +20,8 @@ brand-fidelity: 9/10       # 违例即丑:禁渐变/禁品牌色/禁 emoji 图�
 
 - 触发:`⌥` 按下只待命(不弹面板——裸按⌥是高频动作);**首次 `⌥+Tab` 击键才进入导航态**;此后 `Tab` 后移 / `⇧+Tab` 前移;释放 `⌥` = 确认聚焦;`Esc` = 放弃(T3 施工时修正:原稿"⌥按下即弹"会误伤所有 ⌥+拖拽/⌥+点击场景)
 - 移动权责:`Tab`/指针移动在 **App 间**;`←→` 只在**展开层的窗之间**——组内 ≤1 窗时 `←→` 无语义,静默吞掉,绝不允许跨界滑到邻 App(实机评审拍板)
-- 展开:选中停留即出(0ms 延迟,缩略图预截),长在本应用图标下方的**内嵌**预览行(v0 拍板,不采用 DockDoor 式独立浮条)
+- 展开(v0.2 修订,推翻 v0 的"内嵌"决定):预览为**独立浮窗**,与 App 长条分容器;预览框中心**正对选中 App 图标头顶**,横向超界时收进语境屏;选中 App 只显示 App 图标,窗口≤0 组(无窗应用)不弹预览
+- 无窗应用(v0.2):全系统零可见窗的已打开 App 纳入切换器,**不划分显示器分组**;确认 = 激活该 App(不级联窗口归它自己管)
 - 选中仲裁:鼠标 hover 与键盘 ←→ 皆为"谁最后动听谁的",hover 即选中不确认。**精确定义:静止的指针不发声**——面板在指针下方出现时,指针自出现起没位移(>1pt)就不算发言,键盘正常走;一旦位移,hover 立即夺回选中(实机修订:静止悬停曾把 ⌘Tab 拽死在原地)
 - 上下文:鼠标光标所在屏 = 当前屏;窗口归属 = 与屏幕几何交集占比最大的屏,占比 <20% 不算数
 - 首次高亮:最近访问窗口所属 App(MRU 语义)
@@ -29,16 +30,15 @@ brand-fidelity: 9/10       # 违例即丑:禁渐变/禁品牌色/禁 emoji 图�
 
 | 语义 | HTML 图纸值 | 原生等价物 |
 |---|---|---|
-| 背板材质 | `rgba(244,244,246,.62)` + `blur(40px) saturate(1.8)` | `NSVisualEffectView`,material `.underWindowBackground` 或 `.hudWindow`,state `.active`;深/浅色自动,**不要手写色** |
-| 背板圆角 | 16px | `layer.cornerRadius = 16` |
-| 背板阴影 | `0 12px 40px rgba(0,0,0,.18)` + 0.5px 发丝描边 | `NSShadow`(offset -12, blur 40, alpha .18)+ 半像素边框 layer |
-| App 名 | 13px SF Pro、`.label` 色、背板顶中 | `NSTextField` font `.systemFont(ofSize:13)`,`.labelColor` |
-| 图标 | 64×64,macOS squircle | `NSRunningApplication.icon`(真实图标,施工期注入) |
-| 图标容器 | 80×80,圆角 12 | 同 |
-| 选中块 | `rgba(255,255,255,.55)` 半透明 | SwiftUI `RoundedRectangle(12).fill(.white.opacity(0.35))`(深色下近似,施工时校准) |
-| 缩略卡 | 宽 **320**、标题行 22px 高 11px 字、图片区 16:10(200pt)、圆角 8 | 同(宽度 240→320:T6 实机校准,240 在文字密集场景不可读) |
-| 卡片选中 | 2px 白环 + 0.5px 外发丝 | `StrokeBorder` 双层;深色下用 `.white.opacity(0.9)` 主环 |
-| 卡片标题 | 窗口标题(项目名 — 文件) | 单行行省略 `.truncatingTail` |
+| 背板材质 | v0.2:更轻更亮(治"灰蒙蒙") | `NSVisualEffectView` material `.popover`,state `.active`,圆角 20;深/浅色自动 |
+| 背板阴影 | 柔软的散开阴影 | SwiftUI `.shadow(radius: 25, y: 8, opacity 0.16)` |
+| App 名 | **15px medium**,与图标层 20pt 呼吸 | 同左 |
+| 图标 | **72×72**,macOS squircle + 柔软下落影 | `NSRunningApplication.icon`(真实图标) |
+| 图标容器 | v0.2"无形容器":**84×84**,格距 **20** | 同左 |
+| 选中托底 | **极轻灰**(light 黑 6% / dark 白 8%),不描边 | SwiftUI `RoundedRectangle(18).fill(.primary.opacity(0.08))` |
+| 预览浮窗 | 独立 NSPanel,中心正对选中 App 头顶,语境屏内 clamp | 同左 |
+| 缩略卡 | 宽 320、图片区 16:10(200pt)、圆角 12;**无标题文字**,左上角叠加 macOS 红绿灯(#FF5F57/#FEBC2E/#28C840) | 同左 |
+| 卡片选中 | **原生聚焦蓝环**(白卡 + 白描边不可见的实机教训):accent 2px + 白 3.5px 衬底;未选 = 0.5px 发丝 | 同左 |
 | 发丝线 | 0.5px `rgba(0,0,0,.06)` | `Color(.separatorColor)` |
 
 ## 动效(冻结,全部禁止回弹)

@@ -21,6 +21,7 @@
 		5A0000000000000000000048 /* CmdClickFix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000049 /* CmdClickFix.swift */; };
 		5A0000000000000000000073 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000071 /* SettingsStore.swift */; };
 		5A0000000000000000000074 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000072 /* SettingsView.swift */; };
+		5A0000000000000000000081 /* PreviewPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000080 /* PreviewPanelView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +40,7 @@
 		5A0000000000000000000049 /* CmdClickFix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmdClickFix.swift; sourceTree = "<group>"; };
 		5A0000000000000000000071 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		5A0000000000000000000072 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000080 /* PreviewPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPanelView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -123,6 +125,7 @@
 			children = (
 				5A0000000000000000000039 /* PanelController.swift */,
 				5A0000000000000000000040 /* PanelView.swift */,
+				5A0000000000000000000080 /* PreviewPanelView.swift */,
 			);
 			path = Panel;
 			sourceTree = "<group>";
@@ -227,6 +230,7 @@
 				5A0000000000000000000048 /* CmdClickFix.swift in Sources */,
 				5A0000000000000000000073 /* SettingsStore.swift in Sources */,
 				5A0000000000000000000074 /* SettingsView.swift in Sources */,
+				5A0000000000000000000081 /* PreviewPanelView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -358,6 +362,7 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Glance;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cheney12138.macswitcher;
@@ -378,6 +383,7 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Glance;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cheney12138.macswitcher;

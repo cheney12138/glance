@@ -174,11 +174,12 @@ final class HotkeyTapCenter {
             return false
         }
 
-        // 非导航期:触发主键开导航(armed→navigating),其他键一概放行
+        // 非导航期:触发主键开导航(armed→navigating),其他键一概放行.
+        // 首和弦只开面板不动选中——默认停在第 1 位,再按才移动(用户实机评审拍板;
+        // 放弃原生"一和弦直达上一 App"的快速来回,换取位置直觉)
         if state == .armed, event.type == .keyDown, keyCode == config.keyCode {
             state = .navigating
-            emit(.begin)                                     // 面板出现
-            emit(event.flags.contains(.maskShift) ? .prev : .next) // 原生语义:首个和弦即落在"上一个"位
+            emit(.begin)
             return true
         }
 

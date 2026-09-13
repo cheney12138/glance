@@ -31,7 +31,7 @@ enum WindowEnumerator {
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else { return [] }
 
-        var records: [WindowRecord] = []
+        var candidates: [WindowRecord] = []
         for info in infos {
             guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t,
@@ -53,17 +53,36 @@ enum WindowEnumerator {
                 continue
             }
 
-            guard ownsByContextScreen(bounds, contextScreen: screen) else { continue }
-
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
             let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
-            records.append(WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds))
+            candidates.append(WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds))
         }
 
+        // 归属过滤:只留本屏窗
+        let records = candidates.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName, windows: [])].windows.append(r)
         }
+
+        // 无窗应用(T15,用户拍板):全系统一扇可见窗都没有的已打开 App,
+        // 不划分显示器分组,任何语境屏都展示;确认 = 激活该 App。
+        // 判断面是 candidates(已通过幽灵窗启发式的全系统可见窗),不是本屏 records
+        let hasWindowPIDs = Set(candidates.map(\.pid))
+        let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular,
+                  app.processIdentifier != ownPID,
+                  !hasWindowPIDs.contains(app.processIdentifier),
+                  !excludedSystemApps.contains(app.bundleIdentifier ?? ""),
+                  !app.isTerminated else { continue }
+            byPID[app.processIdentifier] = AppGroup(
+                pid: app.processIdentifier,
+                appName: app.localizedName ?? "(未知应用)",
+                windows: []
+            )
+        }
+
         return MruEvidence.shared.ordered(pids: Array(byPID.keys)).compactMap { byPID[$0] }
     }
 

@@ -12,11 +12,14 @@ struct MacSwitcherApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            Button(permissions.statusLine) { showPermissions() }
-            Divider()
+            // 权限行只在缺权时出现——授权完成后日日看它 = 视觉纳税(用户评审拍板)
+            if !permissions.allGranted {
+                Button(permissions.statusLine) { showPermissions() }
+                Divider()
+            }
             Button("设置…") { showSettings() }
             Divider()
-            Button("退出 mac-switcher") {
+            Button("退出 Glance") {
                 NSApplication.shared.terminate(nil)
             }
         } label: {
@@ -37,12 +40,12 @@ struct MacSwitcherApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("mac-switcher 权限", id: "permissions") {
+        Window("Glance 权限", id: "permissions") {
             PermissionGuideView(monitor: permissions)
         }
         .windowResizability(.contentSize)
 
-        Window("mac-switcher 设置", id: "settings") {
+        Window("Glance 设置", id: "settings") {
             SettingsView(store: SettingsStore.shared, permissions: permissions)
         }
         .windowResizability(.contentSize)

@@ -39,6 +39,7 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutableP
 @_silgen_name("GetProcessForPID")
 private func getProcessForPID(_ pid: pid_t, _ psn: UnsafeMutablePointer<ProcessSerialNumber>) -> OSErr
 
+@MainActor
 enum WindowFocuser {
     /// SLPSMode.userGenerated:把这次前置标记为用户发起,防止被系统抑制
     private static let modeUserGenerated: UInt32 = 0x200
@@ -131,6 +132,25 @@ enum WindowFocuser {
     /// Q:退出整个 App(有未保存内容时 App 会自己弹询问,我们只管发辞呈)
     static func quitApp(pid: pid_t) {
         NSRunningApplication(processIdentifier: pid)?.terminate()
+    }
+
+    /// T15 无窗应用确认:alt-tab 的处方是"把它当启动一次"——activate 对无窗 App
+    /// 在 macOS 14+ 会被系统当君子请求无视(T15 实机现形:选中后没反应)。
+    /// openApplication 走不通才退回 activate(allWindows)。
+    /// 曾尝试"落点跟随"(T16 轮询/T17 AX 诞生监听:窗口开错屏就挪正),
+    /// 两路都有肉眼可感的闪烁,被拍板毙掉(docs/adr/0004)——
+    /// 开窗位置交给 macOS 的窗口还原记忆,我们不再管。
+    static func focusWindowlessApp(pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        guard let url = app.bundleURL else {
+            app.activate(options: .activateAllWindows)
+            print("[T15] 无窗应用激活: \(app.localizedName ?? "?")(activate)")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { running, _ in
+            if running == nil { app.activate(options: .activateAllWindows) }
+        }
+        print("[T15] 无窗应用激活: \(app.localizedName ?? "?")(openApplication)")
     }
 
     private static func degrade(_ w: WindowRecord, reason: String) {

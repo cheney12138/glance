@@ -13,6 +13,8 @@ final class PanelController: ObservableObject {
 
     private var panel: NSPanel?
     private var hostingController: NSHostingController<PanelView>?
+    private var previewPanel: NSPanel?
+    private var previewHosting: NSHostingController<PreviewPanelView>?
     private var contextScreen: NSScreen?
     private var outsideClickMonitor: Any?
 
@@ -90,6 +92,7 @@ final class PanelController: ObservableObject {
             panel.animator().setFrame(target, display: true)
         }
         installOutsideClickMonitor()
+        updatePreview(animated: false)
     }
 
     private func relayout(animated: Bool) {
@@ -111,6 +114,7 @@ final class PanelController: ObservableObject {
     private func dismiss(reason: String) {
         removeOutsideClickMonitor()
         panel?.orderOut(nil)
+        previewPanel?.orderOut(nil)
         isVisible = false
         print("[T6] \(reason):面板关闭")
         groups = []
@@ -124,16 +128,12 @@ final class PanelController: ObservableObject {
         return NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height)
     }
 
-    /// brand-spec 的度量:strip 80/格+6 间距;预览卡 320/张+12 间距;顶 18 名 16 距 14 底 22
+    /// brand-spec v0.2 度量(主面板只装长条):格 84 / 距 20 / 顶 22 名 18 距 20 底 26。
+    /// 预览框不再计入住——它是独立浮窗(分容器构型,见 updatePreview)
     func contentSize() -> NSSize {
-        let nApps = CGFloat(groups.count)
-        let nCards = CGFloat(expandedCount)
-        let stripW = nApps * 80 + max(nApps - 1, 0) * 6
-        let rowW = nCards * 320 + max(nCards - 1, 0) * 12
-        let w = max(stripW, rowW, 280) + 48
-        var h: CGFloat = 18 + 16 + 14 + 80 + 22
-        if expandedCount > 0 { h += 16 + (22 + 200) }
-        return NSSize(width: w, height: h)
+        let nApps = CGFloat(max(groups.count, 1))
+        let w = max(nApps * 84 + max(nApps - 1, 0) * 20 + 60, 280)
+        return NSSize(width: w, height: 22 + 18 + 20 + 84 + 26)
     }
 
     /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 28pt)。
@@ -148,25 +148,92 @@ final class PanelController: ObservableObject {
 
     private func buildPanelIfNeeded() {
         guard panel == nil else { return }
-        let panel = NSPanel(
+        panel = makeChromePanel()
+        let hosting = NSHostingController(rootView: PanelView(controller: self))
+        panel!.contentViewController = hosting
+        self.hostingController = hosting
+    }
+
+    private func makeChromePanel() -> NSPanel {
+        let p = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.isFloatingPanel = true
-        panel.level = .popUpMenu
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = false // 阴影由 SwiftUI 层绘制(brand-spec 阴影值)
-        panel.hidesOnDeactivate = false
-        panel.isMovable = false
-        panel.acceptsMouseMovedEvents = true // hover 即选中依赖它
-        panel.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
-        let hosting = NSHostingController(rootView: PanelView(controller: self, snapshotter: Snapshotter.shared))
-        panel.contentViewController = hosting
-        self.panel = panel
-        self.hostingController = hosting
+        p.isFloatingPanel = true
+        p.level = .popUpMenu
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = false // 阴影由 SwiftUI 层绘制
+        p.hidesOnDeactivate = false
+        p.isMovable = false
+        p.acceptsMouseMovedEvents = true // hover 即选中依赖它
+        p.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
+        return p
+    }
+
+    // MARK: - 预览浮窗(分容器构型:与主面板同皮不同窗,中心正对选中 App 头顶)
+
+    private func buildPreviewPanelIfNeeded() {
+        guard previewPanel == nil else { return }
+        previewPanel = makeChromePanel()
+        let hosting = NSHostingController(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
+        previewPanel!.contentViewController = hosting
+        previewHosting = hosting
+    }
+
+    /// 预览框内容尺寸 = 卡片区 + 四周 28 阴影呼吸区(与 PreviewPanelView .padding 口径一致)
+    private func previewSize() -> NSSize {
+        let n = CGFloat(expandedCount)
+        guard n > 0 else { return .zero }
+        return NSSize(
+            width: n * 320 + max(n - 1, 0) * 16 + 24 + 56,
+            height: 200 + 24 + 56
+        )
+    }
+
+    /// 选中图标的屏幕坐标 X:内容起点 = 28(阴影区) + 30(h padding);格步进 = 84 + 20
+    private func iconCenterXInScreen(_ i: Int) -> CGFloat? {
+        guard let panel else { return nil }
+        return panel.frame.minX + 28 + 30 + CGFloat(i) * 104 + 42
+    }
+
+    /// 预览框正中 = 选中 App 头顶;超界时收进语境屏可视区(内 12)
+    private func previewFrame() -> NSRect? {
+        guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
+        let size = previewSize()
+        let cx = iconCenterXInScreen(appIndex) ?? panel.frame.midX
+        let x = min(max(cx - size.width / 2, area.minX + 12), area.maxX - size.width - 12)
+        let y = panel.frame.maxY + 12
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private func updatePreview(animated: Bool) {
+        guard let frame = previewFrame() else {
+            previewPanel?.orderOut(nil)
+            return
+        }
+        buildPreviewPanelIfNeeded()
+        guard let previewPanel else { return }
+        if !previewPanel.isVisible {
+            previewPanel.alphaValue = 0
+            previewPanel.setFrame(frame, display: false)
+            previewPanel.orderFrontRegardless()
+        }
+        if animated && !reduceMotion {
+            // SwiftUI 布局递归前科:动画帧推下一圈 runloop
+            DispatchQueue.main.async {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.1
+                    previewPanel.animator().setFrame(frame, display: true)
+                    previewPanel.animator().alphaValue = 1
+                }
+            }
+        } else {
+            previewPanel.setFrame(frame, display: true)
+            previewPanel.alphaValue = 1
+        }
     }
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
@@ -178,6 +245,7 @@ final class PanelController: ObservableObject {
         relayout(animated: true)
         print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
         refreshSnapshotForSelection()
+        updatePreview(animated: true)
     }
 
     private func moveWindow(_ delta: Int) {
@@ -228,6 +296,7 @@ final class PanelController: ObservableObject {
         winIndex = 0
         relayout(animated: true)
         refreshSnapshotForSelection()
+        updatePreview(animated: true)
     }
 
     func hoverWindow(_ i: Int) {
@@ -282,17 +351,24 @@ final class PanelController: ObservableObject {
         let targets = groups.flatMap { $0.windows }
         Task { [targets] in await Snapshotter.shared.precapture(targets) }
         relayout(animated: false)
+        updatePreview(animated: false)
         print("[T12] 重枚举: \(groups.count) 个 App 在列")
     }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
     /// 到达路径:未钉住时松 ⌥;钉住时 Enter。
     func confirmSelection() {
-        guard groups.indices.contains(appIndex), groups[appIndex].windows.indices.contains(winIndex) else {
+        guard groups.indices.contains(appIndex) else {
             dismiss(reason: "确认(空列表)")
             return
         }
         let g = groups[appIndex]
+        // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
+        if !g.windows.indices.contains(winIndex) {
+            WindowFocuser.focusWindowlessApp(pid: g.pid)
+            dismiss(reason: "确认(无窗应用)")
+            return
+        }
         let w = g.windows[winIndex]
         WindowFocuser.focus(window: w)
         dismiss(reason: "确认")

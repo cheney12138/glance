@@ -7,7 +7,7 @@ struct PermissionGuideView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("mac-switcher 需要两项系统权限")
+            Text("Glance 需要两项系统权限")
                 .font(.headline)
 
             permissionRow(
