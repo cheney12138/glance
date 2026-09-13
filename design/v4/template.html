@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- proto-version: 1.10 -->
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
@@ -20,22 +21,27 @@
   --txt-2: rgba(0,0,0,.55);   /* 二级:窗口标题 */
   --txt-3: rgba(0,0,0,.38);   /* 三级:演示页辅助 */
 
-  /* ── 玻璃(单配方,两个容器共用)── */
-  --glass-tint: rgba(250,250,252,.45);
-  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,0) 40%);
-  --glass-blur: 28px;
-  --glass-sat: 1.8;
-  --edge-hi: rgba(255,255,255,.50);    /* 顶缘 0.5px 受光 */
+  /* ── 液态玻璃(单配方,两个容器共用)── */
+  --glass-tint: rgba(252,252,254,.26);
+  --glass-blur: 44px;
+  --glass-sat: 2.0;
+  --glass-bright: 1.04;
+  --edge-hi: rgba(255,255,255,.50);    /* 顶缘 0.5px 受光(控制条用) */
   --edge-ring: rgba(0,0,0,.09);        /* 外缘 0.5px 轮廓 */
+  /* 折光环:conic 绕周渐变,光源锁定左上(315° 区最亮),右下留弱反弹 */
+  --rim: conic-gradient(from 180deg, rgba(255,255,255,.06), rgba(255,255,255,.30) 12%, rgba(255,255,255,.05) 30%, rgba(255,255,255,.04) 50%, rgba(255,255,255,.28) 75%, rgba(255,255,255,.60) 90%, rgba(255,255,255,.06));
+  /* v1.10:rim/fringe 已废(评审:边缘静态处理改不好就去掉),token 暂存供对照 */
+  --spec-a: .24;                       /* 游动高光强度(唯一的光) */
 
-  /* ── Elevation:阴影 = key(远,塑形) + fill(近,锚定);深色 α×2.2 ── */
-  --e1: 0 6px 16px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.08);        /* 卡片 */
-  --e1-hover: 0 8px 20px rgba(0,0,0,.13), 0 2px 4px rgba(0,0,0,.09);
-  --e1-sel: 0 10px 26px rgba(0,0,0,.15), 0 2px 6px rgba(0,0,0,.10);
-  --e2: 0 18px 52px rgba(0,0,0,.18), 0 3px 10px rgba(0,0,0,.08);      /* 长条 */
-  --e3: 0 26px 72px rgba(0,0,0,.22), 0 5px 14px rgba(0,0,0,.10);      /* 浮窗 */
-  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.18)) drop-shadow(0 1px 2px rgba(0,0,0,.12));
-  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.22)) drop-shadow(0 1.5px 3px rgba(0,0,0,.14));
+  /* ── Elevation:阴影 = key(远,塑形) + fill(近,锚定);液态玻璃=失重,α 整体下调;深色 α×1.9 ── */
+  --e1: 0 5px 14px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.06);        /* 卡片 */
+  --e1-hover: 0 7px 18px rgba(0,0,0,.10), 0 1px 4px rgba(0,0,0,.07);
+  --e1-sel: 0 9px 24px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.08);
+  --e1-lift: 0 13px 32px rgba(0,0,0,.15), 0 3px 8px rgba(0,0,0,.10);  /* 选中卡浮起态 */
+  --e2: 0 22px 60px rgba(0,0,0,.15), 0 3px 10px rgba(0,0,0,.06);      /* 长条 */
+  --e3: 0 30px 80px rgba(0,0,0,.19), 0 5px 14px rgba(0,0,0,.08);      /* 浮窗 */
+  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.15)) drop-shadow(0 1px 2px rgba(0,0,0,.10));
+  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.19)) drop-shadow(0 1.5px 3px rgba(0,0,0,.12));
 
   /* ── 选中 ── */
   --plate: rgba(0,0,0,.06);
@@ -43,26 +49,26 @@
   --card-ring: rgba(0,0,0,.10);
 
   /* ── 标题栏带 ── */
-  --tb-tint: rgba(246,247,248,.5);
+  --tb-tint: rgba(246,247,248,.62);
   --tb-line: rgba(0,0,0,.06);
 
   /* ── 演示布景(非产品 token)── */
-  --wall-1:#e2e7ef; --wall-2:#d0d8e5; --wall-3:#bcc7d9;
-  --bloom-1: rgba(164,186,222,.45);
-  --bloom-2: rgba(224,213,196,.40);
+  --bloom-1: rgba(120,170,255,.50);
+  --bloom-2: rgba(255,150,190,.45);
 
   /* ── 几何(4px 网格)── */
-  --r-panel: 20px; --r-plate: 14px; --r-card: 10px;
+  --r-panel: 24px; --r-plate: 14px; --r-card: 10px;
   --icon: 68px; --cell: 80px; --cell-gap: 8px;
-  --strip-pad-y: 12px; --strip-pad-x: 16px;
+  --strip-pad-y: 16px; --strip-pad-x: 16px;
   --tb-h: 24px; --shot-h: 192px;
-  --card-gap: 12px; --pop-pad: 12px; --pop-gap-y: 16px;
+  --card-gap: 16px; --pop-pad: 16px; --pop-gap-y: 16px;
 
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 
   /* ── 动效 ── */
   --ease-out: cubic-bezier(.2,.8,.2,1);
   --ease-slide: cubic-bezier(.25,.8,.3,1);
+  --ease-settle: cubic-bezier(.34,1.35,.4,1);   /* 单次落定,欠阻尼 ≤1.35,不振荡 */
   --t-pop: 120ms; --t-card: 160ms; --t-stagger: 18ms;
   --t-slide: 180ms; --t-state: 100ms;
 }
@@ -71,25 +77,28 @@
   --txt-1: rgba(255,255,255,.87);
   --txt-2: rgba(255,255,255,.55);
   --txt-3: rgba(255,255,255,.38);
-  --glass-tint: rgba(28,29,33,.60);
-  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 40%);
+  --glass-tint: rgba(28,32,42,.34);
+  --glass-bright: 1.02;
   --edge-hi: rgba(255,255,255,.12);
-  --edge-ring: rgba(255,255,255,.11);
-  --e1: 0 6px 16px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.18);
-  --e1-hover: 0 8px 20px rgba(0,0,0,.29), 0 2px 4px rgba(0,0,0,.20);
-  --e1-sel: 0 10px 26px rgba(0,0,0,.33), 0 2px 6px rgba(0,0,0,.22);
-  --e2: 0 18px 52px rgba(0,0,0,.40), 0 3px 10px rgba(0,0,0,.18);
-  --e3: 0 26px 72px rgba(0,0,0,.48), 0 5px 14px rgba(0,0,0,.22);
-  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.28)) drop-shadow(0 1px 2px rgba(0,0,0,.20));
-  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.34)) drop-shadow(0 1.5px 3px rgba(0,0,0,.24));
+  --edge-ring: rgba(255,255,255,.09);
+  --rim: conic-gradient(from 180deg, rgba(255,255,255,.03), rgba(255,255,255,.14) 12%, rgba(255,255,255,.03) 30%, rgba(255,255,255,.02) 50%, rgba(255,255,255,.13) 75%, rgba(255,255,255,.30) 90%, rgba(255,255,255,.03));
+  --fringe: inset 0 1px 0 rgba(140,190,255,.07), inset 0 -1px 0 rgba(255,150,170,.05);
+  --spec-a: .12;
+  --e1: 0 5px 14px rgba(0,0,0,.15), 0 1px 3px rgba(0,0,0,.12);
+  --e1-hover: 0 7px 18px rgba(0,0,0,.19), 0 1px 4px rgba(0,0,0,.14);
+  --e1-sel: 0 9px 24px rgba(0,0,0,.23), 0 2px 6px rgba(0,0,0,.16);
+  --e1-lift: 0 13px 32px rgba(0,0,0,.29), 0 3px 8px rgba(0,0,0,.20);
+  --e2: 0 22px 60px rgba(0,0,0,.32), 0 3px 10px rgba(0,0,0,.16);
+  --e3: 0 30px 80px rgba(0,0,0,.38), 0 5px 14px rgba(0,0,0,.20);
+  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.28)) drop-shadow(0 1px 2px rgba(0,0,0,.18));
+  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.34)) drop-shadow(0 1.5px 3px rgba(0,0,0,.22));
   --plate: rgba(255,255,255,.10);
   --ko: rgba(22,23,27,.95);
   --card-ring: rgba(255,255,255,.13);
-  --tb-tint: rgba(38,39,44,.5);
+  --tb-tint: rgba(38,39,44,.62);
   --tb-line: rgba(255,255,255,.08);
-  --wall-1:#191d24; --wall-2:#12151c; --wall-3:#0c0f14;
-  --bloom-1: rgba(44,62,94,.45);
-  --bloom-2: rgba(56,47,50,.35);
+  --bloom-1: rgba(80,120,220,.35);
+  --bloom-2: rgba(200,90,150,.30);
 }
 
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -101,16 +110,36 @@ body {
 }
 
 /* ══════════ 演示布景(非产品)══════════ */
+/* v1.6:高饱和流动色带——液态玻璃只有压在"有内容"的背景上才透光;
+   纯雾面背后,任何 tint 都只能读成灰板 */
 .wallpaper {
   position: fixed; inset: 0; z-index: 0;
   background:
-    radial-gradient(90% 70% at 22% 18%, var(--bloom-1) 0%, transparent 62%),
-    radial-gradient(80% 60% at 82% 78%, var(--bloom-2) 0%, transparent 58%),
-    radial-gradient(120% 90% at 18% 8%, var(--wall-1) 0%, transparent 60%),
-    radial-gradient(110% 90% at 85% 20%, var(--wall-2) 0%, transparent 55%),
-    linear-gradient(168deg, var(--wall-1) 0%, var(--wall-2) 52%, var(--wall-3) 100%);
+    radial-gradient(85% 70% at 15% 18%, #8ab6ff 0%, transparent 62%),
+    radial-gradient(70% 58% at 80% 12%, #ffb37c 0%, transparent 60%),
+    radial-gradient(80% 68% at 88% 78%, #c99df5 0%, transparent 62%),
+    radial-gradient(68% 58% at 20% 84%, #8fe6c4 0%, transparent 60%),
+    radial-gradient(95% 75% at 50% 52%, #ffd9e8 0%, transparent 55%),
+    linear-gradient(160deg, #dfe7f6 0%, #eaedf5 55%, #e2e6ee 100%);
   transition: background .2s ease;
 }
+[data-theme="dark"] .wallpaper {
+  background:
+    radial-gradient(85% 70% at 15% 18%, rgba(64,110,220,.55) 0%, transparent 60%),
+    radial-gradient(70% 58% at 80% 12%, rgba(150,80,205,.50) 0%, transparent 60%),
+    radial-gradient(80% 68% at 84% 80%, rgba(215,125,55,.42) 0%, transparent 62%),
+    radial-gradient(68% 58% at 20% 84%, rgba(45,170,180,.42) 0%, transparent 60%),
+    linear-gradient(168deg, #12151d 0%, #0e121a 55%, #090c12 100%);
+}
+/* 光斑层:46s 慢漂移,给玻璃永远变化的光可折(演示布景,非产品) */
+.blooms {
+  position: fixed; inset: -10%; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(45% 40% at 25% 25%, var(--bloom-1) 0%, transparent 65%),
+    radial-gradient(40% 35% at 78% 72%, var(--bloom-2) 0%, transparent 62%);
+  animation: bloomDrift 46s ease-in-out infinite alternate;
+}
+@keyframes bloomDrift { to { transform: translate(3%, -2%) scale(1.06); } }
 
 /* ══════════ 演示控制条(非产品)══════════ */
 .controls {
@@ -144,6 +173,25 @@ body {
 .zoom { transform-origin: center center; transition: transform var(--t-slide) var(--ease-slide); }
 .zoom.z2 { transform: scale(2); }
 
+/* ══════════ 液态玻璃共享层:tint + 折光环(rim)+ 游动高光(specular)══════════ */
+@property --sx { syntax: '<percentage>'; inherits: false; initial-value: 50%; }
+@property --sy { syntax: '<percentage>'; inherits: false; initial-value: -60%; }
+.glass {
+  border-radius: var(--r-panel);
+  /* v1.8:磨砂整场均匀——去掉 sheen 顶光与静态光泽,光只留指针游光一路 */
+  background: var(--glass-tint);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  transition: background .2s ease, box-shadow .2s ease, --sx .5s ease, --sy .5s ease;
+}
+.glass::before {                         /* 游动高光(--sx/--sy 由 JS 写);v1.8 去静态光泽 */
+  content: ''; position: absolute; inset: 0; z-index: 4;
+  border-radius: inherit; pointer-events: none;
+  background: radial-gradient(300px 200px at var(--sx) var(--sy), rgba(255,255,255,var(--spec-a)), transparent 70%);
+}
+/* v1.10:边缘透镜带 .lens 已废——评审两轮边缘处理(亮框/内角)后拍板:
+   HTML 逼近不了 NSGlassEffectView 的边缘折射,不做胜过做错 */
+
 /* ══════════ 组合体:两个独立容器,不嵌套 ══════════ */
 .compose {
   position: relative;
@@ -156,13 +204,8 @@ body {
 /* ── 容器 A:图标长条(E2)── */
 .strip {
   position: relative;
-  border-radius: var(--r-panel);
-  background: var(--glass-tint); background-image: var(--glass-sheen);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  box-shadow: var(--e2), 0 0 0 .5px var(--edge-ring), inset 0 .5px 0 var(--edge-hi);
+  box-shadow: var(--e2), 0 0 0 .5px var(--edge-ring);
   padding: var(--strip-pad-y) var(--strip-pad-x);
-  transition: background .2s ease, box-shadow .2s ease;
 }
 .cells { display: flex; gap: var(--cell-gap); }
 .cell {
@@ -180,23 +223,22 @@ body {
 .cell.sel::before { opacity: 1; }
 .cell .icon {
   width: var(--icon); height: var(--icon);
-  position: relative;
+  position: relative; z-index: 2;
   filter: var(--icon-e);
   transition: filter var(--t-state) ease, transform var(--t-state) ease;
+  animation: iconIn 220ms var(--ease-settle) both;   /* 入场:图标逐个落定 */
+  animation-delay: calc(90ms + var(--i, 0) * 14ms);
 }
+@keyframes iconIn { from { opacity: 0; transform: translateY(6px) scale(.85); } }
 .cell.sel .icon { transform: translateY(-1px); filter: var(--icon-e-sel); }
 
 /* ── 容器 B:窗口预览浮窗(E3,高于长条一级)── */
 .popover {
   position: absolute; bottom: calc(100% + var(--pop-gap-y));
-  border-radius: var(--r-panel);
-  background: var(--glass-tint); background-image: var(--glass-sheen);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  box-shadow: var(--e3), 0 0 0 .5px var(--edge-ring), inset 0 .5px 0 var(--edge-hi);
+  box-shadow: var(--e3), 0 0 0 .5px var(--edge-ring);
   padding: var(--pop-pad);
   display: flex; gap: var(--card-gap);
-  transition: left var(--t-slide) var(--ease-slide), opacity var(--t-state) ease, background .2s ease, box-shadow .2s ease;
+  transition: left var(--t-slide) var(--ease-slide), opacity var(--t-state) ease, background .2s ease, box-shadow .2s ease, --sx .5s ease, --sy .5s ease;
   animation: popIn var(--t-pop) var(--ease-out) both;
 }
 .popover.gone { opacity: 0; pointer-events: none; }
@@ -207,29 +249,32 @@ body {
   border-radius: var(--r-card); overflow: hidden;
   box-shadow: 0 0 0 .5px var(--card-ring), var(--e1);
   cursor: pointer;
-  transition: box-shadow var(--t-state) ease;
+  transition:
+    box-shadow var(--t-state) ease,
+    transform 220ms var(--ease-settle);   /* 选中浮起:唯一许可的单次欠阻尼 */
   animation: cardIn var(--t-card) var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * var(--t-stagger));
 }
 .card img { height: var(--shot-h); display: block; }
 .card:hover { box-shadow: 0 0 0 .5px var(--card-ring), var(--e1-hover); }
+.card:hover:not(.sel) { transform: translateY(-2px); }
 .card.sel {
+  transform: translateY(-6px) scale(1.015);
   box-shadow:
     0 0 0 2px var(--ko),
-    0 0 0 4.5px var(--accent),
-    var(--e1-sel);
+    0 0 0 4px var(--accent),
+    var(--e1-lift);
 }
 
-/* 标题栏带:24px,左灯右空,标题全宽居中 */
+/* 标题栏带:24px,灯后 8px 标题左对齐,右缘 12px 省略 */
 .tbar {
-  position: relative;
   height: var(--tb-h);
-  display: flex; align-items: center; padding-left: 12px;
+  display: flex; align-items: center; padding: 0 12px;
+  /* 禁 backdrop-filter:带背后是浮窗自己的玻璃,再磨一次 = 双重雾化(v1.7 治"带回流脏雾") */
   background: var(--tb-tint);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
   border-bottom: .5px solid var(--tb-line);
 }
-.lights { display: flex; gap: 8px; }
+.lights { display: flex; gap: 8px; flex: none; }
 .lights i {
   width: 10px; height: 10px; border-radius: 50%;
   box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12),
@@ -238,13 +283,14 @@ body {
 }
 .lights .r { background: var(--tl-r); } .lights .y { background: var(--tl-y); } .lights .g { background: var(--tl-g); }
 .tbar .title {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  max-width: calc(100% - 116px);          /* 对称让位:左区=灯 58px,取整 58×2 */
+  flex: 1; min-width: 0; margin-left: 8px;   /* 灯后 8px 起排,flex 余量内尾省略 */
   font-size: 11px; font-weight: 500; line-height: 1;
   color: var(--txt-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: none;
+  transition: color var(--t-state) ease;
 }
+.card.sel .title { color: var(--txt-1); }     /* 活跃窗标题更深:macOS 焦点窗原生线索 */
 
 /* ══════════ 动效(全部无回弹;reduced-motion 归零)══════════ */
 @keyframes panelIn { from { opacity: 0; transform: scale(.96); } }
@@ -259,6 +305,7 @@ body {
 <body>
 
 <div class="wallpaper"></div>
+<div class="blooms"></div>
 
 <div class="controls">
   <div class="seg" id="segFrame">
@@ -275,15 +322,15 @@ body {
 <div class="scene">
   <div class="zoom" id="zoom">
     <div class="compose" id="compose">
-      <div class="popover" id="popover"></div>
-      <div class="strip" id="strip">
+      <div class="popover glass" id="popover"></div>
+      <div class="strip glass" id="strip">
         <div class="cells" id="cells"></div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="caption">Tab / ⇧Tab 切换 App · ← → 切换窗口 · Esc 收起预览 · 无窗 App 不弹预览</div>
+<div class="caption">v4 · Liquid Glass v1.10 — Tab / ⇧Tab 切换 App · ← → 切换窗口 · Esc 收起预览 · 无窗 App 不弹预览</div>
 
 <script>
 /* __ASSETS__ */
@@ -303,6 +350,9 @@ const APPS = [
 ];
 
 const SHOT_H = 192;
+/* 标题字符上限:保住 "ejbills/DockDoor:" 这种 owner/repo 前缀;宽度截断交给 CSS 做第二道防线 */
+const TITLE_CAP = 18;
+const truncTitle = t => [...t].length > TITLE_CAP ? [...t].slice(0, TITLE_CAP).join('') + '…' : t;
 const state = { app: 1, win: { chrome: 0, idea: 0, ghostty: 0, xcode: 0 }, preview: true, theme: 'light', zoom2: false };
 
 const $ = id => document.getElementById(id);
@@ -311,10 +361,26 @@ const cellsEl = $('cells'), popEl = $('popover'), composeEl = $('compose');
 APPS.forEach((a, i) => {
   const c = document.createElement('div');
   c.className = 'cell' + (i === state.app ? ' sel' : '');
+  c.style.setProperty('--i', i);
   c.innerHTML = `<img class="icon" src="${a.icon}" alt="${a.name}">`;
   c.addEventListener('click', () => selectApp(i));
   cellsEl.appendChild(c);
 });
+
+/* ── Dock 式磁吸放大:按指针距离衰减,不掺和选中态 ── */
+const cellEls = [...cellsEl.children];
+cellsEl.addEventListener('pointermove', e => {
+  cellEls.forEach(c => {
+    const r = c.getBoundingClientRect();
+    const d = Math.abs(e.clientX - (r.left + r.width / 2)) / r.width;  // 以格宽为单位
+    const f = Math.max(0, 1 - d / 1.8);                                 // 影响半径 1.8 格
+    const selLift = c.classList.contains('sel') ? 1 : 0;
+    c.firstElementChild.style.transform =
+      `translateY(${(-6 * f - selLift).toFixed(2)}px) scale(${(1 + .10 * f).toFixed(3)})`;
+  });
+});
+cellsEl.addEventListener('pointerleave', () =>
+  cellEls.forEach(c => c.firstElementChild.style.transform = ''));
 
 function selectApp(i) {
   state.app = i;
@@ -331,7 +397,7 @@ function renderPopover() {
   const sel = state.win[a.id] || 0;
   popEl.innerHTML = a.wins.map((w, j) => `
     <div class="card${j === sel ? ' sel' : ''}" data-j="${j}" style="--i:${j}">
-      <div class="tbar"><div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="title">${w.t}</div></div>
+      <div class="tbar"><div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="title">${truncTitle(w.t)}</div></div>
       <img src="${w.src}" width="${Math.round(SHOT_H * w.w / w.h)}" height="${SHOT_H}" alt="">
     </div>`).join('');
   [...popEl.children].forEach(c => c.addEventListener('click', () => selectWin(+c.dataset.j)));
@@ -380,8 +446,26 @@ segWire('segTheme', setTheme);
 segWire('segZoom', setZoom);
 window.addEventListener('resize', centerPopover);
 
+/* ── 液态玻璃:高光跟指针走(离开面板后缓缓归位)── */
+document.querySelectorAll('.glass').forEach(el => {
+  el.addEventListener('pointermove', e => {
+    const r = el.getBoundingClientRect();
+    el.style.setProperty('--sx', ((e.clientX - r.left) / r.width * 100).toFixed(2) + '%');
+    el.style.setProperty('--sy', ((e.clientY - r.top) / r.height * 100).toFixed(2) + '%');
+  });
+  el.addEventListener('pointerleave', () => {
+    el.style.setProperty('--sx', '50%');
+    el.style.setProperty('--sy', '-60%');   /* 停泊位推出板外:静置时顶缘不吃游光溢出 */
+  });
+});
+
 /* ── 初帧:URL 参数 > localStorage > 默认(便于无头验收与演示续场)── */
 const qp = new URLSearchParams(location.search);
+const appIdx = APPS.findIndex(a => a.id === qp.get('app'));
+if (appIdx >= 0) {
+  state.app = appIdx;
+  [...cellsEl.children].forEach((c, j) => c.classList.toggle('sel', j === appIdx));
+}
 let savedTheme = null; try { savedTheme = localStorage.getItem('glance-theme'); } catch(e){}
 if (qp.get('theme') || savedTheme) setTheme(qp.get('theme') || savedTheme);
 if (qp.get('frame') === 'a') setFrame(false);
