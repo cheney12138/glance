@@ -32,6 +32,12 @@ final class DebugSessionLogger {
         print("[T4] 语境屏 = \(screen?.localizedName ?? "?")(锁定)")
         guard !groups.isEmpty else { print("[T4] 本屏无窗"); return }
         let totalWindows = groups.reduce(0) { $0 + $1.windows.count }
+        let snapshotTargets = groups.flatMap { $0.windows }
+        Snapshotter.shared.clear()
+        Task { [snapshotTargets] in
+            await Snapshotter.shared.precapture(snapshotTargets)
+            print("[T5] 预截完成: \(Snapshotter.shared.cache.count)/\(snapshotTargets.count),样张目录 → \(Snapshotter.shared.dumpDir.path)")
+        }
         print("[T4] 本屏窗 \(totalWindows) 扇,\(groups.count) 个 App:")
         for (i, g) in groups.enumerated() {
             print("  \(i + 1). \(g.appName) (\(g.windows.count) 窗)\(i == 0 ? " ← 初始选中" : "")")
