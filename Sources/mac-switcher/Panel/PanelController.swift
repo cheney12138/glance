@@ -172,6 +172,7 @@ final class PanelController: ObservableObject {
         winIndex = 0
         relayout(animated: true)
         print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+        refreshSnapshotForSelection()
     }
 
     private func moveWindow(_ delta: Int) {
@@ -183,12 +184,25 @@ final class PanelController: ObservableObject {
         print("[T6] 窗口选中: \(groups[appIndex].windows[winIndex].title)")
     }
 
+    /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
+    /// 钉住浏览几秒后已是旧图。异步不阻塞导航;同 wid 后到覆盖先到,天然取新。
+    private func refreshSnapshotForSelection() {
+        guard let g = currentGroup else { return }
+        let targets = g.windows
+        let name = g.appName
+        Task {
+            await Snapshotter.shared.precapture(targets)
+            print("[T11] 现拍: \(name) \(targets.count) 窗")
+        }
+    }
+
     /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"
     func hoverApp(_ i: Int) {
         guard groups.indices.contains(i) else { return }
         appIndex = i
         winIndex = 0
         relayout(animated: true)
+        refreshSnapshotForSelection()
     }
 
     func hoverWindow(_ i: Int) { winIndex = i }

@@ -14,13 +14,6 @@ final class Snapshotter: ObservableObject {
 
     func clear() { cache.removeAll() }
 
-    /// T5 验收产物目录;T6 起取消落盘只留内存
-    let dumpDir: URL = {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mac-switcher-shots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
     /// 对一批窗做预截。失败的(权限缺失/窗口中途消失)跳过,记日志,不阻塞其余。
     func precapture(_ windows: [WindowRecord]) async {
         do {
@@ -46,7 +39,6 @@ final class Snapshotter: ObservableObject {
                     )
                     let nsImage = NSImage(cgImage: image, size: NSSize(width: config.width, height: config.height))
                     cache[w.wid] = nsImage
-                    dump(nsImage, label: "\(w.ownerName)-\(w.wid)")
                 } catch {
                     print("[T5] \(w.ownerName) wid=\(w.wid) 截屏失败: \(error.localizedDescription)")
                 }
@@ -54,13 +46,5 @@ final class Snapshotter: ObservableObject {
         } catch {
             print("[T5] SCShareableContent 获取失败: \(error.localizedDescription)(屏幕录制权限?)")
         }
-    }
-
-    private func dump(_ image: NSImage, label: String) {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return }
-        let safe = label.replacingOccurrences(of: "/", with: "-")
-        try? png.write(to: dumpDir.appendingPathComponent("\(safe).png"))
     }
 }
