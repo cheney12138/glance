@@ -180,7 +180,7 @@ final class PanelController: ObservableObject {
 
     // MARK: - 确认与放弃
 
-    /// T6:只打日志;T7 在此接 WindowFocuser
+    /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)
     func confirmSelection() {
         guard groups.indices.contains(appIndex), groups[appIndex].windows.indices.contains(winIndex) else {
             dismiss(reason: "确认(空列表)")
@@ -188,7 +188,7 @@ final class PanelController: ObservableObject {
         }
         let g = groups[appIndex]
         let w = g.windows[winIndex]
-        print("[T6] 确认(T7 聚焦此处): \(g.appName) — \(w.title)")
+        WindowFocuser.focus(window: w)
         dismiss(reason: "确认")
     }
 

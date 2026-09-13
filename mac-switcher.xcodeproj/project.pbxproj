@@ -17,6 +17,7 @@
 		5A0000000000000000000019 /* Snapshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000030 /* Snapshotter.swift */; };
 		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
 		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
+		5A0000000000000000000045 /* WindowFocuser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000046 /* WindowFocuser.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		5A0000000000000000000030 /* Snapshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshotter.swift; sourceTree = "<group>"; };
 		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
 		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000046 /* WindowFocuser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowFocuser.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +63,7 @@
 				5A0000000000000000000036 /* Trigger */,
 				5A0000000000000000000037 /* Inventory */,
 				5A0000000000000000000038 /* Panel */,
+				5A0000000000000000000047 /* Focus */,
 			);
 			path = "Sources/mac-switcher";
 			sourceTree = "<group>";
@@ -115,6 +118,14 @@
 				5A0000000000000000000040 /* PanelView.swift */,
 			);
 			path = Panel;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000047 /* Focus */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000046 /* WindowFocuser.swift */,
+			);
+			path = Focus;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -195,6 +206,7 @@
 				5A0000000000000000000019 /* Snapshotter.swift in Sources */,
 				5A0000000000000000000020 /* PanelController.swift in Sources */,
 				5A0000000000000000000044 /* PanelView.swift in Sources */,
+				5A0000000000000000000045 /* WindowFocuser.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
