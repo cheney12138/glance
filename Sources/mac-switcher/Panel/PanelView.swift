@@ -48,7 +48,10 @@ struct PanelView: View {
             ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                 IconCell(group: group, selected: i == controller.appIndex, reduceMotion: reduceMotion)
                     .onHover { inside in if inside { controller.hoverApp(i) } }
-                    .onTapGesture { controller.hoverApp(i) }
+                    // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(列表按 z 序,首窗即该 App 最前)
+                    .onTapGesture {
+                        if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
+                    }
             }
         }
     }

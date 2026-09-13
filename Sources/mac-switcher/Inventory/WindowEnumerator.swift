@@ -42,6 +42,17 @@ enum WindowEnumerator {
                   bounds.width > 1, bounds.height > 1
             else { continue }
 
+            // 幽灵窗廉价启发式(不做 alt-tab 的完整探测器——不做清单;两条规则挡 90%):
+            //   ① alpha ≈ 0 的隐形窗  ② 任一维度 <50pt 的迷你窗
+            // Chrome 等 Electron 系会在 layer 0 挂无标题隐形辅助窗(实机现形:
+            // 一个真窗口冒出第二个空白无标题窗)
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            if alpha <= 0.05 || bounds.width < 50 || bounds.height < 50 {
+                let ownerForLog = info[kCGWindowOwnerName as String] as? String ?? "?"
+                print("[幽灵窗滤除] \(ownerForLog) alpha=\(alpha) \(Int(bounds.width))x\(Int(bounds.height))")
+                continue
+            }
+
             guard ownsByContextScreen(bounds, contextScreen: screen) else { continue }
 
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"

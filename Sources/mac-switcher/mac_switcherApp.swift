@@ -7,12 +7,17 @@ import SwiftUI
 struct MacSwitcherApp: App {
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("debug.pinPanelOnRelease") private var pinPanelDebug = false
     private let hotkeys = HotkeyTapCenter()
     private let panelController = PanelController()
 
     var body: some Scene {
         MenuBarExtra {
             Button(permissions.statusLine) { showPermissions() }
+            Divider()
+            Button("调试:松手不关面板\(pinPanelDebug ? " ✓" : "")") {
+                pinPanelDebug.toggle()
+            }
             Divider()
             Button("设置…") {}
                 .disabled(true) // T9 占位
@@ -28,6 +33,7 @@ struct MacSwitcherApp: App {
                     MruEvidence.shared.start()
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+                    panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
                     if permissions.allGranted { hotkeys.start() }
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)

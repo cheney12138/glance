@@ -16,6 +16,9 @@ final class PanelController: ObservableObject {
     private var contextScreen: NSScreen?
     private var outsideClickMonitor: Any?
 
+    /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
+    var onSessionEnd: (() -> Void)?
+
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
@@ -39,6 +42,11 @@ final class PanelController: ObservableObject {
 
     private func begin() {
         // ADR-0001:触发即定场。语境屏快照只活在本轮导航态里
+        let beganAt = CFAbsoluteTimeGetCurrent()
+        defer {
+            let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
+            print(String(format: "[T8] 按键→枚举就位 %.0fms", ms))
+        }
         let screen = CursorScreenAnchor.cursorScreen
         contextScreen = screen
         groups = WindowEnumerator.enumerate(owning: screen)
@@ -82,10 +90,14 @@ final class PanelController: ObservableObject {
 
     private func relayout(animated: Bool) {
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
+        // hover 高频路径:在 SwiftUI 布局 pass 内直接 setFrame 会撞
+        // _NSDetectedLayoutRecursion 警告(实机现形),推到下一圈 runloop 再动窗框
         if animated && !reduceMotion {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.08
-                panel.animator().setFrame(target, display: true)
+            DispatchQueue.main.async {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.08
+                    panel.animator().setFrame(target, display: true)
+                }
             }
         } else {
             panel.setFrame(target, display: true)
@@ -98,6 +110,7 @@ final class PanelController: ObservableObject {
         isVisible = false
         print("[T6] \(reason):面板关闭")
         groups = []
+        onSessionEnd?()
     }
 
     /// contextScreen 可视区正中出现(自家窗口的锚定纪律与引导窗一致)
@@ -162,8 +175,10 @@ final class PanelController: ObservableObject {
     }
 
     private func moveWindow(_ delta: Int) {
+        // 权责冻结(用户拍板):App 移动归 Tab 与指针,←→ 只管展开层的窗;
+        // 组内 ≤1 窗时 ←→ 无语义,静默吞掉
         let n = expandedCount
-        guard n > 0 else { return }
+        guard n > 1 else { return }
         winIndex = (winIndex + delta + n) % n
         print("[T6] 窗口选中: \(groups[appIndex].windows[winIndex].title)")
     }
@@ -180,7 +195,12 @@ final class PanelController: ObservableObject {
 
     // MARK: - 确认与放弃
 
-    /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)
+    /// 钉住开关:"松手"语义在触发层处理(那边保持导航态、不发确认),
+    /// 这里只剩一件事——面板外点击是否免死(钉住时放行,方便截图/对照样式)
+    private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+
+    /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
+    /// 到达路径:未钉住时松 ⌥;钉住时 Enter。
     func confirmSelection() {
         guard groups.indices.contains(appIndex), groups[appIndex].windows.indices.contains(winIndex) else {
             dismiss(reason: "确认(空列表)")
@@ -192,9 +212,10 @@ final class PanelController: ObservableObject {
         dismiss(reason: "确认")
     }
 
-    /// 面板外点击 = 放弃(CONTEXT.md)
+    /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
     private func installOutsideClickMonitor() {
         removeOutsideClickMonitor()
+        if pinPanelDebug { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let panel = self.panel else { return }

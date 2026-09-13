@@ -35,8 +35,17 @@ final class HotkeyTapCenter {
     private static let keyLeft: Int64 = 0x7B
     private static let keyRight: Int64 = 0x7C
     private static let keyEsc: Int64 = 0x35
+    private static let keyReturn: Int64 = 0x24
     private static let optionKeys: Set<Int64> = [0x3A, 0x3D] // 左右 ⌥
-    private static let navKeys: Set<Int64> = [keyTab, keyLeft, keyRight, keyEsc]
+    private static let navKeys: Set<Int64> = [keyTab, keyLeft, keyRight, keyEsc, keyReturn]
+
+    /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
+    private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+
+    /// 键盘路径之外的会话终结(鼠标点卡片确认/面板外点击放弃等):面板控制器每次
+    /// dismiss 必须调这个,否则钉住模式下状态机永远卡在 navigating,⌥Tab 再也唤不醒
+    /// ——实机现形:鼠标确认后 switcher 永久失能
+    func endSession() { state = .idle }
 
     func start() {
         guard tap == nil else { return }
@@ -89,6 +98,9 @@ final class HotkeyTapCenter {
             case (.armed, false):
                 state = .idle  // 待命期放手:恢复原状
             case (.navigating, false):
+                // 钉住:松 ⌥ 不确认、不退出导航态——面板与它的"脑子"一起钉住,
+                // 否则面板还在台上、状态机已经下班,Tabs/Esc 全漏给前台 App(实机现形)
+                if pinPanel { break }
                 state = .idle
                 emit(.confirm)
             default:
@@ -116,6 +128,9 @@ final class HotkeyTapCenter {
             emit(event.flags.contains(.maskShift) ? .prev : .next)
         case Self.keyLeft: emit(.windowLeft)
         case Self.keyRight: emit(.windowRight)
+        case Self.keyReturn:
+            state = .idle
+            emit(.confirm) // 钉住模式的确认键(松手已让位给"保持打开")
         case Self.keyEsc:
             state = .idle
             emit(.cancel)
