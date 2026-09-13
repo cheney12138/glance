@@ -27,6 +27,7 @@ struct MacSwitcherApp: App {
                     if !permissions.allGranted { showPermissions() }
                     MruEvidence.shared.start()
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
+                    hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
                     if permissions.allGranted { hotkeys.start() }
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)

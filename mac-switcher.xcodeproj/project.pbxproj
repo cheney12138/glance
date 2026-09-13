@@ -18,6 +18,7 @@
 		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
 		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
 		5A0000000000000000000045 /* WindowFocuser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000046 /* WindowFocuser.swift */; };
+		5A0000000000000000000048 /* CmdClickFix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000049 /* CmdClickFix.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
 		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000046 /* WindowFocuser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowFocuser.swift; sourceTree = "<group>"; };
+		5A0000000000000000000049 /* CmdClickFix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmdClickFix.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000046 /* WindowFocuser.swift */,
+				5A0000000000000000000049 /* CmdClickFix.swift */,
 			);
 			path = Focus;
 			sourceTree = "<group>";
@@ -207,6 +210,7 @@
 				5A0000000000000000000020 /* PanelController.swift in Sources */,
 				5A0000000000000000000044 /* PanelView.swift in Sources */,
 				5A0000000000000000000045 /* WindowFocuser.swift in Sources */,
+				5A0000000000000000000048 /* CmdClickFix.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

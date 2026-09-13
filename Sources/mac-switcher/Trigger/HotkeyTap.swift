@@ -25,6 +25,8 @@ final class HotkeyTapCenter {
     private(set) var state: State = .idle
     /// T6 起由面板控制器赋值;T3 阶段默认为打印。
     var onAction: ((Action) -> Void)?
+    /// T7.5:⌘+左键点击(Quartz 全局坐标)。导航态里挂起(Q9-④)
+    var onCmdClick: ((CGPoint) -> Void)?
 
     private var tap: CFMachPort?
     private var runloopSource: CFRunLoopSource?
@@ -42,6 +44,7 @@ final class HotkeyTapCenter {
             (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue) // T7.5:⌘+click 补焦的耳朵
         )
         guard let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,          // HID 层,alt-tab 同款;能拦在系统快捷键之前
@@ -68,6 +71,14 @@ final class HotkeyTapCenter {
     /// 注意:tap 的 runloop source 挂在主 runloop,回调就在主线程,可以安全动 @MainActor 状态。
     fileprivate func handle(_ event: CGEvent) -> Bool {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // ⌘+左键:补焦耳朵。导航态里挂起;事件本身永远放行,补不补焦由回调决定
+        if event.type == .leftMouseDown {
+            if event.flags.contains(.maskCommand), state != .navigating {
+                onCmdClick?(event.location)
+            }
+            return false
+        }
 
         // ⌥ 的按下/释放只看 flagsChanged:纯修饰键没有 keyDown
         if event.type == .flagsChanged, Self.optionKeys.contains(keyCode) {
