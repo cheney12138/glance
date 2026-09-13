@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glance 面板 · v1.0</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   Glance Design System v1.0 — token 层
+   规范文档:design/v4/design-system.md(数值以文档为准)
+   度量:4px 网格;阴影:elevation 三级(key+fill 双层);字阶:11/13
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  /* ── 色彩:全系统仅两源彩色(聚焦蓝 / 红绿灯)── */
+  --accent: #007AFF;
+  --tl-r: #FF5F57; --tl-y: #FEBC2E; --tl-g: #28C840;
+
+  /* ── 文字(中性灰阶,按不透明度分层)── */
+  --txt-1: rgba(0,0,0,.85);   /* 一级:窗口标题外的保留位 */
+  --txt-2: rgba(0,0,0,.55);   /* 二级:窗口标题 */
+  --txt-3: rgba(0,0,0,.38);   /* 三级:演示页辅助 */
+
+  /* ── 玻璃(单配方,两个容器共用)── */
+  --glass-tint: rgba(250,250,252,.45);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,0) 40%);
+  --glass-blur: 28px;
+  --glass-sat: 1.8;
+  --edge-hi: rgba(255,255,255,.50);    /* 顶缘 0.5px 受光 */
+  --edge-ring: rgba(0,0,0,.09);        /* 外缘 0.5px 轮廓 */
+
+  /* ── Elevation:阴影 = key(远,塑形) + fill(近,锚定);深色 α×2.2 ── */
+  --e1: 0 6px 16px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.08);        /* 卡片 */
+  --e1-hover: 0 8px 20px rgba(0,0,0,.13), 0 2px 4px rgba(0,0,0,.09);
+  --e1-sel: 0 10px 26px rgba(0,0,0,.15), 0 2px 6px rgba(0,0,0,.10);
+  --e2: 0 18px 52px rgba(0,0,0,.18), 0 3px 10px rgba(0,0,0,.08);      /* 长条 */
+  --e3: 0 26px 72px rgba(0,0,0,.22), 0 5px 14px rgba(0,0,0,.10);      /* 浮窗 */
+  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.18)) drop-shadow(0 1px 2px rgba(0,0,0,.12));
+  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.22)) drop-shadow(0 1.5px 3px rgba(0,0,0,.14));
+
+  /* ── 选中 ── */
+  --plate: rgba(0,0,0,.06);
+  --ko: rgba(250,250,252,.95);
+  --card-ring: rgba(0,0,0,.10);
+
+  /* ── 标题栏带 ── */
+  --tb-tint: rgba(246,247,248,.5);
+  --tb-line: rgba(0,0,0,.06);
+
+  /* ── 演示布景(非产品 token)── */
+  --wall-1:#e2e7ef; --wall-2:#d0d8e5; --wall-3:#bcc7d9;
+  --bloom-1: rgba(164,186,222,.45);
+  --bloom-2: rgba(224,213,196,.40);
+
+  /* ── 几何(4px 网格)── */
+  --r-panel: 20px; --r-plate: 14px; --r-card: 10px;
+  --icon: 68px; --cell: 80px; --cell-gap: 8px;
+  --strip-pad-y: 12px; --strip-pad-x: 16px;
+  --tb-h: 24px; --shot-h: 192px;
+  --card-gap: 12px; --pop-pad: 12px; --pop-gap-y: 16px;
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+
+  /* ── 动效 ── */
+  --ease-out: cubic-bezier(.2,.8,.2,1);
+  --ease-slide: cubic-bezier(.25,.8,.3,1);
+  --t-pop: 120ms; --t-card: 160ms; --t-stagger: 18ms;
+  --t-slide: 180ms; --t-state: 100ms;
+}
+[data-theme="dark"] {
+  --accent: #0A84FF;
+  --txt-1: rgba(255,255,255,.87);
+  --txt-2: rgba(255,255,255,.55);
+  --txt-3: rgba(255,255,255,.38);
+  --glass-tint: rgba(28,29,33,.60);
+  --glass-sheen: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 40%);
+  --edge-hi: rgba(255,255,255,.12);
+  --edge-ring: rgba(255,255,255,.11);
+  --e1: 0 6px 16px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.18);
+  --e1-hover: 0 8px 20px rgba(0,0,0,.29), 0 2px 4px rgba(0,0,0,.20);
+  --e1-sel: 0 10px 26px rgba(0,0,0,.33), 0 2px 6px rgba(0,0,0,.22);
+  --e2: 0 18px 52px rgba(0,0,0,.40), 0 3px 10px rgba(0,0,0,.18);
+  --e3: 0 26px 72px rgba(0,0,0,.48), 0 5px 14px rgba(0,0,0,.22);
+  --icon-e:  drop-shadow(0 4px 10px rgba(0,0,0,.28)) drop-shadow(0 1px 2px rgba(0,0,0,.20));
+  --icon-e-sel: drop-shadow(0 7px 14px rgba(0,0,0,.34)) drop-shadow(0 1.5px 3px rgba(0,0,0,.24));
+  --plate: rgba(255,255,255,.10);
+  --ko: rgba(22,23,27,.95);
+  --card-ring: rgba(255,255,255,.13);
+  --tb-tint: rgba(38,39,44,.5);
+  --tb-line: rgba(255,255,255,.08);
+  --wall-1:#191d24; --wall-2:#12151c; --wall-3:#0c0f14;
+  --bloom-1: rgba(44,62,94,.45);
+  --bloom-2: rgba(56,47,50,.35);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { min-height:100%; }
+body {
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: auto;
+}
+
+/* ══════════ 演示布景(非产品)══════════ */
+.wallpaper {
+  position: fixed; inset: 0; z-index: 0;
+  background:
+    radial-gradient(90% 70% at 22% 18%, var(--bloom-1) 0%, transparent 62%),
+    radial-gradient(80% 60% at 82% 78%, var(--bloom-2) 0%, transparent 58%),
+    radial-gradient(120% 90% at 18% 8%, var(--wall-1) 0%, transparent 60%),
+    radial-gradient(110% 90% at 85% 20%, var(--wall-2) 0%, transparent 55%),
+    linear-gradient(168deg, var(--wall-1) 0%, var(--wall-2) 52%, var(--wall-3) 100%);
+  transition: background .2s ease;
+}
+
+/* ══════════ 演示控制条(非产品)══════════ */
+.controls {
+  position: fixed; top: 16px; right: 16px; z-index: 30;
+  display: flex; gap: 8px;
+}
+.seg {
+  display: flex; padding: 3px; gap: 2px; border-radius: 9px;
+  background: var(--glass-tint); background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: var(--e1), 0 0 0 .5px var(--edge-ring), inset 0 .5px 0 var(--edge-hi);
+}
+.seg button {
+  font: 500 11px/1 var(--font); color: var(--txt-3);
+  border: 0; background: transparent; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+}
+.seg button.on { color: var(--txt-1); background: var(--plate); box-shadow: inset 0 0 0 .5px var(--edge-ring); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.caption {
+  position: fixed; left: 18px; bottom: 14px; z-index: 30;
+  font-size: 11px; color: var(--txt-3); letter-spacing: .01em;
+}
+
+/* ══════════ 场景与 200% 检视 ══════════ */
+.scene {
+  position: relative; z-index: 10;
+  min-height: 100vh; min-width: 100vw;
+  display: flex; align-items: center; justify-content: center;
+  padding: 120px 60px;
+}
+.zoom { transform-origin: center center; transition: transform var(--t-slide) var(--ease-slide); }
+.zoom.z2 { transform: scale(2); }
+
+/* ══════════ 组合体:两个独立容器,不嵌套 ══════════ */
+.compose {
+  position: relative;
+  animation: panelIn var(--t-pop) var(--ease-out) both;
+  transition: margin-top var(--t-slide) var(--ease-slide);
+}
+/* 浮窗绝对定位不占位:展开时补上浮窗全高(--tb-h+--shot-h+--pop-gap-y)×1 的上边距,组合体视觉居中 */
+.compose.with-pop { margin-top: 232px; }
+
+/* ── 容器 A:图标长条(E2)── */
+.strip {
+  position: relative;
+  border-radius: var(--r-panel);
+  background: var(--glass-tint); background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  box-shadow: var(--e2), 0 0 0 .5px var(--edge-ring), inset 0 .5px 0 var(--edge-hi);
+  padding: var(--strip-pad-y) var(--strip-pad-x);
+  transition: background .2s ease, box-shadow .2s ease;
+}
+.cells { display: flex; gap: var(--cell-gap); }
+.cell {
+  width: var(--cell); height: var(--cell);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; cursor: pointer;
+}
+.cell::before {
+  content: ''; position: absolute; inset: 0;
+  border-radius: var(--r-plate);
+  background: var(--plate);
+  opacity: 0; transition: opacity var(--t-state) ease;
+}
+.cell:hover::before { opacity: .45; }
+.cell.sel::before { opacity: 1; }
+.cell .icon {
+  width: var(--icon); height: var(--icon);
+  position: relative;
+  filter: var(--icon-e);
+  transition: filter var(--t-state) ease, transform var(--t-state) ease;
+}
+.cell.sel .icon { transform: translateY(-1px); filter: var(--icon-e-sel); }
+
+/* ── 容器 B:窗口预览浮窗(E3,高于长条一级)── */
+.popover {
+  position: absolute; bottom: calc(100% + var(--pop-gap-y));
+  border-radius: var(--r-panel);
+  background: var(--glass-tint); background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  box-shadow: var(--e3), 0 0 0 .5px var(--edge-ring), inset 0 .5px 0 var(--edge-hi);
+  padding: var(--pop-pad);
+  display: flex; gap: var(--card-gap);
+  transition: left var(--t-slide) var(--ease-slide), opacity var(--t-state) ease, background .2s ease, box-shadow .2s ease;
+  animation: popIn var(--t-pop) var(--ease-out) both;
+}
+.popover.gone { opacity: 0; pointer-events: none; }
+
+/* ── 窗口卡(E1):标题栏带 + 等比截图 ── */
+.card {
+  position: relative;
+  border-radius: var(--r-card); overflow: hidden;
+  box-shadow: 0 0 0 .5px var(--card-ring), var(--e1);
+  cursor: pointer;
+  transition: box-shadow var(--t-state) ease;
+  animation: cardIn var(--t-card) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--t-stagger));
+}
+.card img { height: var(--shot-h); display: block; }
+.card:hover { box-shadow: 0 0 0 .5px var(--card-ring), var(--e1-hover); }
+.card.sel {
+  box-shadow:
+    0 0 0 2px var(--ko),
+    0 0 0 4.5px var(--accent),
+    var(--e1-sel);
+}
+
+/* 标题栏带:24px,左灯右空,标题全宽居中 */
+.tbar {
+  position: relative;
+  height: var(--tb-h);
+  display: flex; align-items: center; padding-left: 12px;
+  background: var(--tb-tint);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+  border-bottom: .5px solid var(--tb-line);
+}
+.lights { display: flex; gap: 8px; }
+.lights i {
+  width: 10px; height: 10px; border-radius: 50%;
+  box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12),
+              inset 0 1px 1px rgba(255,255,255,.30),
+              inset 0 -1px 1.5px rgba(0,0,0,.16);
+}
+.lights .r { background: var(--tl-r); } .lights .y { background: var(--tl-y); } .lights .g { background: var(--tl-g); }
+.tbar .title {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  max-width: calc(100% - 116px);          /* 对称让位:左区=灯 58px,取整 58×2 */
+  font-size: 11px; font-weight: 500; line-height: 1;
+  color: var(--txt-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* ══════════ 动效(全部无回弹;reduced-motion 归零)══════════ */
+@keyframes panelIn { from { opacity: 0; transform: scale(.96); } }
+@keyframes popIn   { from { opacity: 0; transform: translateY(-5px); } }
+@keyframes cardIn  { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="wallpaper"></div>
+
+<div class="controls">
+  <div class="seg" id="segFrame">
+    <button data-v="a">帧 A · 长条</button><button data-v="b" class="on">帧 B · 预览</button>
+  </div>
+  <div class="seg" id="segTheme">
+    <button data-v="light" class="on">浅色</button><button data-v="dark">深色</button>
+  </div>
+  <div class="seg" id="segZoom">
+    <button data-v="1" class="on">100%</button><button data-v="2">200%</button>
+  </div>
+</div>
+
+<div class="scene">
+  <div class="zoom" id="zoom">
+    <div class="compose" id="compose">
+      <div class="popover" id="popover"></div>
+      <div class="strip" id="strip">
+        <div class="cells" id="cells"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">Tab / ⇧Tab 切换 App · ← → 切换窗口 · Esc 收起预览 · 无窗 App 不弹预览</div>
+
+<script>
+/* __ASSETS__ */
+
+const APPS = [
+  { id:'finder',  name:'Finder',         icon:D['icon-finder'],  wins:[] },
+  { id:'chrome',  name:'Google Chrome',  icon:D['icon-chrome'],  wins:[
+    { src:D['w-chrome-1'], w:1280, h:800, t:'ejbills/DockDoor: Window peeking and alt-tab for macOS' },
+    { src:D['w-chrome-2'], w:1280, h:889, t:'macOS' },
+    { src:D['w-safari-1'], w:1280, h:917, t:"What's New - Apple Developer" },
+  ]},
+  { id:'idea',    name:'IntelliJ IDEA',  icon:D['icon-idea'],    wins:[{ src:D['w-idea-1'], w:720, h:391, t:'TrainXProductOrderServiceImpl.java' }] },
+  { id:'ghostty', name:'Ghostty',        icon:D['icon-ghostty'], wins:[{ src:D['w-term-1'], w:720, h:474, t:'raft-election — zsh' }] },
+  { id:'xcode',   name:'Xcode',          icon:D['icon-xcode'],   wins:[{ src:D['w-xcode-1'], w:720, h:447, t:'CursorScreenAnchor.swift' }] },
+  { id:'obsidian',name:'Obsidian',       icon:D['icon-obsidian'],wins:[] },
+  { id:'firefox', name:'Firefox',        icon:D['icon-firefox'], wins:[] },
+];
+
+const SHOT_H = 192;
+const state = { app: 1, win: { chrome: 0, idea: 0, ghostty: 0, xcode: 0 }, preview: true, theme: 'light', zoom2: false };
+
+const $ = id => document.getElementById(id);
+const cellsEl = $('cells'), popEl = $('popover'), composeEl = $('compose');
+
+APPS.forEach((a, i) => {
+  const c = document.createElement('div');
+  c.className = 'cell' + (i === state.app ? ' sel' : '');
+  c.innerHTML = `<img class="icon" src="${a.icon}" alt="${a.name}">`;
+  c.addEventListener('click', () => selectApp(i));
+  cellsEl.appendChild(c);
+});
+
+function selectApp(i) {
+  state.app = i;
+  [...cellsEl.children].forEach((c, j) => c.classList.toggle('sel', j === i));
+  renderPopover();
+}
+
+function renderPopover() {
+  const a = APPS[state.app];
+  const show = state.preview && a.wins.length > 0;
+  popEl.classList.toggle('gone', !show);
+  composeEl.classList.toggle('with-pop', show);
+  if (!show) return;
+  const sel = state.win[a.id] || 0;
+  popEl.innerHTML = a.wins.map((w, j) => `
+    <div class="card${j === sel ? ' sel' : ''}" data-j="${j}" style="--i:${j}">
+      <div class="tbar"><div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="title">${w.t}</div></div>
+      <img src="${w.src}" width="${Math.round(SHOT_H * w.w / w.h)}" height="${SHOT_H}" alt="">
+    </div>`).join('');
+  [...popEl.children].forEach(c => c.addEventListener('click', () => selectWin(+c.dataset.j)));
+  requestAnimationFrame(centerPopover);
+}
+
+function selectWin(j) {
+  state.win[APPS[state.app].id] = j;
+  [...popEl.children].forEach((c, k) => c.classList.toggle('sel', k === j));
+}
+
+/* 冻结语义:浮窗水平中心正对选中图标,超界收进可视区 */
+function centerPopover() {
+  if (popEl.classList.contains('gone')) return;
+  const cell = cellsEl.children[state.app].getBoundingClientRect();
+  const comp = composeEl.getBoundingClientRect();
+  const zoom = state.zoom2 ? 2 : 1;
+  const cellCx = (cell.left + cell.width / 2 - comp.left) / zoom;
+  const popW = popEl.offsetWidth;
+  const maxLeft = window.innerWidth / zoom - popW - 24;
+  popEl.style.left = Math.max(24, Math.min(cellCx - popW / 2, maxLeft)) + 'px';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Tab') { e.preventDefault(); selectApp((state.app + (e.shiftKey ? -1 : 1) + APPS.length) % APPS.length); }
+  if (e.key === 'Escape') { setFrame(false); }
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const a = APPS[state.app]; if (a.wins.length < 2) return;
+    selectWin(((state.win[a.id] || 0) + (e.key === 'ArrowRight' ? 1 : -1) + a.wins.length) % a.wins.length);
+  }
+});
+
+/* ── 演示控制条 ── */
+function setSeg(id, v) { [...$(id).children].forEach(x => x.classList.toggle('on', x.dataset.v === v)); }
+function setFrame(on) { state.preview = on; setSeg('segFrame', on ? 'b' : 'a'); renderPopover(); }
+function setTheme(v) { state.theme = v; document.documentElement.dataset.theme = v; setSeg('segTheme', v); try { localStorage.setItem('glance-theme', v); } catch(e){} }
+function setZoom(v) { state.zoom2 = v === '2'; $('zoom').classList.toggle('z2', state.zoom2); setSeg('segZoom', v); requestAnimationFrame(centerPopover); }
+function segWire(id, fn) {
+  $(id).addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    fn(b.dataset.v);
+  });
+}
+segWire('segFrame', v => setFrame(v === 'b'));
+segWire('segTheme', setTheme);
+segWire('segZoom', setZoom);
+window.addEventListener('resize', centerPopover);
+
+/* ── 初帧:URL 参数 > localStorage > 默认(便于无头验收与演示续场)── */
+const qp = new URLSearchParams(location.search);
+let savedTheme = null; try { savedTheme = localStorage.getItem('glance-theme'); } catch(e){}
+if (qp.get('theme') || savedTheme) setTheme(qp.get('theme') || savedTheme);
+if (qp.get('frame') === 'a') setFrame(false);
+if (qp.get('zoom') === '2') setZoom('2');
+renderPopover();
+</script>
+</body>
+</html>

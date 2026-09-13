@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// 切换器主面板 v0.2(只装 App 长条;窗口预览已独立成 PreviewPanelView 浮窗——
-/// 评审拍板:凑在一个容器里天然对齐不了图标)。
-/// 全部度量以 design/brand-spec.md(v0.2 修订)为准。
+/// 切换器主面板 v1(design/v3/tokens-v1.md 施工契约,交互语义仍以 brand-spec 为准)。
+/// 变化:App 名从长条删除(评审拍板)、图标 76/格 88/距 8、选中=上浮+投影+轻托底、
+/// 背板 22 圆角 + 顶部受光边 + 双层阴影。
 struct PanelView: View {
     @ObservedObject var controller: PanelController
 
@@ -11,32 +11,34 @@ struct PanelView: View {
 
     var body: some View {
         ZStack {
-            // ★材质更轻亮:.popover 替代 .underWindowBackground(治"灰蒙蒙")
             VisualEffectBackground(material: .popover)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
 
+            iconStrip
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+            // v1 §1:顶部 0.5px 受光边——浮层"厚度"的唯一诚实来源
             VStack(spacing: 0) {
-                Text(controller.currentGroup?.appName ?? "")
-                    .font(.system(size: 15, weight: .medium)) // ★名 13→15 medium
-                    .foregroundStyle(.primary)
-                    .frame(height: 18)
-                    .padding(.bottom, 20)                        // ★与图标层呼吸加大
-
-                iconStrip
+                Rectangle()
+                    .fill(PanelColors.edgeHi)
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 22)
+                Spacer()
             }
-            .padding(.top, 22)
-            .padding(.bottom, 26)
-            .padding(.horizontal, 30)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         .padding(28) // 阴影呼吸区——必须与 PanelController.paddedSize 口径一致
-        .shadow(color: .black.opacity(0.16), radius: 25, y: 8)
+        // §3 双层阴影:远层给"浮",近层给"锚"
+        .shadow(color: .black.opacity(0.09), radius: 8, y: 4)
+        .shadow(color: .black.opacity(0.20), radius: 35, y: 24)
     }
 
-    // MARK: - 图标层(★图标 72 / 格 84 / 距 20 / 无形容器)
+    // MARK: - 图标层(主角体格:76 图标 / 88 格 / 8 距)
 
     private var iconStrip: some View {
-        HStack(spacing: 20) {
+        HStack(spacing: 8) {
             ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                 IconCell(group: group, selected: i == controller.appIndex, reduceMotion: reduceMotion)
                     .onHover { inside in if inside { controller.hoverApp(i) } }
@@ -49,7 +51,7 @@ struct PanelView: View {
     }
 }
 
-// MARK: - 图标格(★选中 = 极轻灰托底,无描边)
+// MARK: - 图标格(选中 = 上浮 1pt + 投影加深 + 0.055 托底,无色块套娃)
 
 private struct IconCell: View {
     let group: AppGroup
@@ -59,19 +61,44 @@ private struct IconCell: View {
     var body: some View {
         ZStack {
             if selected {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.primary.opacity(0.08)) // 深浅双色自适应;不描边
+                RoundedRectangle(cornerRadius: 19, style: .continuous)
+                    .fill(Color.primary.opacity(0.07))
             }
             IconProvider.image(for: group.pid)
                 .renderingMode(.original)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
-                .shadow(color: .black.opacity(0.14), radius: 4, y: 2)
+                .frame(width: 76, height: 76)
+                // v1 §1:不裁圆角——真实 squircle 自带 alpha;阴影跟轮廓走(.shadow 打点,
+                // 不用大框 box-shadow),掉格即贴纸
+                .shadow(color: .black.opacity(selected ? 0.26 : 0.14), radius: selected ? 4 : 2, y: selected ? 3 : 1.5)
+                .shadow(color: .black.opacity(selected ? 0.24 : 0.20), radius: selected ? 8 : 6, y: selected ? 8 : 5)
+                .offset(y: selected ? -1 : 0)
         }
-        .frame(width: 84, height: 84)
+        .frame(width: 88, height: 88)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: selected)
+    }
+}
+
+// MARK: - 共享色板(v1 §1 HTML → 原生)
+
+enum PanelColors {
+    /// 顶部受光边:浅 白 .55 / 深 白 .13
+    static let edgeHi = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .white.withAlphaComponent(0.13)
+            : .white.withAlphaComponent(0.55)
+    })
+}
+
+// MARK: - 布局度量共享(规格唯一来源;PanelController 的定位数学与视图同源)
+
+enum PanelMetrics {
+    /// 卡片宽 = 190 × 窗口真实比例,clamp 140…420(等高等比 = Mission Control 群像感;
+    /// 等宽裁切 = 表格感,v0.2 的病根)
+    static func cardWidth(of record: WindowRecord) -> CGFloat {
+        let aspect = record.bounds.width / max(record.bounds.height, 1)
+        return min(max(190 * aspect, 140), 420)
     }
 }
 

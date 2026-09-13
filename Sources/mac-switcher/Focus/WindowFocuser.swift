@@ -129,6 +129,16 @@ enum WindowFocuser {
         AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean)
     }
 
+    /// 缩放(绿灯):按它的 zoom 按钮——绿灯是"缩放"不是"全屏",
+    /// App 自己决定 content-fit;动作收口与红绿灯语义对齐(预览卡 T14)
+    static func zoom(window w: WindowRecord) {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+        var button: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXZoomButtonAttribute as CFString, &button) == .success,
+              let zoomButton = button as! AXUIElement? else { return }
+        AXUIElementPerformAction(zoomButton, kAXPressAction as CFString)
+    }
+
     /// Q:退出整个 App(有未保存内容时 App 会自己弹询问,我们只管发辞呈)
     static func quitApp(pid: pid_t) {
         NSRunningApplication(processIdentifier: pid)?.terminate()

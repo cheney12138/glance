@@ -44,7 +44,8 @@
 
   /* —— 桌面布景(仅演示,不是产品 token)—— */
   --wall-1:#dfe5ee; --wall-2:#cdd7e6; --wall-3:#b8c5da;
-  --ambient-dim: brightness(1);
+  --bloom-1: rgba(168,190,224,.5);       /* 冷调光斑,给玻璃一点可透的颜色 */
+  --bloom-2: rgba(226,214,196,.45);      /* 暖调光斑,防整屏死蓝 */
 
   /* —— 几何 —— */
   --r-panel: 22px; --r-cell: 19px; --r-card: 10px;
@@ -79,7 +80,8 @@
   --tb-tint: rgba(38,39,44,.5);
   --tb-line: rgba(255,255,255,.08);
   --wall-1:#181c23; --wall-2:#12151c; --wall-3:#0b0e13;
-  --ambient-dim: brightness(.82);
+  --bloom-1: rgba(46,64,96,.5);
+  --bloom-2: rgba(58,48,52,.4);
 }
 
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -94,19 +96,13 @@ body {
 .wallpaper {
   position: fixed; inset: 0; z-index: 0;
   background:
+    radial-gradient(90% 70% at 22% 18%, var(--bloom-1) 0%, transparent 62%),
+    radial-gradient(80% 60% at 82% 78%, var(--bloom-2) 0%, transparent 58%),
     radial-gradient(120% 90% at 18% 8%, var(--wall-1) 0%, transparent 60%),
     radial-gradient(110% 90% at 85% 20%, var(--wall-2) 0%, transparent 55%),
     linear-gradient(168deg, var(--wall-1) 0%, var(--wall-2) 52%, var(--wall-3) 100%);
   transition: background .2s ease;
 }
-.ambient { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
-.ambient img {
-  position: absolute; border-radius: 8px; filter: var(--ambient-dim);
-  box-shadow: 0 24px 60px rgba(0,0,0,.22), 0 3px 10px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.10);
-}
-.ambient .a1 { width: 620px; left: 5vw;  top: 9vh; }
-.ambient .a2 { width: 560px; right: 4vw; top: 13vh; }
-.ambient .a3 { width: 600px; left: 12vw; bottom: 6vh; }
 
 /* ══════════ 演示控制条(非产品)══════════ */
 .controls {
@@ -145,7 +141,9 @@ body {
 .zoom.z2 { transform: scale(2); }
 
 /* ══════════ 组合体:两个独立容器,不嵌套 ══════════ */
-.compose { position: relative; animation: panelIn .12s var(--ease-pop) both; }
+.compose { position: relative; animation: panelIn .12s var(--ease-pop) both; transition: margin-top .18s var(--ease-slide); }
+/* 浮窗绝对定位不占位:展开时给组合体补上浮窗全高(216+16)的上边距,flex 居中后净下移一半,组合体视觉居中 */
+.compose.with-pop { margin-top: 232px; }
 
 /* ── 容器 A:图标长条 ── */
 .strip {
@@ -202,6 +200,9 @@ body {
   box-shadow: 0 0 0 .5px var(--card-ring), var(--card-shadow);
   cursor: pointer;
   transition: box-shadow .1s ease;
+  /* 错落入场:每张卡晚 18ms,群像"铺开"而不是"砸下来" */
+  animation: cardIn .16s var(--ease-pop) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
 }
 .card img { height: var(--card-h); display: block; }
 .card:hover { box-shadow: 0 0 0 .5px var(--card-ring), 0 12px 28px rgba(0,0,0,.18), 0 3px 7px rgba(0,0,0,.12); }
@@ -241,8 +242,8 @@ body {
 /* ══════════ 动效定义(全部无回弹)══════════ */
 @keyframes panelIn { from { opacity: 0; transform: scale(.96); } }
 @keyframes popIn   { from { opacity: 0; transform: translateY(-5px); } }
-.popover.swap { animation: popSwap .12s ease-out both; }
-@keyframes popSwap { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes cardIn  { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+.popover.swap { animation: none; }       /* 换组时浮窗本体不动,只让卡错落重排 */
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
@@ -252,7 +253,6 @@ body {
 <body>
 
 <div class="wallpaper"></div>
-<div class="ambient" id="ambient"></div>
 
 <div class="controls">
   <div class="seg" id="segFrame">
@@ -310,12 +310,6 @@ APPS.forEach((a, i) => {
   cellsEl.appendChild(c);
 });
 
-/* ── 桌面布景(复用真实截图,让玻璃有内容可透)── */
-[['a1', D['w-idea-1']], ['a2', D['w-safari-1']], ['a3', D['w-term-1']]].forEach(([cls, src]) => {
-  const img = document.createElement('img');
-  img.className = cls; img.src = src; $('ambient').appendChild(img);
-});
-
 function selectApp(i, keepWin) {
   state.app = i;
   [...cellsEl.children].forEach((c, j) => c.classList.toggle('sel', j === i));
@@ -324,11 +318,13 @@ function selectApp(i, keepWin) {
 
 function renderPopover() {
   const a = APPS[state.app];
-  if (!state.preview || a.wins.length === 0) { popEl.classList.add('gone'); return; }
-  popEl.classList.remove('gone');
+  const show = state.preview && a.wins.length > 0;
+  popEl.classList.toggle('gone', !show);
+  composeEl.classList.toggle('with-pop', show);
+  if (!show) return;
   const sel = state.win[a.id] || 0;
   popEl.innerHTML = a.wins.map((w, j) => `
-    <div class="card${j === sel ? ' sel' : ''}" data-j="${j}">
+    <div class="card${j === sel ? ' sel' : ''}" data-j="${j}" style="--i:${j}">
       <div class="tbar"><div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div><div class="title">${w.t}</div></div>
       <img src="${w.src}" width="${Math.round(190 * w.w / w.h)}" height="190" alt="">
     </div>`).join('');
@@ -382,7 +378,6 @@ function setSeg(id, v) { [...$(id).children].forEach(x => x.classList.toggle('on
 if (qp.get('theme') === 'dark') { state.theme = 'dark'; document.documentElement.dataset.theme = 'dark'; setSeg('segTheme', 'dark'); }
 if (qp.get('frame') === 'a') { state.preview = false; setSeg('segFrame', 'a'); }
 if (qp.get('zoom') === '2') { state.zoom2 = true; $('zoom').classList.add('z2'); setSeg('segZoom', '2'); }
-nameEl.textContent = APPS[state.app].name;
 renderPopover();
 </script>
 </body>

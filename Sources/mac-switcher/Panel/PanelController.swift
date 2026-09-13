@@ -128,12 +128,12 @@ final class PanelController: ObservableObject {
         return NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height)
     }
 
-    /// brand-spec v0.2 度量(主面板只装长条):格 84 / 距 20 / 顶 22 名 18 距 20 底 26。
-    /// 预览框不再计入住——它是独立浮窗(分容器构型,见 updatePreview)
+    /// tokens-v1 §4 度量(主面板只装长条,名字已删除):格 88 / 距 8 / 横 14 竖 12
+    /// 预览框不计入住——它是独立浮窗,中心正对选中 App 头顶
     func contentSize() -> NSSize {
         let nApps = CGFloat(max(groups.count, 1))
-        let w = max(nApps * 84 + max(nApps - 1, 0) * 20 + 60, 280)
-        return NSSize(width: w, height: 22 + 18 + 20 + 84 + 26)
+        let w = max(nApps * 88 + max(nApps - 1, 0) * 8 + 28, 280)
+        return NSSize(width: w, height: 12 + 88 + 12)
     }
 
     /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 28pt)。
@@ -183,29 +183,31 @@ final class PanelController: ObservableObject {
         previewHosting = hosting
     }
 
-    /// 预览框内容尺寸 = 卡片区 + 四周 28 阴影呼吸区(与 PreviewPanelView .padding 口径一致)
+    /// 预览框内容尺寸 = Σ卡片宽(等高等比)+ 卡距 12 + 内边 24 + 四周 28 阴影呼吸区
     private func previewSize() -> NSSize {
-        let n = CGFloat(expandedCount)
-        guard n > 0 else { return .zero }
+        guard let g = currentGroup, !g.windows.isEmpty else { return .zero }
+        let cardsW = g.windows.reduce(CGFloat(0)) { $0 + PanelMetrics.cardWidth(of: $1) }
+        let n = CGFloat(g.windows.count)
+        // 呼吸区 12/向(与 PreviewPanelView .padding(12) 同口径;原 28 是"大黑框"事故)
         return NSSize(
-            width: n * 320 + max(n - 1, 0) * 16 + 24 + 56,
-            height: 200 + 24 + 56
+            width: cardsW + max(n - 1, 0) * 12 + 24 + 24,
+            height: 26 + 190 + 24 + 24
         )
     }
 
-    /// 选中图标的屏幕坐标 X:内容起点 = 28(阴影区) + 30(h padding);格步进 = 84 + 20
+    /// 选中图标的屏幕坐标 X:内容起点 = 28(阴影区) + 14(h padding);格步进 = 88 + 8
     private func iconCenterXInScreen(_ i: Int) -> CGFloat? {
         guard let panel else { return nil }
-        return panel.frame.minX + 28 + 30 + CGFloat(i) * 104 + 42
+        return panel.frame.minX + 28 + 14 + CGFloat(i) * 96 + 44
     }
 
-    /// 预览框正中 = 选中 App 头顶;超界时收进语境屏可视区(内 12)
+    /// 预览框正中 = 选中 App 头顶;超界时收进语境屏可视区(内 12);缝距 = 16
     private func previewFrame() -> NSRect? {
         guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
         let cx = iconCenterXInScreen(appIndex) ?? panel.frame.midX
         let x = min(max(cx - size.width / 2, area.minX + 12), area.maxX - size.width - 12)
-        let y = panel.frame.maxY + 12
+        let y = panel.frame.maxY + 4 // 视觉缝 = 4(帧距) + 12(呼吸区顶缘) = 16,snug 不发散
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
@@ -222,10 +224,12 @@ final class PanelController: ObservableObject {
             previewPanel.orderFrontRegardless()
         }
         if animated && !reduceMotion {
-            // SwiftUI 布局递归前科:动画帧推下一圈 runloop
+            // SwiftUI 布局递归前科:动画帧推下一圈 runloop。
+            // tokens-v1 §6:浮窗滑移 180ms——位移距离长,"滑过去"不是"闪过去",无回弹
             DispatchQueue.main.async {
                 NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.1
+                    ctx.duration = 0.18
+                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.8, 0.3, 1)
                     previewPanel.animator().setFrame(frame, display: true)
                     previewPanel.animator().alphaValue = 1
                 }
@@ -312,7 +316,22 @@ final class PanelController: ObservableObject {
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 
-    private enum DestructiveOp { case quit, close, minimize }
+    private enum DestructiveOp { case quit, close, minimize, zoom }
+
+    /// 红绿灯按钮入口(T14):wid 反查组内位置后,走破坏性操作同一闸
+    func closeWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .close) }
+    func minimizeWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .minimize) }
+    func zoomWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .zoom) }
+
+    private func trafficOp(_ wid: CGWindowID, _ op: DestructiveOp) {
+        for (ai, g) in groups.enumerated() {
+            guard let wi = g.windows.firstIndex(where: { $0.wid == wid }) else { continue }
+            appIndex = ai
+            winIndex = wi
+            destructive(op)
+            return
+        }
+    }
 
     private func destructive(_ op: DestructiveOp) {
         guard groups.indices.contains(appIndex) else { return }
@@ -321,38 +340,28 @@ final class PanelController: ObservableObject {
         case .quit:
             print("[T12] 退出应用: \(g.appName)")
             WindowFocuser.quitApp(pid: g.pid)
+            dismiss(reason: "退出应用,收工")
         case .close:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             print("[T12] 关闭窗口: \(g.appName) — \(w.title)")
             WindowFocuser.close(window: w)
+            dismiss(reason: "关闭窗口,收工")
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             print("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
+            dismiss(reason: "最小化,收工")
+        case .zoom:
+            guard g.windows.indices.contains(winIndex) else { return }
+            let w = g.windows[winIndex]
+            print("[T12] 缩放(Z): \(g.appName) — \(w.title)")
+            WindowFocuser.zoom(window: w)
+            return // 走完会期(不重枚举):窗还活着,只是尺寸剧变——面板继续陪
         }
-        // 停一拍让窗口真的死掉/收走,再守着语境屏原地重枚举(CONTEXT.md:破坏性操作后原地重枚举)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.reEnumerate()
-        }
-    }
-
-    private func reEnumerate() {
-        guard isVisible else { return }
-        groups = WindowEnumerator.enumerate(owning: contextScreen)
-        guard !groups.isEmpty else {
-            dismiss(reason: "窗口都关完了")
-            return
-        }
-        appIndex = min(appIndex, groups.count - 1)
-        winIndex = min(winIndex, max(groups[appIndex].windows.count - 1, 0))
-        Snapshotter.shared.clear()
-        let targets = groups.flatMap { $0.windows }
-        Task { [targets] in await Snapshotter.shared.precapture(targets) }
-        relayout(animated: false)
-        updatePreview(animated: false)
-        print("[T12] 重枚举: \(groups.count) 个 App 在列")
+        // 处决三段 = 本轮事务死透(用户终审拍板:不留"它是退了还是只关窗"的歧义,
+        // 要再切就让用户重新 ⌘Tab 一局);无"重枚举占位"工序
     }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
