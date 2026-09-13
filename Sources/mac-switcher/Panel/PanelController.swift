@@ -195,8 +195,8 @@ final class PanelController: ObservableObject {
 
     // MARK: - 确认与放弃
 
-    /// 钉住开关:"松手"语义在触发层处理(那边保持导航态、不发确认),
-    /// 这里只剩一件事——面板外点击是否免死(钉住时放行,方便截图/对照样式)
+    /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
+    /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
     private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。

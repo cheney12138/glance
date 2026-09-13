@@ -17,10 +17,16 @@ TCC 授权锚在签名证书上。若 Team 为空,Xcode 会静默退到 ad hoc �
 2. 项目 → mac-switcher target → Signing & Capabilities → Team → 选 Personal Team
 
 ## 权限重置(状态乱了时用)
-
 ```bash
 tccutil reset Accessibility com.cheney12138.macswitcher
 tccutil reset ScreenCapture com.cheney12138.macswitcher
 ```
 
 两条都跑完重启 App,会重新走一遍授权引导。
+
+## 二期决定(2026-09-13,从 AltTab/DockDoor 取所长)
+
+- ✅ 做:T10 钉住毕业 → T11 选中项现拍 → T12 面板内 Q/W/M 窗口操作
+- ❌ 撤:同 App 窗互跳(macOS 原生 `⌘\`` 已覆盖,不重复造)
+- 👀 观望:应用黑名单、Dock 悬停预览(被咬计数积累,≥2 再立项)
+- ✅ 补做:T13 ⌘Tab 篡位(用户答案曾被误读为"维持现状",实意=批准接管;tap HID 抢先,零系统副作用,App 退出原生即复活)

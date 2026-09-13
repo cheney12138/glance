@@ -7,17 +7,12 @@ import SwiftUI
 struct MacSwitcherApp: App {
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
-    @AppStorage("debug.pinPanelOnRelease") private var pinPanelDebug = false
     private let hotkeys = HotkeyTapCenter()
     private let panelController = PanelController()
 
     var body: some Scene {
         MenuBarExtra {
             Button(permissions.statusLine) { showPermissions() }
-            Divider()
-            Button("调试:松手不关面板\(pinPanelDebug ? " ✓" : "")") {
-                pinPanelDebug.toggle()
-            }
             Divider()
             Button("设置…") { showSettings() }
             Divider()

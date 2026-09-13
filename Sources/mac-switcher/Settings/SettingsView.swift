@@ -21,6 +21,7 @@ struct SettingsView: View {
     }
 
     @State private var page: Page = .general
+    @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
 
     var body: some View {
         NavigationSplitView {
@@ -48,6 +49,11 @@ struct SettingsView: View {
         Form {
             Toggle("开机时启动 mac-switcher", isOn: $store.launchAtLogin)
             Text("登录到这台 Mac 后自动拉起;关掉后需要手动从应用程序里启动。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
+            Toggle("松手不关闭切换器面板", isOn: $pinPanel)
+            Text("开启后松开 ⌥ 面板保持打开:Tab/←→ 继续导航,Enter 确认聚焦,Esc 放弃。关闭则回到「松手即确认」的原生节奏。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -88,7 +94,12 @@ struct ShortcutPage: View {
 
     var body: some View {
         Form {
-            LabeledContent("触发切换器") {
+            Toggle("接管系统切换器(⌘Tab)", isOn: takeoverBinding)
+            Text("开启后 ⌘Tab 归 mac-switcher:我们的 tap 在 HID 层抢先,系统自带切换器收不到事件。本 App 退出/崩溃,原生 ⌘Tab 自动复活,无副作用。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
+            LabeledContent("自定义触发键") {
                 Button(recording ? "请按新组合…(Esc 取消)" : config.display) {
                     recording ? stopRecording() : startRecording()
                 }
@@ -100,6 +111,27 @@ struct ShortcutPage: View {
         }
         .formStyle(.grouped)
         .onDisappear { stopRecording() }
+    }
+
+    /// 篡位开关:开 = 触发键写成 ⌘Tab;关 = 还原默认 ⌥Tab(现状即读即时生效)
+    private var takeoverBinding: Binding<Bool> {
+        Binding(
+            get: {
+                let d = UserDefaults.standard
+                return d.string(forKey: "trigger.modifier") == "command" && d.integer(forKey: "trigger.keyCode") == 0x30
+            },
+            set: { on in
+                if on {
+                    UserDefaults.standard.set(0x30, forKey: "trigger.keyCode")
+                    UserDefaults.standard.set("command", forKey: "trigger.modifier")
+                } else {
+                    UserDefaults.standard.removeObject(forKey: "trigger.keyCode")
+                    UserDefaults.standard.removeObject(forKey: "trigger.modifier")
+                }
+                config = TriggerConfig.load()
+                print("[T13] ⌘Tab 篡位: \(on ? "接管" : "还原 ⌥Tab")")
+            }
+        )
     }
 
     private func startRecording() {
