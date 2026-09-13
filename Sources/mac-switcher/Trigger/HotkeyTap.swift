@@ -79,6 +79,9 @@ final class HotkeyTapCenter {
         case windowRight      // →:展开层右移
         case confirm          // ⌥ 释放:确认(聚焦选中窗)
         case cancel           // Esc:放弃
+        case quitApp          // Q:退出选中 App(T12)
+        case closeWindow      // W:关闭选中窗(T12)
+        case minimizeWindow   // M:最小化选中窗(T12)
     }
 
     private(set) var state: State = .idle
@@ -94,8 +97,11 @@ final class HotkeyTapCenter {
     private static let keyRight: Int64 = 0x7C
     private static let keyEsc: Int64 = 0x35
     private static let keyReturn: Int64 = 0x24
-    /// 导航期被吞的固定键(触发主键由 TriggerConfig 动态给)
-    private static let navKeys: Set<Int64> = [keyLeft, keyRight, keyEsc, keyReturn]
+    private static let keyQ: Int64 = 0x0C
+    private static let keyW: Int64 = 0x0D
+    private static let keyM: Int64 = 0x2E
+    /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)
+    private static let navKeys: Set<Int64> = [keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM]
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
@@ -194,6 +200,12 @@ final class HotkeyTapCenter {
         } else if keyCode == Self.keyEsc {
             state = .idle
             emit(.cancel)
+        } else if keyCode == Self.keyQ {
+            emit(.quitApp)
+        } else if keyCode == Self.keyW {
+            emit(.closeWindow)
+        } else if keyCode == Self.keyM {
+            emit(.minimizeWindow)
         }
         return true
     }
@@ -211,6 +223,9 @@ final class HotkeyTapCenter {
         case .windowRight: return "→ → 窗口右移"
         case .confirm: return "⌥ 释放 → 确认(T7 聚焦此处)"
         case .cancel: return "Esc → 放弃(面板关闭,不聚焦)"
+        case .quitApp: return "Q → 退出选中 App(T12)"
+        case .closeWindow: return "W → 关闭选中窗(T12)"
+        case .minimizeWindow: return "M → 最小化选中窗(T12)"
         }
     }
 }

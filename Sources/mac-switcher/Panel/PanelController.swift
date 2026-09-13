@@ -35,6 +35,9 @@ final class PanelController: ObservableObject {
         case .windowRight: moveWindow(1)
         case .confirm: confirmSelection()
         case .cancel: dismiss(reason: "放弃")
+        case .quitApp: destructive(.quit)
+        case .closeWindow: destructive(.close)
+        case .minimizeWindow: destructive(.minimize)
         }
     }
 
@@ -65,6 +68,7 @@ final class PanelController: ObservableObject {
 
     private func showPanel() {
         buildPanelIfNeeded()
+        panelOpenPoint = NSEvent.mouseLocation
         relayout(animated: false)
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
         isVisible = true
@@ -110,6 +114,7 @@ final class PanelController: ObservableObject {
         isVisible = false
         print("[T6] \(reason):面板关闭")
         groups = []
+        panelOpenPoint = nil
         onSessionEnd?()
     }
 
@@ -186,8 +191,14 @@ final class PanelController: ObservableObject {
 
     /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
     /// 钉住浏览几秒后已是旧图。异步不阻塞导航;同 wid 后到覆盖先到,天然取新。
+    /// 防抖:同一组 0.5s 内不重复拍(横扫面板时边缘组会被扫过多次)
+    private var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
+
     private func refreshSnapshotForSelection() {
         guard let g = currentGroup else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        if let last = lastRefreshAt[g.pid], now - last < 0.5 { return }
+        lastRefreshAt[g.pid] = now
         let targets = g.windows
         let name = g.appName
         Task {
@@ -196,22 +207,83 @@ final class PanelController: ObservableObject {
         }
     }
 
+    /// 面板出现那一刻的指针位。"谁后动听谁的"的仲裁缺陷修复:
+    /// 指针杵着不动 ≠ 指针动过——面板在指针底下撑开/展开层重排帧时,
+    /// SwiftUI 会把静止悬停当成 hover 事件,把键盘刚移走的选中拽回来(实机现形:
+    /// 面板开在指针下方时 ⌘Tab 移不动)。gate:指针自面板出现起没挪过窝,hover 一律不算数
+    private var panelOpenPoint: CGPoint?
+
+    private func pointerHasSpoken() -> Bool {
+        guard let p = panelOpenPoint else { return true }
+        let m = NSEvent.mouseLocation
+        return abs(m.x - p.x) > 1 || abs(m.y - p.y) > 1
+    }
+
     /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"
     func hoverApp(_ i: Int) {
-        guard groups.indices.contains(i) else { return }
+        // 选中没变 = 同块地砖上挪指针,免工——onHover 每像素都发声,不设闸就是现拍风暴
+        // (实机现形:日志被系统 QUARANTINED 截流)
+        guard pointerHasSpoken(), groups.indices.contains(i), i != appIndex else { return }
         appIndex = i
         winIndex = 0
         relayout(animated: true)
         refreshSnapshotForSelection()
     }
 
-    func hoverWindow(_ i: Int) { winIndex = i }
+    func hoverWindow(_ i: Int) {
+        guard pointerHasSpoken(), i != winIndex else { return }
+        winIndex = i
+    }
 
     // MARK: - 确认与放弃
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
     private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+
+    // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
+
+    private enum DestructiveOp { case quit, close, minimize }
+
+    private func destructive(_ op: DestructiveOp) {
+        guard groups.indices.contains(appIndex) else { return }
+        let g = groups[appIndex]
+        switch op {
+        case .quit:
+            print("[T12] 退出应用: \(g.appName)")
+            WindowFocuser.quitApp(pid: g.pid)
+        case .close:
+            guard g.windows.indices.contains(winIndex) else { return }
+            let w = g.windows[winIndex]
+            print("[T12] 关闭窗口: \(g.appName) — \(w.title)")
+            WindowFocuser.close(window: w)
+        case .minimize:
+            guard g.windows.indices.contains(winIndex) else { return }
+            let w = g.windows[winIndex]
+            print("[T12] 最小化: \(g.appName) — \(w.title)")
+            WindowFocuser.minimize(window: w)
+        }
+        // 停一拍让窗口真的死掉/收走,再守着语境屏原地重枚举(CONTEXT.md:破坏性操作后原地重枚举)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.reEnumerate()
+        }
+    }
+
+    private func reEnumerate() {
+        guard isVisible else { return }
+        groups = WindowEnumerator.enumerate(owning: contextScreen)
+        guard !groups.isEmpty else {
+            dismiss(reason: "窗口都关完了")
+            return
+        }
+        appIndex = min(appIndex, groups.count - 1)
+        winIndex = min(winIndex, max(groups[appIndex].windows.count - 1, 0))
+        Snapshotter.shared.clear()
+        let targets = groups.flatMap { $0.windows }
+        Task { [targets] in await Snapshotter.shared.precapture(targets) }
+        relayout(animated: false)
+        print("[T12] 重枚举: \(groups.count) 个 App 在列")
+    }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
     /// 到达路径:未钉住时松 ⌥;钉住时 Enter。

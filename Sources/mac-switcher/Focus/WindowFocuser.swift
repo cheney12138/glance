@@ -92,17 +92,45 @@ enum WindowFocuser {
 
     /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
     private static func raiseWithinApp(_ w: WindowRecord) {
-        let app = AXUIElementCreateApplication(w.pid)
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// wid → AX 元素(唯一正统桥:枚举该 App 所有窗逐个比对,alt-tab 同法)
+    private static func axWindowElement(pid: pid_t, wid: CGWindowID) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let elements = value as? [AXUIElement] else { return }
+              let elements = value as? [AXUIElement] else { return nil }
         for element in elements {
-            var wid: CGWindowID = 0
-            if _AXUIElementGetWindow(element, &wid) == .success, wid == w.wid {
-                AXUIElementPerformAction(element, kAXRaiseAction as CFString)
-                return
+            var elementWid: CGWindowID = 0
+            if _AXUIElementGetWindow(element, &elementWid) == .success, elementWid == wid {
+                return element
             }
         }
+        return nil
+    }
+
+    // MARK: - T12 破坏性键盘操作(Q/W/M,公共 AX/NSRunningApplication,动作仍收口于此)
+
+    /// W:关闭窗口——按它的关闭按钮(等价用户点红灯,尊重 App 的"是否保存"询问)
+    static func close(window w: WindowRecord) {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+        var button: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXCloseButtonAttribute as CFString, &button) == .success,
+              let closeButton = button as! AXUIElement? else { return }
+        AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
+    }
+
+    /// M:最小化窗口(进 Dock;被收走的窗按 CONTEXT.md 归"不可见窗",下次枚举自动消失)
+    static func minimize(window w: WindowRecord) {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+        AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean)
+    }
+
+    /// Q:退出整个 App(有未保存内容时 App 会自己弹询问,我们只管发辞呈)
+    static func quitApp(pid: pid_t) {
+        NSRunningApplication(processIdentifier: pid)?.terminate()
     }
 
     private static func degrade(_ w: WindowRecord, reason: String) {

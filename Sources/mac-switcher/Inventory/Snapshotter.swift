@@ -12,7 +12,13 @@ final class Snapshotter: ObservableObject {
     /// cache 与面板同呼吸:新一轮枚举必须清场,否则展开层会显示"昨天的窗"(T5 实机现形 19/13)
     @Published private(set) var cache: [CGWindowID: NSImage] = [:]
 
-    func clear() { cache.removeAll() }
+    func clear() {
+        cache.removeAll()
+        failedOnce.removeAll()
+    }
+
+    /// 同一扇窗的失败只报第一次(访达等 SCK 截不了的窗会屡败屡试;现拍风暴期曾刷屏)
+    private var failedOnce: Set<CGWindowID> = []
 
     /// 对一批窗做预截。失败的(权限缺失/窗口中途消失)跳过,记日志,不阻塞其余。
     func precapture(_ windows: [WindowRecord]) async {
@@ -40,7 +46,9 @@ final class Snapshotter: ObservableObject {
                     let nsImage = NSImage(cgImage: image, size: NSSize(width: config.width, height: config.height))
                     cache[w.wid] = nsImage
                 } catch {
-                    print("[T5] \(w.ownerName) wid=\(w.wid) 截屏失败: \(error.localizedDescription)")
+                    if failedOnce.insert(w.wid).inserted {
+                        print("[T5] \(w.ownerName) wid=\(w.wid) 截屏失败: \(error.localizedDescription)(此后静默)")
+                    }
                 }
             }
         } catch {
