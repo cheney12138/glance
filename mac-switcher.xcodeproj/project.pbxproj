@@ -12,6 +12,9 @@
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
 		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
+		5A0000000000000000000016 /* WindowEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000027 /* WindowEnumerator.swift */; };
+		5A0000000000000000000017 /* MruEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000028 /* MruEvidence.swift */; };
+		5A0000000000000000000018 /* DebugSessionLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000029 /* DebugSessionLogger.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +24,9 @@
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000025 /* CursorScreenAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorScreenAnchor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
+		5A0000000000000000000027 /* WindowEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowEnumerator.swift; sourceTree = "<group>"; };
+		5A0000000000000000000028 /* MruEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MruEvidence.swift; sourceTree = "<group>"; };
+		5A0000000000000000000029 /* DebugSessionLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSessionLogger.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -37,20 +43,29 @@
 		5A0000000000000000000031 = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000032 /* Sources */,
+				5A0000000000000000000032 /* Sources/mac-switcher */,
 				5A0000000000000000000033 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		5A0000000000000000000032 /* Sources */ = {
+		5A0000000000000000000032 /* Sources/mac-switcher */ = {
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000021 /* mac_switcherApp.swift */,
 				5A0000000000000000000035 /* Shared */,
 				5A0000000000000000000034 /* Permissions */,
 				5A0000000000000000000036 /* Trigger */,
+				5A0000000000000000000037 /* Inventory */,
 			);
 			path = "Sources/mac-switcher";
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000033 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000022 /* mac-switcher.app */,
+			);
+			name = Products;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000034 /* Permissions */ = {
@@ -78,12 +93,14 @@
 			path = Trigger;
 			sourceTree = "<group>";
 		};
-		5A0000000000000000000033 /* Products */ = {
+		5A0000000000000000000037 /* Inventory */ = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000022 /* mac-switcher.app */,
+				5A0000000000000000000027 /* WindowEnumerator.swift */,
+				5A0000000000000000000028 /* MruEvidence.swift */,
+				5A0000000000000000000029 /* DebugSessionLogger.swift */,
 			);
-			name = Products;
+			path = Inventory;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -159,6 +176,9 @@
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,
 				5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */,
 				5A0000000000000000000015 /* HotkeyTap.swift in Sources */,
+				5A0000000000000000000016 /* WindowEnumerator.swift in Sources */,
+				5A0000000000000000000017 /* MruEvidence.swift in Sources */,
+				5A0000000000000000000018 /* DebugSessionLogger.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -286,7 +306,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5WV78K89UP;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -306,7 +326,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5WV78K89UP;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;

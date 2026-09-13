@@ -8,6 +8,7 @@ struct MacSwitcherApp: App {
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
     private let hotkeys = HotkeyTapCenter()
+    private let sessionLogger = DebugSessionLogger()
 
     var body: some Scene {
         MenuBarExtra {
@@ -24,6 +25,8 @@ struct MacSwitcherApp: App {
                 .onAppear {
                     permissions.refresh()
                     if !permissions.allGranted { showPermissions() }
+                    MruEvidence.shared.start()
+                    hotkeys.onAction = { [weak sessionLogger] a in sessionLogger?.handle(a) }
                     if permissions.allGranted { hotkeys.start() }
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
