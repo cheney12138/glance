@@ -1,114 +1,95 @@
 import SwiftUI
 import AppKit
 
-/// 窗口预览浮窗 v1(design/v3/tokens-v1.md 施工契约)。
-/// 卡面 = 26pt 标题栏带(红绿灯入住 + 窗口名居中)+ 等高等比截图;
-/// 选中 = knockout 缝 + 系统聚焦蓝环 + 阴影升档,不再叠白块。
+/// 窗口预览托盘 —— 施工契约 = 最新设计 demo 的 `.preview-tray`。
+///
+/// 构型变了:托盘住在长条**头顶**,由「App 名 · N 个窗口」一行题头 + 一排 128px 缩略图组成。
+/// demo 里的 `.win-chrome`(三粒装饰点 + 64px 渐变块)是给没有真截图的 HTML 用的假窗皮——
+/// 原生这边截图本身就是真窗口,所以缩略图 = 截图 + 下方标题条两段,不再叠装饰点。
 struct PreviewPanelView: View {
     @ObservedObject var controller: PanelController
     @ObservedObject var snapshotter: Snapshotter
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
+    @State private var shown = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        VStack(spacing: PanelMetrics.trayGap) {
+            caption
+            thumbRow
+        }
+        .padding(.top, PanelMetrics.trayPadTop)
+        .padding(.horizontal, PanelMetrics.trayPadX)
+        .padding(.bottom, PanelMetrics.trayPadBottom)
+        .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
+        .background(GlassBackground(cornerRadius: PanelMetrics.rTray))
+        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
+                .strokeBorder(PanelColors.glassBorder, lineWidth: PanelMetrics.hairline)
+                .allowsHitTesting(false)
+        )
+        // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):两块玻璃同一配方
+        .overlay(
+            RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
+                .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
+                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+                .allowsHitTesting(false)
+        )
+        .elevation(.tray)
+        .padding(PanelMetrics.shadowPadPop) // 必须与 PanelController.previewSize 口径一致
+        // 入场 = demo 的 .preview-tray:translateY(8) scale(.96) → 归位(.28s 过冲)+ 渐入(.22s)
+        .scaleEffect(shown ? 1 : 0.96)
+        .offset(y: shown ? 0 : 8)
+        .animation(MotionPolicy.animation(PanelMotion.rise), value: shown)
+        .opacity(shown ? 1 : 0)
+        .animation(MotionPolicy.animation(PanelMotion.fade(PanelMetrics.tSettle)), value: shown)
+        // 入场每会期播一遍、退场也播一遍 —— 由 isVisible 驱动,不做重挂载。
+        // 旧版 `.id(isVisible)` 重挂载会把退场整个掐掉:新实例把 shown 重置成 false,
+        // 第一帧就是 opacity 0,没有动画可言
+        .onAppear { if controller.isVisible { shown = true } }
+        .onChange(of: controller.isVisible) { _, on in shown = on }
+    }
+
+    private var caption: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 8) {
+            Text(controller.currentGroup?.appName ?? "")
+                .font(.system(size: PanelMetrics.captionSize, weight: .semibold))
+                .foregroundStyle(PanelColors.txt1)
+            Text("· \(windows.count) 个窗口")
+                .font(.system(size: PanelMetrics.countSize, weight: .medium))
+                .foregroundStyle(PanelColors.txt2)
+        }
+        .frame(height: PanelMetrics.captionH)
+        .lineLimit(1)
+    }
+
+    private var thumbRow: some View {
+        HStack(spacing: PanelMetrics.thumbGap) {
             ForEach(Array(windows.enumerated()), id: \.element.wid) { i, w in
-                WindowCard(
+                WindowThumb(
                     record: w,
                     image: snapshotter.cache[w.wid],
-                    selected: i == controller.winIndex,
-                    reduceMotion: reduceMotion,
-                    controller: controller
+                    selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
+                    motion: MotionPolicy.animation(PanelMotion.thumb)
                 )
                 .onHover { inside in if inside { controller.hoverWindow(i) } }
                 .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
             }
         }
-        .padding(12) // §4 --pop-pad:卡与卡、卡与边同距
-        .background(
-            VisualEffectBackground(material: .popover)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        )
-        .overlay(
-            VStack(spacing: 0) {
-                Rectangle().fill(PanelColors.edgeHi).frame(height: 0.5).padding(.horizontal, 22)
-                Spacer()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .padding(0)
-        )
-        .padding(12) // 阴影呼吸区(收敛:28 → 12,治"大黑框"——之前呼吸区被当成阴影面板看)
-        .shadow(color: .black.opacity(0.10), radius: 6, y: 4)
-        .shadow(color: .black.opacity(0.18), radius: 20, y: 14)
     }
 }
 
-// MARK: - 红绿灯按钮(有原生语义的地砖:磨砂面上唯一允许的三粒"实物")
+// MARK: - 缩略图(截图 + 标题条;选中 = 1.045 放大 + 内圈聚焦光 + 阴影升档)
 
-private struct TrafficLight: View {
-    let color: Color
-    let symbol: String
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle().fill(color).frame(width: 12, height: 12)
-                if hovering {
-                    Image(systemName: symbol)
-                        .font(.system(size: 7.5, weight: .black))
-                        .foregroundStyle(.black.opacity(0.55))
-                }
-            }
-            .shadow(color: .black.opacity(0.2), radius: 0.5)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-}
-
-// MARK: - 窗口卡 v1:标题栏带(原生物证)+ 等高等比截图
-
-private struct WindowCard: View {
+private struct WindowThumb: View {
     let record: WindowRecord
     let image: NSImage?
     let selected: Bool
-    let reduceMotion: Bool
-
-    let controller: PanelController
+    let motion: Animation?
 
     var body: some View {
         VStack(spacing: 0) {
-            // §5 标题栏带:磨砂 titlebar 材质 + 下车发丝;红绿灯垂直居中住带内,窗口名居中
-            ZStack {
-                VisualEffectBackground(material: .titlebar)
-                HStack(spacing: 7) {
-                    // 红绿灯 = 真按钮(评审拍板,不再当装饰):红关/黄最小/绿缩放
-                    TrafficLight(color: Color(hex: 0xFF5F57), symbol: "xmark") { controller.closeWindowClicked(record.wid) }
-                    TrafficLight(color: Color(hex: 0xFEBC2E), symbol: "minus") { controller.minimizeWindowClicked(record.wid) }
-                    TrafficLight(color: Color(hex: 0x28C840), symbol: "plus") { controller.zoomWindowClicked(record.wid) }
-                    // 名字跟灯走,间距拉开;按宽度截断,不数字数
-                    Text(record.title)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.leading, 2)
-                    Spacer(minLength: 6)
-                }
-                .padding(.horizontal, 10)
-            }
-            .frame(height: 26)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(height: 0.5)
-            }
-
             ZStack {
                 if let image {
                     Image(nsImage: image)
@@ -116,42 +97,37 @@ private struct WindowCard: View {
                         .aspectRatio(contentMode: .fill)
                 } else {
                     Rectangle().fill(Color.gray.opacity(0.15))
-                    Text("截图中…").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("截图中…")
+                        .font(.system(size: PanelMetrics.titleSize))
+                        .foregroundStyle(PanelColors.txt2)
                 }
             }
-            .frame(width: PanelMetrics.cardWidth(of: record), height: 190)
+            .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
             .clipped()
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                // §4 未选卡发丝:截图四边一根"纸边",否则亮截图在亮玻璃上化开
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: selected ? 0 : 0.5)
-        )
-        .overlay(
-            // §1 knockout 缝:把蓝环从花花绿绿的截图上剥开
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.95), lineWidth: selected ? 4 : 0)
-        )
-        .overlay(
-            // §1 系统聚焦环:唯一的彩色
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: selected ? 2 : 0)
-        )
-        // §3 选中卡"离席":阴影升一档,与聚焦环同时发生
-        .shadow(color: .black.opacity(selected ? 0.12 : 0.10), radius: selected ? 4 : 3, y: 2)
-        .shadow(color: .black.opacity(selected ? 0.20 : 0.14), radius: selected ? 16 : 12, y: selected ? 14 : 10)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: selected)
-    }
-}
 
-private extension Color {
-    init(hex: UInt32) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255
+            Text(PanelLayout.title(record.title))
+                .font(.system(size: PanelMetrics.titleSize, weight: .regular))
+                .foregroundStyle(PanelColors.thumbTitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 7)
+                .frame(width: PanelMetrics.thumbW, height: PanelMetrics.titleH, alignment: .leading)
+                .background(PanelColors.thumbPaper)
+        }
+        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.thumbH)
+        .background(PanelColors.thumbBg)
+        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
+                .strokeBorder(PanelColors.thumbBorder, lineWidth: PanelMetrics.hairline)
         )
+        .overlay(
+            // demo .win-thumb.active 的 inset 0 0 0 2px:聚焦光走内圈,不抢玻璃亮边
+            RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
+                .strokeBorder(PanelColors.thumbFocus, lineWidth: selected ? 2 : 0)
+        )
+        .scaleEffect(selected ? 1.045 : 1)
+        .elevation(selected ? .thumbActive : .thumb)
+        .animation(motion, value: selected)
     }
 }

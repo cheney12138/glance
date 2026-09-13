@@ -10,18 +10,46 @@ final class PanelController: ObservableObject {
     @Published var appIndex = 0
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
+    /// 确认涟漪的令牌(demo .ripple):每次确认 +1,`PanelView` 靠它的变化重挂涟漪视图重播一遍
+    @Published private(set) var confirmPulse = 0
 
     private var panel: NSPanel?
-    private var hostingController: NSHostingController<PanelView>?
+    private var hostingView: ClickThroughHostingView<PanelView>?
     private var previewPanel: NSPanel?
-    private var previewHosting: NSHostingController<PreviewPanelView>?
+    private var previewHostingView: ClickThroughHostingView<PreviewPanelView>?
     private var contextScreen: NSScreen?
     private var outsideClickMonitor: Any?
+    /// 退场演出期间的窗口拆迁单(见 `dismiss`):淡出/涟漪播完才 orderOut,
+    /// 新一轮 `begin` 会把它撤掉
+    private var teardown: DispatchWorkItem?
+    /// 导航期间的 App Nap 豁免票:菜单栏型 App 在"用户没在动它"时会被系统降优先级,
+    /// 表现就是动画掉帧、动效发涩。一局切换器只活几百毫秒,全程按住不放,代价可忽略
+    private var activityToken: NSObjectProtocol?
 
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
     var onSessionEnd: (() -> Void)?
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private var reduceMotion: Bool { MotionPolicy.reduced }
+
+    /// 指针在「面板内容坐标」(PanelView 里那个 ZStack 的坐标系,原点左上、y 向下)里的位置。
+    ///
+    /// 光晕每帧问一次这里 —— **不走鼠标事件**:面板是 nonactivating,永不成 key,
+    /// AppKit 的 mouseMoved 只投给 key 窗口,监听/追踪区都收不到(上一版光晕从来没亮过就是这原因)。
+    /// `NSEvent.mouseLocation` 是全局读数,与 key、与有没有事件都无关。
+    /// 返回 nil = 指针不在面板上(或面板正在退场)
+    func pointerInContent() -> CGPoint? {
+        guard let panel, isVisible, !panel.ignoresMouseEvents else { return nil }
+        let size = contentSize()
+        guard size.width > 0, size.height > 0 else { return nil }
+        // 窗口坐标 y 向上;内容区在窗口里还要扣掉四周的阴影呼吸区
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let p = CGPoint(
+            x: local.x - PanelMetrics.shadowPadStrip,
+            y: panel.frame.height - local.y - PanelMetrics.shadowPadStrip
+        )
+        guard p.x >= 0, p.y >= 0, p.x <= size.width, p.y <= size.height else { return nil }
+        return p
+    }
 
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
     var expandedCount: Int { currentGroup?.windows.count ?? 0 }
@@ -65,60 +93,85 @@ final class PanelController: ObservableObject {
             return
         }
         print("[T6] 面板出现:语境屏 = \(screen?.localizedName ?? "?"),\(groups.count) 个 App")
+        // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
+        print("[T6] 动效:\(MotionPolicy.describe)")
         showPanel()
     }
 
     private func showPanel() {
         buildPanelIfNeeded()
+        // 上一轮的退场演出还没拆完就又开一局:先把拆迁单撤了,否则它会把新面板一起 orderOut
+        teardown?.cancel()
+        teardown = nil
         panelOpenPoint = NSEvent.mouseLocation
-        relayout(animated: false)
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
         isVisible = true
+        // 退场演出期间关掉的事件耳,开新局要还回来
+        panel.ignoresMouseEvents = false
+        previewPanel?.ignoresMouseEvents = false
+        beginActivity()
 
-        // 弹出:120ms,scale .96→1 + 渐入(brand-spec;reduced-motion 归零)
-        let start = NSRect(
-            x: target.midX - target.width * 0.48,
-            y: target.midY - target.height * 0.48,
-            width: target.width * 0.96,
-            height: target.height * 0.96
-        )
-        panel.alphaValue = 0
-        panel.setFrame(start, display: false)
+        // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
+        panel.alphaValue = 1
+        setFrameIfNeeded(panel, target)
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = reduceMotion ? 0 : 0.12
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1
-            panel.animator().setFrame(target, display: true)
-        }
         installOutsideClickMonitor()
-        updatePreview(animated: false)
+        updatePreview()
     }
 
-    private func relayout(animated: Bool) {
-        guard let panel, let target = centerFrame(for: paddedSize()) else { return }
-        // hover 高频路径:在 SwiftUI 布局 pass 内直接 setFrame 会撞
-        // _NSDetectedLayoutRecursion 警告(实机现形),推到下一圈 runloop 再动窗框
-        if animated && !reduceMotion {
-            DispatchQueue.main.async {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.08
-                    panel.animator().setFrame(target, display: true)
-                }
-            }
-        } else {
-            panel.setFrame(target, display: true)
+    /// 动窗框的唯一入口:**帧没变就不动**。
+    /// 旧病:hover 每挪一格都 `setFrame` 一次(哪怕目标帧跟当前一模一样),在 SwiftUI 动画
+    /// 途中强插一轮窗口布局 —— 横扫面板一顿一顿的,一半的账在这。
+    /// 顺带说明:面板尺寸只由 App 数量决定,选中移动从来不改尺寸,所以选中路径根本不该碰窗框。
+    private func setFrameIfNeeded(_ panel: NSPanel, _ frame: NSRect?) {
+        guard let frame, !panel.frame.nearlyEquals(frame) else { return }
+        panel.setFrame(frame, display: true)
+    }
+
+    /// 收场:先让两块玻璃按 demo 的曲线淡出,窗口拆迁排在演出之后。
+    /// 旧行为 `dismiss` 当场 `orderOut` —— 面板"啪"地消失,demo 的退场与确认涟漪被整段砍掉。
+    /// `flourish` = 带涟漪的确认退场,多留一会儿给白光炸完。
+    private func dismiss(reason: String, flourish: Bool = false) {
+        removeOutsideClickMonitor()
+        isVisible = false
+        // 演出期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
+        panel?.ignoresMouseEvents = true
+        previewPanel?.ignoresMouseEvents = true
+        print("[T6] \(reason):面板关闭")
+
+        // 拆迁不能早于淡出:早了就是"半透明啪一下没了"。降级动效模式没有涟漪,淡出也短,跟着缩
+        let hold: Double = reduceMotion ? 0.22 : (flourish ? PanelMetrics.tFlourish : PanelMetrics.tFade)
+        teardown?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.teardownPanel() }
+        teardown = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold, execute: work)
+    }
+
+    private func beginActivity() {
+        endActivity()
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "Glance 导航态:动效与画面优先级拉满,不许 App Nap 抽帧"
+        )
+    }
+
+    private func endActivity() {
+        if let activityToken {
+            ProcessInfo.processInfo.endActivity(activityToken)
+            self.activityToken = nil
         }
     }
 
-    private func dismiss(reason: String) {
-        removeOutsideClickMonitor()
+    /// 真正的拆窗:orderOut + 清场。与 `dismiss` 分开,是为了让退场动画有地方播
+    private func teardownPanel() {
+        endActivity()
         panel?.orderOut(nil)
         previewPanel?.orderOut(nil)
-        isVisible = false
-        print("[T6] \(reason):面板关闭")
+        panel?.ignoresMouseEvents = false
+        previewPanel?.ignoresMouseEvents = false
         groups = []
         panelOpenPoint = nil
+        teardown = nil
         onSessionEnd?()
     }
 
@@ -128,20 +181,24 @@ final class PanelController: ObservableObject {
         return NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height)
     }
 
-    /// tokens-v1 §4 度量(主面板只装长条,名字已删除):格 88 / 距 8 / 横 14 竖 12
-    /// 预览框不计入住——它是独立浮窗,中心正对选中 App 头顶
+    /// 长条内容尺寸 = 图标 78 × n + 间距 6 + 左右缘 26;高 = 上下缘 22 + 图标 78
+    /// 预览托盘不计入住——它是独立浮窗,中心正对选中 App 头顶
     func contentSize() -> NSSize {
         let nApps = CGFloat(max(groups.count, 1))
-        let w = max(nApps * 88 + max(nApps - 1, 0) * 8 + 28, 280)
-        return NSSize(width: w, height: 12 + 88 + 12)
+        let w = max(
+            nApps * PanelMetrics.icon + max(nApps - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2,
+            PanelMetrics.minStripWidth
+        )
+        return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
     }
 
-    /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 28pt)。
-    /// 必须与 PanelView 的 .padding(28) 严格一致——两套尺寸账不一致会触发
+    /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 shadowPadStrip)。
+    /// 必须与 PanelView 的 .padding(shadowPadStrip) 严格一致——两套尺寸账不一致会触发
     /// AppKit "Update Constraints" 布局递归直接 FAULT 崩溃(T6 实机现形)。
     private func paddedSize() -> NSSize {
         let c = contentSize()
-        return NSSize(width: c.width + 56, height: c.height + 56)
+        let pad = PanelMetrics.shadowPadStrip * 2
+        return NSSize(width: c.width + pad, height: c.height + pad)
     }
 
     // MARK: - 面板本体
@@ -149,9 +206,11 @@ final class PanelController: ObservableObject {
     private func buildPanelIfNeeded() {
         guard panel == nil else { return }
         panel = makeChromePanel()
-        let hosting = NSHostingController(rootView: PanelView(controller: self))
-        panel!.contentViewController = hosting
-        self.hostingController = hosting
+        let hosting = ClickThroughHostingView(rootView: PanelView(controller: self))
+        hosting.pad = PanelMetrics.shadowPadStrip // 透明呼吸区不吃点击
+        hosting.autoresizingMask = [.width, .height]
+        panel!.contentView = hosting
+        self.hostingView = hosting
     }
 
     private func makeChromePanel() -> NSPanel {
@@ -178,66 +237,60 @@ final class PanelController: ObservableObject {
     private func buildPreviewPanelIfNeeded() {
         guard previewPanel == nil else { return }
         previewPanel = makeChromePanel()
-        let hosting = NSHostingController(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
-        previewPanel!.contentViewController = hosting
-        previewHosting = hosting
+        // 托盘低一层:它向下的阴影尾会伸进长条的呼吸区,demo 里长条(后一个兄弟)盖住托盘阴影,
+        // 托盘在上就会把那层灰纱糊到长条玻璃顶上——"黑影"换个地方复活
+        previewPanel!.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
+        let hosting = ClickThroughHostingView(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
+        hosting.pad = PanelMetrics.shadowPadPop
+        hosting.autoresizingMask = [.width, .height]
+        previewPanel!.contentView = hosting
+        previewHostingView = hosting
     }
 
-    /// 预览框内容尺寸 = Σ卡片宽(等高等比)+ 卡距 12 + 内边 24 + 四周 28 阴影呼吸区
-    private func previewSize() -> NSSize {
+    /// 托盘内容尺寸 = 题头行 + 一排 128 缩略图 + 内边(16/18/14)。
+    /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源
+    func previewContentSize() -> NSSize {
         guard let g = currentGroup, !g.windows.isEmpty else { return .zero }
-        let cardsW = g.windows.reduce(CGFloat(0)) { $0 + PanelMetrics.cardWidth(of: $1) }
         let n = CGFloat(g.windows.count)
-        // 呼吸区 12/向(与 PreviewPanelView .padding(12) 同口径;原 28 是"大黑框"事故)
+        let cardsW = n * PanelMetrics.thumbW + max(n - 1, 0) * PanelMetrics.thumbGap
         return NSSize(
-            width: cardsW + max(n - 1, 0) * 12 + 24 + 24,
-            height: 26 + 190 + 24 + 24
+            width: cardsW + PanelMetrics.trayPadX * 2,
+            height: PanelMetrics.trayPadTop + PanelMetrics.captionH + PanelMetrics.trayGap
+                + PanelMetrics.thumbH + PanelMetrics.trayPadBottom
         )
     }
 
-    /// 选中图标的屏幕坐标 X:内容起点 = 28(阴影区) + 14(h padding);格步进 = 88 + 8
-    private func iconCenterXInScreen(_ i: Int) -> CGFloat? {
-        guard let panel else { return nil }
-        return panel.frame.minX + 28 + 14 + CGFloat(i) * 96 + 44
+    private func previewSize() -> NSSize {
+        let c = previewContentSize()
+        let pad = PanelMetrics.shadowPadPop * 2
+        return NSSize(width: c.width + pad, height: c.height + pad)
     }
 
-    /// 预览框正中 = 选中 App 头顶;超界时收进语境屏可视区(内 12);缝距 = 16
+    /// 托盘正中 = 长条正中(demo 的 .switcher-wrap 是 column 居中,托盘不跟图标滑移);
+    /// 超界时收进语境屏可视区(内 12);视觉缝 = seam
     private func previewFrame() -> NSRect? {
         guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
-        let cx = iconCenterXInScreen(appIndex) ?? panel.frame.midX
-        let x = min(max(cx - size.width / 2, area.minX + 12), area.maxX - size.width - 12)
-        let y = panel.frame.maxY + 4 // 视觉缝 = 4(帧距) + 12(呼吸区顶缘) = 16,snug 不发散
+        let x = min(max(panel.frame.midX - size.width / 2, area.minX + 12), area.maxX - size.width - 12)
+        // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip - 帧距,
+        // 反解出帧距 = padPop + padStrip - seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
+        let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
+        let y = panel.frame.maxY - frameGap
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
-    private func updatePreview(animated: Bool) {
+    private func updatePreview() {
         guard let frame = previewFrame() else {
             previewPanel?.orderOut(nil)
             return
         }
         buildPreviewPanelIfNeeded()
         guard let previewPanel else { return }
-        if !previewPanel.isVisible {
-            previewPanel.alphaValue = 0
-            previewPanel.setFrame(frame, display: false)
-            previewPanel.orderFrontRegardless()
-        }
-        if animated && !reduceMotion {
-            // SwiftUI 布局递归前科:动画帧推下一圈 runloop。
-            // tokens-v1 §6:浮窗滑移 180ms——位移距离长,"滑过去"不是"闪过去",无回弹
-            DispatchQueue.main.async {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.8, 0.3, 1)
-                    previewPanel.animator().setFrame(frame, display: true)
-                    previewPanel.animator().alphaValue = 1
-                }
-            }
-        } else {
-            previewPanel.setFrame(frame, display: true)
-            previewPanel.alphaValue = 1
-        }
+        // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
+        // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
+        previewPanel.alphaValue = 1
+        setFrameIfNeeded(previewPanel, frame)
+        if !previewPanel.isVisible { previewPanel.orderFrontRegardless() }
     }
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
@@ -246,10 +299,10 @@ final class PanelController: ObservableObject {
         guard !groups.isEmpty else { return }
         appIndex = (appIndex + delta + groups.count) % groups.count
         winIndex = 0
-        relayout(animated: true)
+        // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
         print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
         refreshSnapshotForSelection()
-        updatePreview(animated: true)
+        updatePreview()
     }
 
     private func moveWindow(_ delta: Int) {
@@ -298,9 +351,8 @@ final class PanelController: ObservableObject {
         guard pointerHasSpoken(), groups.indices.contains(i), i != appIndex else { return }
         appIndex = i
         winIndex = 0
-        relayout(animated: true)
         refreshSnapshotForSelection()
-        updatePreview(animated: true)
+        updatePreview()
     }
 
     func hoverWindow(_ i: Int) {
@@ -375,12 +427,15 @@ final class PanelController: ObservableObject {
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
             WindowFocuser.focusWindowlessApp(pid: g.pid)
-            dismiss(reason: "确认(无窗应用)")
+            confirmPulse += 1
+            dismiss(reason: "确认(无窗应用)", flourish: true)
             return
         }
         let w = g.windows[winIndex]
         WindowFocuser.focus(window: w)
-        dismiss(reason: "确认")
+        // 涟漪令牌先 +1 再退场:demo 是"炸开白光 → 90ms 后面板淡出",不是"啪一下没了"
+        confirmPulse += 1
+        dismiss(reason: "确认", flourish: true)
     }
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
@@ -390,7 +445,10 @@ final class PanelController: ObservableObject {
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let panel = self.panel else { return }
-                if !panel.frame.contains(NSEvent.mouseLocation) {
+                // 判"外"要判玻璃,不是窗口:呼吸区 96pt 是透明且点击穿过的,
+                // 点在那儿等于点在面板外(事件已经落到桌面/别的 App)
+                let glass = panel.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
+                if !glass.contains(NSEvent.mouseLocation) {
                     self.dismiss(reason: "面板外点击,放弃")
                 }
             }
@@ -400,5 +458,18 @@ final class PanelController: ObservableObject {
     private func removeOutsideClickMonitor() {
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
         outsideClickMonitor = nil
+    }
+}
+
+// MARK: - 窗框差分
+
+extension NSRect {
+    /// 半点以内算同一帧。`setFrame` 哪怕目标帧与当前一模一样也会发一轮窗口布局,
+    /// 而窗口布局是**同步**的 —— 动画途中插一轮就是一帧卡顿
+    func nearlyEquals(_ other: NSRect, eps: CGFloat = 0.5) -> Bool {
+        abs(origin.x - other.origin.x) < eps
+            && abs(origin.y - other.origin.y) < eps
+            && abs(size.width - other.size.width) < eps
+            && abs(size.height - other.size.height) < eps
     }
 }

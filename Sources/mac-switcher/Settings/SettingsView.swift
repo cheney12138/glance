@@ -22,6 +22,12 @@ struct SettingsView: View {
 
     @State private var page: Page = .general
     @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
+    /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
+    @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
+    /// 图标呼吸感:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
+    @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
+    /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
+    @State private var systemReduced = MotionPolicy.systemReduced
 
     var body: some View {
         NavigationSplitView {
@@ -40,7 +46,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(24)
         }
-        .frame(width: 560, height: 300)
+        .frame(width: 560, height: 380)
     }
 
     // MARK: - 通用
@@ -56,8 +62,35 @@ struct SettingsView: View {
             Text("开启后松开 ⌥ 面板保持打开:Tab/←→ 继续导航,Enter 确认聚焦,Esc 放弃。关闭则回到「松手即确认」的原生节奏。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            LabeledContent("系统「减弱动态效果」") {
+                Text(systemReduced ? "已开启" : "未开启")
+                    .foregroundStyle(systemReduced ? .orange : .secondary)
+            }
+            Toggle("为本 App 放行完整动效", isOn: $alwaysAnimate)
+            Text("macOS 的「减弱动态效果」只有系统级开关,没有按 App 豁免的接口 —— 这一项就是本 App "
+                 + "自己的放行开关(默认开):开启时哪怕系统减弱也播完整弹簧动效,关掉则跟随系统。"
+                 + "关掉后动效不会消失,只是位移类降级成 160ms 淡入淡出。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
+            LabeledContent("图标呼吸感") {
+                HStack(spacing: 8) {
+                    Slider(value: $iconClearance, in: 4...28, step: 1)
+                        .frame(width: 150)
+                    Text("\(Int(iconClearance)) pt")
+                        .monospacedDigit()
+                        .frame(width: 46, alignment: .trailing)
+                }
+            }
+            Text("选中图标放大 1.14 倍后,画面与左右邻居之间**还剩**多少净空(间隙由它倒推,当前 "
+                 + "\(String(format: "%.1f", PanelMetrics.iconGap)) pt)。设计 demo 只有 0.5 pt —— "
+                 + "再算上图标那圈软阴影,实际是压在邻居身上的。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
+        .onAppear { systemReduced = MotionPolicy.systemReduced }
     }
 
     // MARK: - 关于
