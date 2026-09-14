@@ -10,9 +10,11 @@ struct WindowRecord {
 }
 
 /// 一个 App 与其本屏窗的聚合(CONTEXT.md「本屏窗」)。
+/// `bundleID` 给预览卡标题用:终端要 tab 名、编辑器要工程名,两条规则不同(GlanceCore.WindowTitle)
 struct AppGroup {
     let pid: pid_t
     let appName: String
+    let bundleID: String?
     var windows: [WindowRecord]
 }
 
@@ -70,7 +72,9 @@ enum WindowEnumerator {
         let records = candidates.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
-            byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName, windows: [])].windows.append(r)
+            byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,
+                                            bundleID: NSRunningApplication(processIdentifier: r.pid)?.bundleIdentifier,
+                                            windows: [])].windows.append(r)
         }
 
         // 无窗应用(T15,用户拍板):全系统一扇可见窗都没有的已打开 App,
@@ -87,6 +91,7 @@ enum WindowEnumerator {
             byPID[app.processIdentifier] = AppGroup(
                 pid: app.processIdentifier,
                 appName: app.localizedName ?? "(未知应用)",
+                bundleID: app.bundleIdentifier,
                 windows: []
             )
         }

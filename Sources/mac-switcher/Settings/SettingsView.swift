@@ -36,6 +36,7 @@ struct SettingsView: View {
     @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
     /// 图标呼吸感:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
+    @AppStorage("panel.puckRiseFromBottom") private var puckRiseFromBottom = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -115,6 +116,15 @@ struct SettingsView: View {
                             .monospacedDigit()
                             .frame(width: 46, alignment: .trailing)
                     }
+                }
+            }
+            SettingsGroup {
+                SettingsRow(title: "托底从底部升起",
+                            desc: "开:无论新选中在第几格,托底都从面板**下缘升起** —— 距离恒定且短。"
+                                + "关:从**上一局那个格子**滑过来(例:从 a 切到 b 后 b 排到第一、"
+                                + "a 落在第六位,托底要横跨整条从右滑到左)。两种都会滑,区别只在起点。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $puckRiseFromBottom)
                 }
             }
             SettingsGroup {

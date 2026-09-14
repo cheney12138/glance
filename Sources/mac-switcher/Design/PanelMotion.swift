@@ -31,6 +31,23 @@ enum MotionPolicy {
 
     static var systemReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
+    /// 托底(舌头)的**入场起点**(用户实评 2026-09-14):
+    ///
+    /// 开 = 从**面板下缘升起** —— 无论新选中在第几格,起点都在选中格下方,
+    /// 距离恒定且短(而且开场那一帧它整块落在面板下缘之外,被圆角裁掉,升起是干净的);
+    /// 关 = 从**上一局选中的那个格子**滑过来 —— a→b 之后 b 排到第一、a 落在第 6 位时,
+    /// 托底要横跨整条从右滑到左,"视觉上很累"。
+    ///
+    /// 曾经试过"从长条左缘滑入",实评效果不好(横向的插入感很硬),改成纵向升起 ——
+    /// **动效本身没动**,只换了起点方向。两种都会滑,所以这是一个二选一,不是动效开关。
+    static var puckRisesFromBottom: Bool {
+        UserDefaults.standard.object(forKey: "panel.puckRiseFromBottom") as? Bool ?? true
+    }
+
+    /// "从底部升起"的起点距离。取 1.4×图标边长,是算出来的最小充分值:
+    /// 让托底在开场那一帧**完全**落到面板下缘之外(推导:icon + 30×scale;1.4×icon = 123×scale > 118×scale)
+    static var puckRiseDistance: CGFloat { PanelMetrics.icon * 1.4 }
+
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }
 
@@ -48,12 +65,16 @@ enum MotionPolicy {
 }
 
 enum PanelMotion {
+    /// 开局落位的上膛延迟:跨过 SwiftUI 的首次提交,之后才上膛
+    static let entryDelay: Double = 0.06
     /// 图标选中(demo .app-icon 的 .32s):response 越小越"脆",dampingFraction 越小回弹越明显
     static let select = Animation.spring(response: 0.32, dampingFraction: 0.55)
     /// puck 滑移(demo .puck 的 .38s):阻尼比图标大一点,托底不抖
     static let slide = Animation.spring(response: 0.38, dampingFraction: 0.62)
+    /// 托底**入场**(从面板下缘升起)。比 `slide` 快一档:升幅有 1.4×图标那么长,
+    /// 用同一根弹簧会显得"慢慢飘上来" —— 用户实评"上滑的速度稍微快一点"。
+    /// 会话内的横滑仍用 `slide`(两个动作的手感本来就该不同:一个是入场,一个是跟手)
+    static let entrance = Animation.spring(response: 0.28, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
-    /// 纯透明度(demo 的 ease)
-    static func fade(_ duration: Double) -> Animation { .easeOut(duration: duration) }
 }

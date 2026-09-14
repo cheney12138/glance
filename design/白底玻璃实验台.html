@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glance · 白底玻璃实验台</title>
+<style>
+  /* ================= 实验台骨架(非产品) ================= */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    background: #232428;
+    color: rgba(255,255,255,.85);
+    padding: 48px 40px 80px;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { max-width: 980px; margin: 0 auto 36px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: .5px; }
+  .pathology {
+    margin-top: 14px; font-size: 14px; line-height: 1.8; color: rgba(255,255,255,.55);
+  }
+  .pathology code {
+    font-family: ui-monospace, "SF Mono", monospace; font-size: 12.5px;
+    background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 6px;
+    color: rgba(255,255,255,.75);
+  }
+  .bg-switch { display: flex; gap: 10px; margin-top: 22px; }
+  .bg-switch button {
+    font: inherit; font-size: 13px; font-weight: 600;
+    color: rgba(255,255,255,.7); background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 99px;
+    padding: 7px 18px; cursor: pointer; transition: all .15s;
+  }
+  .bg-switch button.on { background: #fff; color: #111; border-color: #fff; }
+  .bg-switch .hint { align-self: center; font-size: 12px; color: rgba(255,255,255,.35); margin-left: 8px; }
+
+  .variant { max-width: 980px; margin: 0 auto 44px; }
+  .vlabel {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px;
+  }
+  .vlabel .tag {
+    font-size: 12px; font-weight: 700; letter-spacing: .8px;
+    padding: 3px 10px; border-radius: 6px; background: rgba(255,255,255,.1);
+  }
+  .vlabel .name { font-size: 15px; font-weight: 600; }
+  .vlabel .delta { font-size: 12.5px; color: rgba(255,255,255,.42); font-family: ui-monospace, monospace; }
+  .vlabel .rec {
+    font-size: 11px; font-weight: 700; color: #0a0a0a; background: #ffd60a;
+    border-radius: 4px; padding: 2px 8px;
+  }
+
+  /* ================= 舞台(可切背景) ================= */
+  .stage {
+    position: relative; height: 500px; border-radius: 18px; overflow: hidden;
+    transition: background .3s;
+  }
+  .stage.bg-white  { background: #ffffff; }
+  .stage.bg-color  {
+    background:
+      radial-gradient(500px 320px at 18% 20%, rgba(140,180,255,.55), transparent 70%),
+      radial-gradient(480px 300px at 82% 30%, rgba(255,170,200,.5), transparent 70%),
+      radial-gradient(520px 340px at 50% 90%, rgba(150,230,190,.5), transparent 70%),
+      linear-gradient(160deg, #eef2f8, #f6f0f4);
+  }
+  .stage.bg-dark {
+    background: linear-gradient(160deg, #28323f 0%, #161c26 70%, #10151d 100%);
+  }
+  /* 白色网页:假内容 —— 白底+浅灰骨架,真实使用里最常见的"白" */
+  .webpage { position: absolute; inset: 0; display: none; background: #fff; }
+  .stage.bg-web .webpage { display: block; }
+  .webpage .nav { height: 52px; background: #f7f8fa; border-bottom: 1px solid #eceef1; }
+  .webpage .lines { padding: 36px 44px; }
+  .webpage .lines i {
+    display: block; height: 12px; border-radius: 6px; background: #eef0f3; margin-bottom: 16px;
+  }
+  .webpage .lines i:nth-child(1) { width: 42%; }
+  .webpage .lines i:nth-child(2) { width: 88%; }
+  .webpage .lines i:nth-child(3) { width: 76%; }
+  .webpage .lines i:nth-child(4) { width: 60%; }
+  .webpage .lines i:nth-child(5) { width: 83%; }
+  .webpage .lines i:nth-child(6) { width: 35%; }
+  /* 深色舞台的假终端行 */
+  .termlines { position: absolute; inset: 0; display: none; padding: 40px 48px; }
+  .stage.bg-dark .termlines { display: block; }
+  .termlines i { display: block; height: 11px; border-radius: 5px; background: rgba(90,255,170,.14); margin-bottom: 18px; }
+  .termlines i:nth-child(1) { width: 55%; }
+  .termlines i:nth-child(2) { width: 80%; }
+  .termlines i:nth-child(3) { width: 38%; }
+  .termlines i:nth-child(4) { width: 70%; }
+  .termlines i:nth-child(5) { width: 62%; }
+
+  /* ================= 产品组件(按 PanelTokens scale=1.2) ================= */
+  /* --- 变量:默认值 = V0 现状(浅色族) --- */
+  .stage {
+    --glass-bg: rgba(255,255,255,.16);
+    --glass-filter: blur(28px) saturate(1.8);
+    --glass-border: rgba(255,255,255,.30);
+    --puck-bg: rgba(255,255,255,.62);
+    --puck-lip: rgba(255,255,255,.6);
+    --thumb-paper: rgba(255,255,255,.40);
+    --thumb-border: rgba(255,255,255,.35);
+    --txt1: rgba(22,22,28,.92);
+    --txt2: rgba(22,22,28,.56);
+    --thumb-title: rgba(20,20,25,.75);
+    --dot: rgba(22,22,28,.55);
+  }
+  /* 深色舞台:所有方案同一配方(深色不动,只验证不劣化) */
+  .stage.bg-dark {
+    --glass-bg: rgba(12,14,20,.32);
+    --glass-filter: blur(28px) saturate(1.6);
+    --glass-border: rgba(255,255,255,.22);
+    --puck-bg: rgba(255,255,255,.26);
+    --puck-lip: rgba(255,255,255,.35);
+    --thumb-paper: rgba(255,255,255,.16);
+    --thumb-border: rgba(255,255,255,.25);
+    --txt1: rgba(255,255,255,.95);
+    --txt2: rgba(255,255,255,.55);
+    --thumb-title: rgba(255,255,255,.75);
+    --dot: rgba(255,255,255,.65);
+  }
+
+  .glass {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    border: 1px solid var(--glass-border);
+  }
+
+  /* --- 预览托盘(E3) --- */
+  .tray {
+    position: absolute; left: 50%; top: 46px; transform: translateX(-50%);
+    border-radius: 36px; padding: 12px 22px 18px;
+    box-shadow: 0 22px 44px rgba(0,0,0,.22);
+  }
+  .caption { text-align: center; padding: 4px 0 12px; }
+  .caption b { font-size: 18px; font-weight: 600; color: var(--txt1); }
+  .caption span { font-size: 16px; color: var(--txt2); }
+  .thumbs { display: flex; gap: 17px; }
+  .thumb {
+    width: 235px; border-radius: 19px; overflow: hidden;
+    background: var(--thumb-paper);
+    border: 1px solid var(--thumb-border);
+    box-shadow: 0 8px 18px rgba(0,0,0,.18);
+  }
+  .thumb .shot { position: relative; height: 146px; }
+  .thumb .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .lights { position: absolute; top: 9px; left: 10px; display: flex; gap: 7px; }
+  .thumb .lights i {
+    width: 12px; height: 12px; border-radius: 50%;
+    box-shadow: inset 0 0 1px rgba(0,0,0,.3), 0 0.5px 1px rgba(0,0,0,.2);
+  }
+  .thumb .lights .c { background: #FF5F57; }
+  .thumb .lights .m { background: #FEBC2E; }
+  .thumb .lights .z { background: #28C840; }
+  .thumb .tbar {
+    height: 36px; display: flex; align-items: center; padding: 0 12px;
+    font-size: 14px; color: var(--thumb-title);
+    border-top: 1px solid var(--thumb-border);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* --- 图标长条(E2) --- */
+  .strip {
+    position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%);
+    display: flex; align-items: flex-end; gap: 23px;
+    padding: 26px 31px; border-radius: 41px;
+    box-shadow: 0 30px 60px rgba(0,0,0,.22);
+  }
+  .cell { position: relative; width: 106px; height: 106px; }
+  .cell img {
+    width: 100%; height: 100%;
+    filter: drop-shadow(0 5px 5px rgba(0,0,0,.3));
+  }
+  .cell .puck {
+    position: absolute; inset: -9px -11px; border-radius: 29px;
+    background: var(--puck-bg);
+    box-shadow: inset 0 1px 1px var(--puck-lip), 0 8px 22px rgba(0,0,0,.22);
+    opacity: 0; transition: opacity .1s;
+  }
+  .cell.sel .puck { opacity: 1; }
+  .cell.sel img { transform: translateY(-8px) scale(1.14); }
+  .cell .dots {
+    position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%);
+    display: flex; gap: 4px;
+  }
+  .cell .dots i { width: 4.8px; height: 4.8px; border-radius: 50%; background: var(--dot); }
+
+  /* ================= V1:灰骨玻璃 ================= */
+  .variant.v1 .stage:not(.bg-dark) {
+    --glass-bg: rgba(235,238,243,.55);
+    --glass-filter: blur(28px) saturate(1.3) brightness(.99);
+  }
+  /* ================= V2:灰色族收边(玻璃不动) ================= */
+  .variant.v2 .stage:not(.bg-dark) {
+    --glass-border: rgba(20,22,28,.12);
+    --puck-bg: rgba(20,22,28,.10);
+    --puck-lip: rgba(255,255,255,.35);
+    --thumb-paper: rgba(255,255,255,.60);
+    --thumb-border: rgba(20,22,28,.12);
+  }
+  /* ================= V3:组合 ================= */
+  .variant.v3 .stage:not(.bg-dark) {
+    --glass-bg: rgba(235,238,243,.55);
+    --glass-filter: blur(28px) saturate(1.3) brightness(.99);
+    --glass-border: rgba(20,22,28,.10);
+    --puck-bg: rgba(20,22,28,.10);
+    --puck-lip: rgba(255,255,255,.35);
+    --thumb-paper: rgba(255,255,255,.60);
+    --thumb-border: rgba(20,22,28,.10);
+  }
+
+  /* ================= 结论 ================= */
+  footer {
+    max-width: 980px; margin: 56px auto 0; padding: 26px 30px;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 16px; font-size: 14px; line-height: 2; color: rgba(255,255,255,.6);
+  }
+  footer h2 { font-size: 16px; color: rgba(255,255,255,.9); margin-bottom: 10px; }
+  footer code {
+    font-family: ui-monospace, monospace; font-size: 12.5px;
+    background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 6px;
+    color: #ffd60a;
+  }
+  footer b { color: rgba(255,255,255,.85); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Glance · 白底玻璃实验台</h1>
+  <p class="pathology">
+    病理:浅色模式的整套「形」由白色系 token 承担——<code>glassBorder 白.30</code>、<code>puck 白.62</code>、<code>thumbBorder 白.35</code>、玻璃本体近透明。
+    白底上它们全部同色隐形,面板退化成「浮着的图标 + 一团阴影」。深底好看,正因为白 token 在深底上显形。<br>
+    <b style="color:rgba(255,255,255,.8)">修法只有两路:救玻璃(浅灰骨 tint)/ 救形(灰色族边与托底)。</b>对照如下,四个方案只改浅色族,深色一律不动。
+  </p>
+  <div class="bg-switch">
+    <button data-bg="bg-white" class="on">纯白</button>
+    <button data-bg="bg-web">白色网页</button>
+    <button data-bg="bg-color">浅彩</button>
+    <button data-bg="bg-dark">深色</button>
+    <span class="hint">重点看「纯白」与「白色网页」两档;「深色」用于确认不劣化</span>
+  </div>
+</header>
+
+<!-- ============ V0 现状 ============ -->
+<section class="variant v0">
+  <div class="vlabel">
+    <span class="tag">V0</span><span class="name">现状(病例)</span>
+    <span class="delta">glass 白.16 · border 白.30 · puck 白.62</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="tray glass">
+      <div class="caption"><b>Sublime Text</b> <span>· 2 个窗口</span></div>
+      <div class="thumbs">
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-safari-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">apple.com.cn — Safari</div>
+        </div>
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-term-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">π — tab-group-search</div>
+        </div>
+      </div>
+    </div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-chrome.png" alt="Chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-obsidian.png" alt="Obsidian"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-safari.png" alt="Safari"><div class="dots"><i></i><i></i></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ V1 灰骨玻璃 ============ -->
+<section class="variant v1">
+  <div class="vlabel">
+    <span class="tag">V1</span><span class="name">灰骨玻璃(只救玻璃)</span>
+    <span class="delta">glass → rgba(235,238,243,.55) + brightness .99 · 边/托底不动</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="tray glass">
+      <div class="caption"><b>Sublime Text</b> <span>· 2 个窗口</span></div>
+      <div class="thumbs">
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-safari-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">apple.com.cn — Safari</div>
+        </div>
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-term-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">π — tab-group-search</div>
+        </div>
+      </div>
+    </div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-chrome.png" alt="Chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-obsidian.png" alt="Obsidian"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-safari.png" alt="Safari"><div class="dots"><i></i><i></i></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ V2 灰色族收边 ============ -->
+<section class="variant v2">
+  <div class="vlabel">
+    <span class="tag">V2</span><span class="name">灰色族收边(只救形)</span>
+    <span class="delta">border → 黑.12 · puck → 黑.10 · thumb 边 → 黑.12 · 玻璃不动</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="tray glass">
+      <div class="caption"><b>Sublime Text</b> <span>· 2 个窗口</span></div>
+      <div class="thumbs">
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-safari-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">apple.com.cn — Safari</div>
+        </div>
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-term-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">π — tab-group-search</div>
+        </div>
+      </div>
+    </div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-chrome.png" alt="Chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-obsidian.png" alt="Obsidian"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-safari.png" alt="Safari"><div class="dots"><i></i><i></i></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ V3 组合 ============ -->
+<section class="variant v3">
+  <div class="vlabel">
+    <span class="tag">V3</span><span class="name">组合:灰骨 + 灰族形</span>
+    <span class="delta">V1 + V2</span>
+    <span class="rec">推荐</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="tray glass">
+      <div class="caption"><b>Sublime Text</b> <span>· 2 个窗口</span></div>
+      <div class="thumbs">
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-safari-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">apple.com.cn — Safari</div>
+        </div>
+        <div class="thumb">
+          <div class="shot"><img src="v4/assets-src/w-term-1.jpg" alt=""><div class="lights"><i class="c"></i><i class="m"></i><i class="z"></i></div></div>
+          <div class="tbar">π — tab-group-search</div>
+        </div>
+      </div>
+    </div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-chrome.png" alt="Chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-obsidian.png" alt="Obsidian"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-safari.png" alt="Safari"><div class="dots"><i></i><i></i></div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <h2>判词与落地映射</h2>
+  <b>白底「反光」是双重事故</b>:玻璃隐形(透明材质叠无内容背景)+ 形隐形(白色系 token 叠白纸)。
+  V1 只救玻璃——有形了但托底还是消失;V2 只救形——轮廓和托底回来了,但面板本体仍是一团空气;
+  <b>V3 才两病都治</b>。<br>
+  原生映射(只动浅色族,深色一行不改):<br>
+  · V1 = <code>PanelGlass.scrim</code> 浅色也吃一片浅灰滤光片 <code>rgba(235,238,243,~.5)</code>(与深色 scrim 同法,官方 tintColor,不手刻材质);<br>
+  · V2 = <code>PanelColors</code> 浅色值换族:<code>glassBorder 白.30→黑.10</code>、<code>puck 白.62→黑.10</code>、<code>thumbBorder 白.35→黑.10</code>;<br>
+  · 浅彩/深底不劣化:浅灰骨在彩色背景上仍透色(Dock 在白桌面上读作浅灰,同一物理)。<br>
+  · HTML 的 backdrop-filter 与 NSGlassEffectView 光学不完全一致,方向可信,绝对数值落地后实机微调。
+</footer>
+
+<script>
+  function setBg(bg) {
+    document.querySelectorAll('.bg-switch button').forEach(b => b.classList.toggle('on', b.dataset.bg === bg));
+    document.querySelectorAll('.stage').forEach(s => {
+      s.classList.remove('bg-white', 'bg-web', 'bg-color', 'bg-dark');
+      s.classList.add(bg);
+    });
+  }
+  document.querySelectorAll('.bg-switch button').forEach(btn => {
+    btn.addEventListener('click', () => setBg(btn.dataset.bg));
+  });
+  // 支持 #bg-dark 之类的 hash 直接打开指定背景(便于截图验收)
+  if (location.hash) setBg(location.hash.slice(1));
+</script>
+
+</body>
+</html>

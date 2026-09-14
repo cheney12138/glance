@@ -24,19 +24,18 @@ import AppKit
 struct PanelView: View {
     @ObservedObject var controller: PanelController
 
-    private var reduced: Bool { MotionPolicy.reduced }
-
     var body: some View {
         ZStack {
             GlassBackground(cornerRadius: PanelMetrics.rPanel)
-            // demo .panel-glass::before:顶缘一道白,到 30% 高度收干
-            glassTopLight
-            // demo .ripple:确认瞬间从选中图标炸开的一圈白光(画在图标之下,不糊图标)
-            if controller.confirmPulse > 0, !reduced {
-                ConfirmRipple(center: selectedIconCenter)
-                    .id(controller.confirmPulse)
-            }
-            // demo .panel-sheen:玻璃之上、图标之下
+            // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
+            // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
+            // demo .panel-sheen:玻璃之上、图标之下。
+            //
+            // v0.3 回退(2026-09-14 实拍):曾经试过给高光**挖掉图标格**(even-odd 遮罩),
+            // 想让光斑只落在玻璃上 —— 结果是遮罩的**硬边界**在手电筒扫过时把每个格子
+            // 读成了一个圆角"槽"(用户原话:"把后面 app 的浮起容器的槽给照出来了"),
+            // 比原来的毛病重。结论:光斑落在 App 上也行(很浅,.14/.20 不影响观感),
+            // 不准为了躲它去切硬边 —— 渐变上任何硬边界都是新的形状,不是遮罩。
             SheenOverlay(
                 active: controller.isVisible,
                 pointer: { [weak controller] in controller?.pointerInContent() }
@@ -61,13 +60,10 @@ struct PanelView: View {
                 .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
                 .allowsHitTesting(false)
         )
-        // 入场**不做动效**(v1.12):⌘Tab 是效率动作,面板必须"已经在"——
-        // 缩放登场 + 渐入纯粹是把可用时间往后拖(用户实评:动效太重、影响效率)。
-        // 退场保留淡出:那是动作之后的余韵,不在关键路径上。
-        // 方向分支的写法与下方选中态一致:入场时 `isVisible` 已是 true → 传 nil = 瞬现。
+        // 入场与退场**都不做动效**(v1.12 砍入场,2026-09-14 砍退场):
+        // ⌘Tab 是效率动作,面板要"已经在",关闭要"已经没了"——两头都不该让用户等动画。
+        // 窗口由控制器直接 orderOut,这里的 opacity 只是兜住"显示中"这个状态
         .opacity(controller.isVisible ? 1 : 0)
-        .animation(controller.isVisible ? nil : MotionPolicy.animation(PanelMotion.fade(PanelMetrics.tFade)),
-                   value: controller.isVisible)
         .elevation(.strip)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
     }
@@ -83,9 +79,9 @@ struct PanelView: View {
                 IconCell(
                     group: group,
                     selected: i == controller.appIndex,
-                    // 面板没在台上就不许动:窗口是复用的,上一局的选中会在新一局开局时
+                    // 开局第一帧/animation 关掉时给 nil:窗口是复用的,上一局的选中会在新一局开局时
                     // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
-                    motion: controller.isVisible ? MotionPolicy.animation(PanelMotion.select) : nil
+                    motion: controller.selectionAnimation(PanelMotion.select)
                 )
                 .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
                 .contentShape(Rectangle())
@@ -119,34 +115,24 @@ struct PanelView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous))
             .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
-            .offset(x: CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap))
+            .offset(x: CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap),
+                    // 入场偏移:从底部升起时,开场那一帧它还在面板下缘外面(被圆角裁掉)
+                    y: controller.puckEntryRise)
             .elevation(.puck)
             // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
-            // isVisible 闸同 IconCell:开局那一次落位是"就位",不是"滑过去"
-            .animation(controller.isVisible ? MotionPolicy.animation(PanelMotion.slide) : nil,
-                       value: controller.appIndex)
+            // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
+            .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
     }
 
-    /// demo .panel-glass::before:`linear-gradient(180deg, rgba(255,255,255,.4), transparent 30%)`
-    /// + `mix-blend-mode: overlay`。与 sheen 同样的处境(混不进进程外的玻璃),同样折成等效 alpha
-    private var glassTopLight: some View {
-        LinearGradient(
-            colors: [PanelColors.glassTop, .clear],
-            startPoint: .top,
-            endPoint: UnitPoint(x: 0.5, y: 0.3)
-        )
-        .allowsHitTesting(false)
-    }
-
-    /// 确认涟漪的圆心 = 选中图标的中心(含 14px 上浮,demo 取的是变换后的 rect 中心)
+    /// 确认涟漪的圆心 = 选中图标的中心(含 14px 上浮,demo 取的是变换后的 rect 中心)。
+    /// X 与托盘锚点同源(`PanelLayout.iconCenterX`)
     private var selectedIconCenter: CGPoint {
-        let n = CGFloat(controller.groups.count)
-        let size = controller.contentSize()
-        let stripW = n * PanelMetrics.icon + max(n - 1, 0) * PanelMetrics.iconGap
-        return CGPoint(
-            x: (size.width - stripW) / 2
-                + CGFloat(controller.appIndex) * (PanelMetrics.icon + PanelMetrics.iconGap)
-                + PanelMetrics.icon / 2,
+        CGPoint(
+            x: PanelLayout.iconCenterX(
+                appIndex: controller.appIndex,
+                appCount: controller.groups.count,
+                contentWidth: controller.contentSize().width
+            ),
             y: PanelMetrics.rowPadY + PanelMetrics.icon / 2 - PanelMetrics.iconLift
         )
     }
@@ -276,36 +262,5 @@ final class SheenTracker {
         intensity += (0 - intensity) * 0.18
         guard intensity > 0.01, let p = point else { point = nil; intensity = 0; return nil }
         return (p, intensity)
-    }
-}
-
-// MARK: - 确认涟漪(demo .ripple)
-
-/// demo 在确认瞬间往**壁纸层**丢一枚 `.ripple`:scale 0→4.2、opacity .9→0、.55s ease-out,
-/// 90ms 后面板开始退场。原生没那层壁纸可画(demo 的波纹在玻璃**下面**,我们压在玻璃下等于没画),
-/// 折中:画在玻璃之上、图标之下,裁进面板圆角 —— 读起来就是"玻璃被点亮了一下",图标不糊。
-private struct ConfirmRipple: View {
-    let center: CGPoint
-    @State private var grown = false
-
-    var body: some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    gradient: Gradient(stops: [
-                        .init(color: .white.opacity(0.55), location: 0),
-                        .init(color: .white.opacity(0), location: 0.7),
-                    ]),
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: PanelMetrics.ripple / 2
-                )
-            )
-            .frame(width: PanelMetrics.ripple, height: PanelMetrics.ripple)
-            .scaleEffect(grown ? PanelMetrics.rippleScale : 0.01)
-            .opacity(grown ? 0 : 0.9)
-            .position(center)
-            .onAppear { withAnimation(.easeOut(duration: PanelMetrics.tRipple)) { grown = true } }
-            .allowsHitTesting(false)
     }
 }

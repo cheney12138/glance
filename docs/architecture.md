@@ -85,3 +85,37 @@ xcodebuild -project mac-switcher.xcodeproj -scheme mac-switcher -configuration D
 2. **窗口归属几何**(`WindowEnumerator.ownsByContextScreen` + `quartzFrame`)→ 纯函数:双屏/跨屏是最容易错的地方,
    而且它现在跟 AX/CGS 调用缠在一起,没法单独验。
 3. **MRU 排序**(`MruEvidence.ordered`)→ 纯函数(输入是 pid 序列,输出是顺序)。
+
+## 7. 缩略图管线(现状 / 瓶颈 / 要强化时抄什么)
+
+**现状**:`Inventory/Snapshotter.swift` 一个类管全部。面板只读 `cache[wid]`,从不现截。
+`begin` 时剪枝 + 按"正在显示的那一组优先"拍图;换选中时对那一组补拍;没拍到的最多回填 2 轮。
+
+**实测数字**(2026-09-14,本机 1920×1080 主屏,macOS 26):
+
+| 环节 | 耗时 |
+|---|---|
+| `SCShareableContent` 全系统窗枚举 | 28 ms(53 扇窗) |
+| 单窗抓图(`captureScreenshot`) | 26 ~ 52 ms |
+| 10 扇窗串行合计 | 346 ms ← **这就是"截图中…"一闪的时长** |
+
+结论:瓶颈不在"能不能拍",在**顺序**和**缓存温度**。所以现在的两条纪律:
+① 缓存跨会话保活(只剪枝,不清场);② 抓图数组的顺序 = 显示优先级。
+
+**踩过的三个坑**(都是"看着像抓不到、其实是别的原因"):
+1. `@MainActor` + `Task {}` 以为异步、其实还在主 actor 上 → 每次换选中都在主线程跑全系统窗枚举;
+2. "批次作废"(新批次把旧批次结果丢掉)导致被作废批次的图**永远不进 cache** → 卡片一直空;
+3. `withCheckedContinuation` 没有超时:SCK 回调不来就永久挂住,整批卡在第一个窗上。
+   现在每次抓图都带 1.2s 超时兜底(用一次性旗票保证恰好 `resume` 一次)。
+
+**要再强化时,AltTab(alt-tab-macos)的可抄之处**:
+- `src/events/WindowCaptureEvents.swift`:缓存 `SCWindow` 清单,只对"不在缓存里"的窗重新问系统;
+  **窗口事件驱动刷新**(新建/移动/关闭 → 重拍),不是只在"开局 + 换选中"两个时机拍 —— 这是
+  "永远秒开"的最后一块拼图(代价:常驻窗口事件监听 + 空闲期一点抓图开销,故暂未上)。
+- macOS 26 上**不要用** `SCScreenshotManager.captureImage`(旧 API 每次调用起一个短命 capture
+  stream,漏 WindowServer 内存,成批调用会把 replayd 卡死,见其 issue #5786/#5861),
+  用 `captureScreenshot` + `SCScreenshotConfiguration`;`isFullscreen` 的窗仍回退旧路径。
+- `ActiveWindowCaptures.run { finish in ... }`:它们给"同时在飞的抓图请求"设了闸 ——
+  理由是这些 API 是**异步**的,队列槽位一交出去就空,一次 show 60 扇窗会瞬间打出 60 个并发请求。
+  我们目前靠"单批串行"天然限流;哪天改成并发抓图,这道闸必须一起补上。
+- 它们能截**最小化**的窗(走 `CGSHWCaptureWindowList`),我们只列 on-screen 窗,不需要。

@@ -10,8 +10,13 @@ final class PanelController: ObservableObject {
     @Published var appIndex = 0
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
+    /// 选中态动效的**上膛标识**:开局第一帧必须不上膛(否则会从上一局的残影位置滑过来)。
+    /// 上面说的"上一局残影"只在 `puckEntersFromLeft = false`(承接模式)时才是**故意**的 ——
+    /// 那种情况下上膛反而要提前,见 showPanel。
+    @Published private(set) var selectionArmed = false
+    /// 托底的入场偏移(纵向,内容坐标系,渐近到 0)。只在"从底部升起"模式下非零
+    @Published private(set) var puckEntryRise: CGFloat = 0
     /// 确认涟漪的令牌(demo .ripple):每次确认 +1,`PanelView` 靠它的变化重挂涟漪视图重播一遍
-    @Published private(set) var confirmPulse = 0
 
     private var panel: NSPanel?
     private var hostingView: ClickThroughHostingView<PanelView>?
@@ -30,8 +35,6 @@ final class PanelController: ObservableObject {
 
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
     var onSessionEnd: (() -> Void)?
-
-    private var reduceMotion: Bool { MotionPolicy.reduced }
 
     /// 指针在「面板内容坐标」(PanelView 里那个 ZStack 的坐标系,原点左上、y 向下)里的位置。
     ///
@@ -107,9 +110,15 @@ final class PanelController: ObservableObject {
         groups = WindowEnumerator.orderByMRU(raw)
         appIndex = 0
         winIndex = 0
-        Snapshotter.shared.clear()
-        let targets = groups.flatMap { $0.windows }
-        Task { [targets] in await Snapshotter.shared.precapture(targets) }
+        // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
+        // 不再先闪一下"截图中…"。AltTab 也是这个路子 —— 缓存保活 + 后台刷新。
+        let allWindows = groups.flatMap { $0.windows }
+        Snapshotter.shared.prune(keeping: Set(allWindows.map(\.wid)))
+        // **正在显示的那一组排最前面**:卡片要等的就是它那一张。
+        // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
+        let firstGroup = groups.first?.windows ?? []
+        let firstIDs = Set(firstGroup.map(\.wid))
+        Snapshotter.shared.precapture(firstGroup + allWindows.filter { !firstIDs.contains($0.wid) })
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         print(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
@@ -117,9 +126,31 @@ final class PanelController: ObservableObject {
             return
         }
         print("[T6] 面板出现:语境屏 = \(screen?.localizedName ?? "?"),\(groups.count) 个 App")
+        applySessionScaleCap(on: screen)
         // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
         print("[T6] 动效:\(MotionPolicy.describe)")
         showPanel()
+    }
+
+    /// 把本会期的尺寸上限算出来(放不下就收紧,见 `PanelMetrics.sessionCap`)。
+    ///
+    /// 量的是**基准宽**(每 1.0 倍尺寸的面板宽度):长条按 App 数、托盘按本屏最大窗数,
+    /// 两者取更紧的一个。不手写第二份几何公式 —— 直接把限制解掉后读真实的布局数学再除回来,
+    /// 这样任何度量改动都会自动跟着走(手写的话一定会漂)。
+    private func applySessionScaleCap(on screen: NSScreen?) {
+        let avail = (screen?.visibleFrame.width ?? 1440) - 48 // 左右各留 24 的安全边
+        let saved = PanelMetrics.sessionCap
+        PanelMetrics.sessionCap = .greatestFiniteMagnitude
+        let s = PanelMetrics.scale
+        let stripBase = contentSize().width / s
+        let trayBase = groups.map { previewContentSize(for: $0).width / s }.max() ?? 0
+        PanelMetrics.sessionCap = saved
+        let cap = min(avail / max(stripBase, 1), avail / max(trayBase, 1))
+        PanelMetrics.sessionCap = cap
+        // 一行账,永远打:面板为什么变小了,看一眼日志就知道(比“尺寸不对但不知道为什么”值钱)
+        print(String(format: "[尺寸] 固定 %.0f%% · 屏宽 %.0f · 本局上限 %.0f%% · 基准宽 %.0fpt(长条)/%.0fpt(托盘)%@",
+                     s * 100, screen?.visibleFrame.width ?? 0, cap * 100, stripBase, trayBase,
+                     cap < s - 0.001 ? " → 已收紧" : ""))
     }
 
     private func showPanel() {
@@ -132,12 +163,48 @@ final class PanelController: ObservableObject {
         previewPanel?.ignoresMouseEvents = false
         beginActivity()
 
+        // 托底入场(两种模式的区别只在**起点**,都会滑):
+        //   · 从底部升起(默认):先把托底按到选中格下方(那一帧它在面板下缘之外,
+        //     被圆角裁掉),再上膛 + 升到选中格 —— 距离恒定且短;
+        //   · 承接上一局:第一帧就上膛,弹簧自己会从"上一局那个格子"滑到新选中
+        //     (窗口复用,上一局的偏移还在视图里 —— 那份残影在这里是故意的)。
+        //
+        // 顺序要紧:起点必须在 `orderFrontRegardless()` **之前**写好。
+        // 写在后面的话第一帧会先在选中格把托底画出来,再瞬移到板外去 —— 屏幕上一道闪,
+        // 本意(升起)反而变成了两跳。
+        let risesFromBottom = MotionPolicy.puckRisesFromBottom
+        if risesFromBottom {
+            selectionArmed = false
+            puckEntryRise = MotionPolicy.puckRiseDistance
+        } else {
+            puckEntryRise = 0
+            selectionArmed = true
+        }
+
         // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
         panel.alphaValue = 1
         setFrameIfNeeded(panel, target)
         panel.orderFrontRegardless()
         installOutsideClickMonitor()
         updatePreview()
+
+        // 起点已就位,等第一帧提交完再上膛、再升上来(动效仍是同一根弹簧,只换了方向)
+        if risesFromBottom {
+            DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
+                guard let self, self.isVisible else { return }
+                self.selectionArmed = true
+                withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.puckEntryRise = 0 }
+            }
+        }
+        // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
+        if let hostingView { FrameProbe.shared.start(on: hostingView, label: "面板\(groups.count)App") }
+    }
+
+    /// 换选中时该用的动效(nil = 不动)。两道门:面板在台上 + 已过开局第一帧
+    /// (第一帧不上膛的用意:开局那一次落位是"就位",不是"从上一格滑过去")
+    func selectionAnimation(_ full: Animation) -> Animation? {
+        guard isVisible, selectionArmed else { return nil }
+        return MotionPolicy.animation(full)
     }
 
     /// 动窗框的唯一入口:**帧没变就不动**。
@@ -152,24 +219,23 @@ final class PanelController: ObservableObject {
     /// 收场:先让两块玻璃按 demo 的曲线淡出,窗口拆迁排在演出之后。
     /// 旧行为 `dismiss` 当场 `orderOut` —— 面板"啪"地消失,demo 的退场与确认涟漪被整段砍掉。
     /// `flourish` = 带涟漪的确认退场,多留一会儿给白光炸完。
-    private func dismiss(reason: String, flourish: Bool = false) {
+    /// 关闭 = **立刻消失**,没有淡出、没有演出(2026-09-14 用户实评:
+    /// "不管是点击 app、松开 cmd tab、还是 esc,所有关闭环节都不要淡出,有点拖沓")。
+    ///
+    /// 曾经是"确认后留 0.45s 播涟漪、其余留 0.38s 播淡出"——那条设计的代价是**面板比动作多活一段**,
+    /// 而切换器关闭时用户已经在看目标窗口了,再叠一层半透明就是在拖节奏。原生切换器也是啪一下就没。
+    /// 代价:确认涟漪随之作废(它需要面板多留 0.45s 才看得见,与"立刻消失"互斥),`confirmPulse` 一并删。
+    private func dismiss(reason: String) {
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——
-        // 不拦的话枚举回来会把面板在放弃之后又冒出来(闪一下再被拆迁单收走)。
+        // 不拦的话枚举回来会把面板在放弃之后又冒出来
         beginGeneration &+= 1
         removeOutsideClickMonitor()
         isVisible = false
-        // 演出期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
+        // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
         previewPanel?.ignoresMouseEvents = true
         print("[T6] \(reason):面板关闭")
-
-        // 拆迁不能早于淡出:早了就是"半透明啪一下没了"。降级动效模式没有涟漪,淡出也短,跟着缩
-        let hold: Double = reduceMotion ? 0.22 : (flourish ? PanelMetrics.tFlourish : PanelMetrics.tFade)
-        teardown?.cancel()
-        let generation = beginGeneration // 拆的时候得知道自己是哪一局的单子(见 `teardownPanel`)
-        let work = DispatchWorkItem { [weak self] in self?.teardownPanel(generation: generation) }
-        teardown = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + hold, execute: work)
+        teardownPanel(generation: beginGeneration)
     }
 
     private func beginActivity() {
@@ -198,6 +264,8 @@ final class PanelController: ObservableObject {
             return
         }
         endActivity()
+        FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
+        PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
         panel?.orderOut(nil)
         previewPanel?.orderOut(nil)
         panel?.ignoresMouseEvents = false
@@ -281,9 +349,10 @@ final class PanelController: ObservableObject {
     }
 
     /// 托盘内容尺寸 = 题头行 + 一排 128 缩略图 + 内边(16/18/14)。
-    /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源
-    func previewContentSize() -> NSSize {
-        guard let g = currentGroup, !g.windows.isEmpty else { return .zero }
+    /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源。
+    /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组
+    func previewContentSize(for group: AppGroup?) -> NSSize {
+        guard let g = group, !g.windows.isEmpty else { return .zero }
         let n = CGFloat(g.windows.count)
         let cardsW = n * PanelMetrics.thumbW + max(n - 1, 0) * PanelMetrics.thumbGap
         return NSSize(
@@ -292,6 +361,8 @@ final class PanelController: ObservableObject {
                 + PanelMetrics.thumbH + PanelMetrics.trayPadBottom
         )
     }
+
+    func previewContentSize() -> NSSize { previewContentSize(for: currentGroup) }
 
     private func previewSize() -> NSSize {
         let c = previewContentSize()
@@ -330,12 +401,33 @@ final class PanelController: ObservableObject {
 
     private func moveApp(_ delta: Int) {
         guard !groups.isEmpty else { return }
-        appIndex = (appIndex + delta + groups.count) % groups.count
-        winIndex = 0
-        // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
-        print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
-        refreshSnapshotForSelection()
-        updatePreview()
+        traceCost("键盘换选中") {
+            appIndex = (appIndex + delta + groups.count) % groups.count
+            winIndex = 0
+            // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
+            print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+            refreshSnapshotForSelection()
+            updatePreview()
+        }
+    }
+
+    /// 主线程耗时记账(GLANCE_TRACE=1)。与 FrameProbe 分工:这里量的是"同步阻塞了多久",
+    /// 那里量的是"帧间隔有没有崩" —— 两者对上就是结论
+    private static let traceOn = ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil
+
+    private func trace(_ line: String) {
+        guard Self.traceOn else { return }
+        print(line)
+    }
+
+    private func traceCost(_ label: String, _ body: () -> Void) {
+        guard Self.traceOn else { return body() }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        body()
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        // 只报"值得看"的:换选中本来应该是微秒级,超过 2ms 就写一行
+        guard ms > 2 else { return }
+        trace(String(format: "[工] %@ 主线程 %.1fms", label, ms))
     }
 
     private func moveWindow(_ delta: Int) {
@@ -357,12 +449,9 @@ final class PanelController: ObservableObject {
         let now = CFAbsoluteTimeGetCurrent()
         if let last = lastRefreshAt[g.pid], now - last < 0.5 { return }
         lastRefreshAt[g.pid] = now
-        let targets = g.windows
-        let name = g.appName
-        Task {
-            await Snapshotter.shared.precapture(targets)
-            print("[T11] 现拍: \(name) \(targets.count) 窗")
-        }
+        // 拍图全程在后台(见 Snapshotter 头注):这里只递一批目标,不发任务、不等结果
+        Snapshotter.shared.precapture(g.windows)
+        trace("[T11] 现拍(后台): \(g.appName) \(g.windows.count) 窗")
     }
 
     /// 面板出现那一刻的指针位。"谁后动听谁的"的仲裁缺陷修复:
@@ -382,10 +471,12 @@ final class PanelController: ObservableObject {
         // 选中没变 = 同块地砖上挪指针,免工——onHover 每像素都发声,不设闸就是现拍风暴
         // (实机现形:日志被系统 QUARANTINED 截流)
         guard pointerHasSpoken(), groups.indices.contains(i), i != appIndex else { return }
-        appIndex = i
-        winIndex = 0
-        refreshSnapshotForSelection()
-        updatePreview()
+        traceCost("指针换选中") {
+            appIndex = i
+            winIndex = 0
+            refreshSnapshotForSelection()
+            updatePreview()
+        }
     }
 
     func hoverWindow(_ i: Int) {
@@ -418,6 +509,11 @@ final class PanelController: ObservableObject {
         }
     }
 
+    /// 处决类操作(Q/W/M 与红绿灯共走这里)。
+    ///
+    /// 2026-09-14 用户改判:处决之后**留在原地**。原语义是"处决三段 = 本轮事务死透"
+    /// (避免"走了还是只关窗"的歧义),但实际用起来:关一扇窗、最小化一扇窗之后往往还想接着动
+    /// 别的窗 —— 面板一消失,每动一次就要重新 ⌘Tab 开一局。现在动作做完就重枚举刷新,面板不散。
     private func destructive(_ op: DestructiveOp) {
         guard groups.indices.contains(appIndex) else { return }
         let g = groups[appIndex]
@@ -425,28 +521,75 @@ final class PanelController: ObservableObject {
         case .quit:
             print("[T12] 退出应用: \(g.appName)")
             WindowFocuser.quitApp(pid: g.pid)
-            dismiss(reason: "退出应用,收工")
+            refreshAfterAction()
         case .close:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             print("[T12] 关闭窗口: \(g.appName) — \(w.title)")
             WindowFocuser.close(window: w)
-            dismiss(reason: "关闭窗口,收工")
+            refreshAfterAction()
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             print("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
-            dismiss(reason: "最小化,收工")
+            refreshAfterAction()
         case .zoom:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             print("[T12] 缩放(Z): \(g.appName) — \(w.title)")
             WindowFocuser.zoom(window: w)
-            return // 走完会期(不重枚举):窗还活着,只是尺寸剧变——面板继续陪
+            // 缩放不改列表:窗还在同一格,只是尺寸剧变 —— 不重枚举,面板继续陪
         }
-        // 处决三段 = 本轮事务死透(用户终审拍板:不留"它是退了还是只关窗"的歧义,
-        // 要再切就让用户重新 ⌘Tab 一局);无"重枚举占位"工序
+    }
+
+    /// 处决后的就地刷新:重枚举 + **尽量保住原来的选中**(按 pid 认 App,窗位夹紧)。
+    ///
+    /// 为什么要延迟一下:AX 的关闭/最小化是**异步生效**的,立刻枚举会把刚处决的那扇窗
+    /// 又枚举回来(于是它在面板里"诈尸"一下再消失)。
+    private func refreshAfterAction() {
+        guard let screen = contextScreen else { return }
+        let generation = beginGeneration
+        let keepPID = groups.indices.contains(appIndex) ? groups[appIndex].pid : nil
+        let keepWin = winIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            guard let self, self.isVisible, self.beginGeneration == generation else { return }
+            Task.detached(priority: .userInitiated) {
+                let raw = WindowEnumerator.rawGroups(on: screen)
+                await MainActor.run {
+                    guard self.isVisible, self.beginGeneration == generation else { return }
+                    self.applyRefreshed(raw, keepPID: keepPID, keepWin: keepWin)
+                }
+            }
+        }
+    }
+
+    private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {
+        let fresh = WindowEnumerator.orderByMRU(raw)
+        guard !fresh.isEmpty else {
+            dismiss(reason: "处决后无窗可切")
+            return
+        }
+        groups = fresh
+        if let keepPID, let ai = fresh.firstIndex(where: { $0.pid == keepPID }) {
+            appIndex = ai
+        } else {
+            appIndex = min(appIndex, fresh.count - 1)
+        }
+        let windowCount = fresh[appIndex].windows.count
+        winIndex = min(keepWin, max(windowCount - 1, 0))
+        // 列表变了 → 截图重拍。同样**剪枝不清场**:别的窗的图还有效,只有被处决那扇会被剪掉
+        let live = Set(groups.flatMap { $0.windows }.map(\.wid))
+        Snapshotter.shared.prune(keeping: live)
+        let shown = groups.first?.windows ?? []
+        let shownIDs = Set(shown.map(\.wid))
+        Snapshotter.shared.precapture(shown + groups.flatMap { $0.windows }.filter { !shownIDs.contains($0.wid) })
+        // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
+        if let panel, let target = centerFrame(for: paddedSize()) {
+            setFrameIfNeeded(panel, target)
+        }
+        updatePreview()
+        print("[T12] 处决后留在原地: \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
     }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
@@ -460,15 +603,12 @@ final class PanelController: ObservableObject {
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
             WindowFocuser.focusWindowlessApp(pid: g.pid)
-            confirmPulse += 1
-            dismiss(reason: "确认(无窗应用)", flourish: true)
+            dismiss(reason: "确认(无窗应用)")
             return
         }
         let w = g.windows[winIndex]
         WindowFocuser.focus(window: w)
-        // 涟漪令牌先 +1 再退场:demo 是"炸开白光 → 90ms 后面板淡出",不是"啪一下没了"
-        confirmPulse += 1
-        dismiss(reason: "确认", flourish: true)
+        dismiss(reason: "确认")
     }
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
@@ -480,8 +620,16 @@ final class PanelController: ObservableObject {
                 guard let self, let panel = self.panel else { return }
                 // 判"外"要判玻璃,不是窗口:呼吸区 96pt 是透明且点击穿过的,
                 // 点在那儿等于点在面板外(事件已经落到桌面/别的 App)
-                let glass = panel.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
-                if !glass.contains(NSEvent.mouseLocation) {
+                let point = NSEvent.mouseLocation
+                let strip = panel.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
+                // **托盘是另一扇窗**(与长条同皮不同窗):不把它算进来,点托盘上任何地方
+                // (卡片、题头、红绿灯)都会被当成"面板外点击"把面板关掉 —— 实机现形:
+                // 2026-09-14 用户报"用鼠标点红绿灯的操作也不关闭面板"
+                let tray = self.previewPanel.flatMap { p -> NSRect? in
+                    guard p.isVisible else { return nil }
+                    return p.frame.insetBy(dx: PanelMetrics.shadowPadPop, dy: PanelMetrics.shadowPadPop)
+                }
+                if !strip.contains(point), !(tray?.contains(point) ?? false) {
                     self.dismiss(reason: "面板外点击,放弃")
                 }
             }

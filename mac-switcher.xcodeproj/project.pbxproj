@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		5A0000000000000000000011 /* mac_switcherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000021 /* mac_switcherApp.swift */; };
+		AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F04 /* SingleInstanceGuard.swift */; };
 		5A0000000000000000000012 /* PermissionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000023 /* PermissionMonitor.swift */; };
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
@@ -26,6 +27,7 @@
 		5A0000000000000000000093 /* SettingsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000092 /* SettingsControls.swift */; };
 		5A0000000000000000000095 /* NativeHotkeyGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000094 /* NativeHotkeyGuards.swift */; };
 		5A0000000000000000000097 /* Stdout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000096 /* Stdout.swift */; };
+		AA0000000000000000000F01 /* FrameProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F02 /* FrameProbe.swift */; };
 		5A00000000000000000000A7 /* PanelTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A3 /* PanelTokens.swift */; };
 		5A00000000000000000000A8 /* PanelMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A4 /* PanelMotion.swift */; };
 		5A00000000000000000000A9 /* PanelGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A5 /* PanelGlass.swift */; };
@@ -38,6 +40,7 @@
 
 /* Begin PBXFileReference section */
 		5A0000000000000000000021 /* mac_switcherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mac_switcherApp.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F04 /* SingleInstanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleInstanceGuard.swift; sourceTree = "<group>"; };
 		5A0000000000000000000022 /* mac-switcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "mac-switcher.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000023 /* PermissionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionMonitor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
@@ -61,6 +64,7 @@
 		5A00000000000000000000A5 /* PanelGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelGlass.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
 		5A0000000000000000000096 /* Stdout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stdout.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F02 /* FrameProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProbe.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -134,6 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000021 /* mac_switcherApp.swift */,
+				AA0000000000000000000F04 /* SingleInstanceGuard.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -153,6 +158,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000096 /* Stdout.swift */,
+				AA0000000000000000000F02 /* FrameProbe.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -282,6 +288,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5A0000000000000000000011 /* mac_switcherApp.swift in Sources */,
+				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,
 				5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */,
@@ -300,6 +307,7 @@
 				5A0000000000000000000093 /* SettingsControls.swift in Sources */,
 				5A0000000000000000000095 /* NativeHotkeyGuards.swift in Sources */,
 				5A0000000000000000000097 /* Stdout.swift in Sources */,
+				AA0000000000000000000F01 /* FrameProbe.swift in Sources */,
 				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
 				5A00000000000000000000A8 /* PanelMotion.swift in Sources */,
 				5A00000000000000000000A9 /* PanelGlass.swift in Sources */,

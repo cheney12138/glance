@@ -7,7 +7,12 @@ import GlanceCore
 @main
 struct MacSwitcherApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
-    init() { _ = stdoutIsLineBuffered }
+    init() {
+        _ = stdoutIsLineBuffered
+        // **最先跑**:两个实例会抢同一组 ⌘Tab 并画出叠在一起的面板(见 SingleInstanceGuard 的病例),
+        // 而且必须在 NativeHotkeys / 事件 tap 之前拦住,退出时系统状态才是一行没动
+        SingleInstanceGuard.enforce()
+    }
 
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow

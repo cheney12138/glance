@@ -50,6 +50,27 @@ swift -target arm64-apple-macos14.0 Tools/InjectChord.swift 10 200 --mod opt --k
 - **需要给发起进程「辅助功能」权限**(终端/pi 通常已有)。没权限时 `post` 静默失效、什么都不发生。
 - 注意:注入的事件**会堆在系统队列里**。杀掉实例后,队列里剩下的那几十颗会喂给**下一个**实例
   ——所以"上一个人测的余波"很容易被误读成本次的症状。测完等几秒,或先对着无人运行的窗口跑一次清队。
+- **反复交互验证时,先把工具编成二进制**(2026-09-14 真实教训):`swift Tools/X.swift` 每次都要
+  走一遍编译器启动(实测 **2~3 秒/次**)。一个"按 Tab → 查窗口 → 移动鼠标 → 截图"的循环里
+  夹着五六个这种调用,十几秒就没了 —— 而长按开面板的寿命只有 30~40s,于是截图全部落在
+  "面板已经退场"之后,还很容易误判成"改动没生效"。编一次、后面毫秒级:
+  ```bash
+  swiftc -O -target arm64-apple-macos14.0 Tools/CaptureWindow.swift -o /tmp/cw
+  ```
+- **算鼠标坐标不如量鼠标坐标**:托盘的卡片位置一旦用"内容原点 + 内边距"手算,很容易差一两粒
+  灯的位置(我为此错了三轮)。可靠做法:限定在托盘窗口框内**扫像素找系统色圆点**(红 #FF5F57 /
+  黄 #FEBC2E / 绿 #28C840),重心就是点击点。扫整屏会被终端里的 ANSI 彩色文字污染,必须
+  先用 `CaptureWindow list` 拿托盘帧(`layer=100`)把范围卡住。
+- **注入突然全面失灵,先查锁屏/安全输入**(2026-09-14 真实跳过一小时):屏幕锁住或任何 App 开了
+  Secure Input 时,系统会**丢掉合成键盘事件**(鼠标移动仍然有效,所以很容易误判成"注入坏了但权限还在"):
+  ```bash
+  ioreg -l -w 0 | grep -o '"CGSSessionScreenIsLocked"=[A-Za-z]*'   # 锁屏
+  screencapture -x /tmp/probe.png                                   # 锁屏时直接失败(最快的判据)
+  ```
+  当时的现象:我们的 flags tap 照样收得到注入的 ⌥ 按下/松开,**但 Carbon 热键一发不响**,
+  连系统原生 ⌘Tab 也不再弹出「程序坞」—— 两个观察一串就定位到"事件根本没到输入系统",
+  而不是 Glance 的注册坏了。顺带说:合成 ⌘Tab **能**打进 Carbon 热键(已验证),
+  所以之前那次"合成按键进不了 Carbon"的结论是错的,错因就是锁屏。
 
 ## 3. 视觉验证:四种手段,各自能干什么
 
@@ -89,6 +110,13 @@ swift -target arm64-apple-macos14.0 Tools/CaptureWindow.swift shot --owner Glanc
 **注意**:该 API 在 macOS 15 起被标为 obsoleted(编译期报错),但 App 的部署目标是 14.0,仍然可用。
 
 ## 4. 进程与窗口侧的小抄
+
+- **诡异现象先数实例数**(2026-09-14 用户实机踩一小时):两个 Glance 会抢同一组 ⌘Tab ——
+  先装触发层的那个收键,后到的那个**照样画自己的面板**。于是症状是"两块面板叠在一起":
+  底色互相透(看起来像"app 在发光")、Esc 要按两次才关(第一发关了看不见的那个)。
+  单实例下完全不复现,所以从代码里读不出来。现在 `App/SingleInstanceGuard.swift` 会在
+  `App.init`(早于任何触发层装配)拦住第二个实例并打印原因;诊断时用
+  `pgrep -fl mac-switcher` 确认。
 
 ```bash
 pgrep -fl 'mac-switcher.app/Contents/MacOS/mac-switcher'   # 数实例;带 NSDocumentRevisionsDebugMode 的是 Xcode 那个

@@ -10,10 +10,16 @@ struct GlassBackground: NSViewRepresentable {
 
     static var supportsLiquidGlass: Bool { if #available(macOS 26.0, *) { true } else { false } }
 
-    /// 深色偏亮的解药 = demo 深色方案的 `--wallpaper-overlay: rgba(6,7,12,.30)`。
-    /// HTML 压的是壁纸,原生压不了壁纸,只能把同一层中性灰压进玻璃(官方 tintColor,
-    /// 不是手写底色:折射/模糊仍是系统的,这只是加一片中灰滤光片)。
-    /// 浅色不压——系统玻璃本来就通透,再蒙一层白纱就糊成灰板(v1.6 的旧账)
+    /// 玻璃 tint —— 原生侧唯一能调"玻璃本体色"的旋钮(系统官方 `tintColor`,折射/模糊仍是系统的)。
+    ///
+    /// 深色 = demo 的 `--wallpaper-overlay: rgba(6,7,12,.30)` 等效:HTML 压的是壁纸,
+    /// 原生压不了壁纸,就把同一层中性灰压进玻璃。
+    ///
+    /// **浅色不压 tint**(2026-09-14 已试过一版,结论是否):试的是「白底玻璃实验台」的 V1
+    /// 灰骨玻璃(`rgb(235,238,243)` α .55),实测用户评"更丑了,变成透明塑料片子" ——
+    /// 因为 tint 把**折射与背景透光一起压平**了,面板从"材质"退化成"一片均匀的灰"。
+    /// 白底上形不足的问题改由**形**承担(暗发丝边 + 暗槽托底,见 PanelColors 的 V2 那几行),
+    /// 玻璃只管做玻璃。想再试"轻一点的灰骨"时:α 从 .55 降到 .15 左右量级,别一步到位。
     private static func scrim(for appearance: NSAppearance) -> NSColor? {
         guard appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua else { return nil }
         return NSColor(srgbRed: 6 / 255, green: 7 / 255, blue: 12 / 255, alpha: 0.30)
@@ -23,6 +29,9 @@ struct GlassBackground: NSViewRepresentable {
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = cornerRadius
+            // **.clear**:系统给的两种玻璃(regular 偏实、clear 偏透)。用户实评"整个面板透明度不行"
+            // —— regular 在任何壁纸上都像一块实心白板,clear 才看得到背后
+            glass.style = .clear
             glass.tintColor = Self.scrim(for: glass.effectiveAppearance)
             glass.contentView = NSView() // 给玻璃一个可包裹的内容层
             return glass

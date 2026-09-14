@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import GlanceCore
 
 /// 窗口预览托盘 —— 施工契约 = 最新设计 demo 的 `.preview-tray`。
 ///
@@ -11,7 +12,6 @@ struct PreviewPanelView: View {
     @ObservedObject var snapshotter: Snapshotter
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
-    @State private var shown = false
 
     var body: some View {
         VStack(spacing: PanelMetrics.trayGap) {
@@ -38,15 +38,9 @@ struct PreviewPanelView: View {
         )
         .elevation(.tray)
         .padding(PanelMetrics.shadowPadPop) // 必须与 PanelController.previewSize 口径一致
-        // 入场**不做动效**(v1.12,与长条同一裁决):托盘要在选中态一变就到位,
-        // 平移 + 缩放登场同样只是拖时间。退场保留淡出(短一档)。
-        .opacity(shown ? 1 : 0)
-        .animation(shown ? nil : MotionPolicy.animation(PanelMotion.fade(PanelMetrics.tSettle)), value: shown)
-        // 入场每会期播一遍、退场也播一遍 —— 由 isVisible 驱动,不做重挂载。
-        // 旧版 `.id(isVisible)` 重挂载会把退场整个掐掉:新实例把 shown 重置成 false,
-        // 第一帧就是 opacity 0,没有动画可言
-        .onAppear { if controller.isVisible { shown = true } }
-        .onChange(of: controller.isVisible) { _, on in shown = on }
+        // 入场与退场都不做动效(与长条同一裁决;退场是 2026-09-14 砍的:用户实评"拖沓")。
+        // 窗口本身由控制器 orderOut,这里不再需要自己的 shown 状态
+        .opacity(controller.isVisible ? 1 : 0)
     }
 
     private var caption: some View {
@@ -67,8 +61,19 @@ struct PreviewPanelView: View {
             ForEach(Array(windows.enumerated()), id: \.element.wid) { i, w in
                 WindowThumb(
                     record: w,
+                    bundleID: controller.currentGroup?.bundleID,
                     image: snapshotter.cache[w.wid],
                     selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
+                    traffic: {
+                        // 三粒灯的动作 T14 就实现了(WindowFocuser.close/minimize/zoom),
+                        // T15 换卡片样式时把 UI 丢了 —— 2026-09-14 用户要求恢复
+                        TrafficLights(
+                            wid: w.wid,
+                            close: { controller.closeWindowClicked(w.wid) },
+                            minimize: { controller.minimizeWindowClicked(w.wid) },
+                            zoom: { controller.zoomWindowClicked(w.wid) }
+                        )
+                    },
                     motion: MotionPolicy.animation(PanelMotion.thumb)
                 )
                 .onHover { inside in if inside { controller.hoverWindow(i) } }
@@ -80,12 +85,98 @@ struct PreviewPanelView: View {
 
 // MARK: - 缩略图(截图 + 标题条;选中 = 1.045 放大 + 内圈聚焦光 + 阴影升档)
 
-private struct WindowThumb: View {
+/// 预览卡上的三粒红绿灯(功能早就在,UI 是 2026-09-14 恢复的)。
+///
+/// 尺寸与间距是 **UI 规格、不随卡片缩放**:卡片里放的是缩小过的截图,
+/// 真窗上的 12pt 按比例缩下来只剩 2~3pt,得按自己的可点尺寸画。
+///
+/// 悬停行为与 macOS 对齐(用户实评"hover的时候跟 macOS 保持一致"):
+/// 悬停**整组**三粒一起显出符号(✕ / − / ⤢),直接踩到的那一粒再略微放大。
+/// 不悬停时只剩纯色圆点 —— 这正是系统窗口上的样子。
+struct TrafficLights: View {
+    let wid: CGWindowID
+    let close: () -> Void
+    let minimize: () -> Void
+    let zoom: () -> Void
+    /// 哪一粒被直接踩到(nil = 没踩到整组):
+    /// 整组里**任意一粒**被悬停 → 三粒一起出符号;只有被直接踩到的那一粒放大
+    @State private var hoveredDot: Int?
+
+    var body: some View {
+        // spacing 归零、每粒自带 3pt 内边:间距不变(11+6),但两粒之间的缝也算"踩到"
+        HStack(spacing: 0) {
+            light(PanelColors.tlClose, "xmark", "关闭窗口", 0, close)
+            light(PanelColors.tlMin, "minus", "最小化窗口", 1, minimize)
+            light(PanelColors.tlZoom, "arrow.up.left.and.arrow.down.right", "缩放窗口", 2, zoom)
+        }
+    }
+
+    private func light(_ color: Color, _ symbol: String, _ hint: String,
+                       _ index: Int, _ action: @escaping () -> Void) -> some View {
+        TrafficLight(color: color, symbol: symbol, hint: hint,
+                     showsGlyph: hoveredDot != nil,
+                     hovering: hoveredDot == index,
+                     action: action)
+            .padding(3)
+            // 逐粒听 hover,而不是给 HStack 挂一个:容器上的 onHover 会被子按钮吃掉
+            // (实机现形:只有被踩到的那一粒出符号,另两粒没反应)
+            .onHover { inside in
+                if inside {
+                    hoveredDot = index
+                } else if hoveredDot == index {
+                    hoveredDot = nil
+                }
+            }
+    }
+}
+
+/// 一粒灯。状态由父级传(整组管符号、单粒管放大 —— 两个层级,与 macOS 同构)
+private struct TrafficLight: View {
+    let color: Color
+    let symbol: String
+    let hint: String
+    let showsGlyph: Bool
+    let hovering: Bool
+    let action: () -> Void
+
+    var body: some View {
+        // Button 而不是 onTapGesture:卡片本身挂着"点一下 = 确认"的手势,
+        // Button 才能把它隔开(子级优先),不会误触确认
+        Button(action: action) {
+            Circle()
+                .fill(color)
+                .frame(width: 11, height: 11)
+                .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
+                .overlay {
+                    // 符号色 = 本色的深色版(黑 50% 叠上去就是系统那个暗红/暗赭/暗绿)
+                    Image(systemName: symbol)
+                        .font(.system(size: 6.5, weight: .bold))
+                        .foregroundStyle(.black.opacity(0.5))
+                        .opacity(showsGlyph ? 1 : 0)
+                }
+                .scaleEffect(hovering ? 1.15 : 1)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(.easeOut(duration: 0.12), value: showsGlyph)
+        }
+        .buttonStyle(.plain)
+        .help(hint)
+    }
+}
+
+private struct WindowThumb<Overlay: View>: View {
     let record: WindowRecord
+    /// 决定标题显示什么:终端要 tab 名、编辑器要工程名(见 `GlanceCore.WindowTitle`)
+    let bundleID: String?
     let image: NSImage?
     let selected: Bool
+    /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
+    @ViewBuilder let traffic: () -> Overlay
     let motion: Animation?
 
+    /// 卡片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时尾部省略
+    private var displayTitle: String {
+        PanelLayout.title(WindowTitle.display(raw: record.title, bundleID: bundleID))
+    }
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -102,8 +193,11 @@ private struct WindowThumb: View {
             }
             .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
             .clipped()
+            // 红绿灯叠在截图左上(macOS 窗的位置)。点它们不会关面板:
+            // 点击落在面板内,不触发"面板外点击 = 放弃"那套判定
+            .overlay(alignment: .topLeading) { traffic().padding(9) }
 
-            Text(PanelLayout.title(record.title))
+            Text(displayTitle)
                 .font(.system(size: PanelMetrics.titleSize, weight: .regular))
                 .foregroundStyle(PanelColors.thumbTitle)
                 .lineLimit(1)
