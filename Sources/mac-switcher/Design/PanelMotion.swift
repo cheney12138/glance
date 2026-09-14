@@ -31,22 +31,22 @@ enum MotionPolicy {
 
     static var systemReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
-    /// 托底(舌头)的**入场起点**(用户实评 2026-09-14):
+    /// 入场的**起点**(整块内容:图标 + 托底;用户实评 2026-09-14):
     ///
-    /// 开 = 从**面板下缘升起** —— 无论新选中在第几格,起点都在选中格下方,
+    /// 开 = 从**面板下缘升起** —— 无论新选中在第几格,整块内容都被按到选中格下方,
     /// 距离恒定且短(而且开场那一帧它整块落在面板下缘之外,被圆角裁掉,升起是干净的);
     /// 关 = 从**上一局选中的那个格子**滑过来 —— a→b 之后 b 排到第一、a 落在第 6 位时,
-    /// 托底要横跨整条从右滑到左,"视觉上很累"。
+    /// 整条要横跨从右滑到左,"视觉上很累"。
     ///
     /// 曾经试过"从长条左缘滑入",实评效果不好(横向的插入感很硬),改成纵向升起 ——
     /// **动效本身没动**,只换了起点方向。两种都会滑,所以这是一个二选一,不是动效开关。
-    static var puckRisesFromBottom: Bool {
+    static var entryRisesFromBottom: Bool {
         UserDefaults.standard.object(forKey: "panel.puckRiseFromBottom") as? Bool ?? true
     }
 
-    /// "从底部升起"的起点距离。取 1.4×图标边长,是算出来的最小充分值:
-    /// 让托底在开场那一帧**完全**落到面板下缘之外(推导:icon + 30×scale;1.4×icon = 123×scale > 118×scale)
-    static var puckRiseDistance: CGFloat { PanelMetrics.icon * 1.4 }
+    /// "从底部升起"的距离。取 1.4×图标边长,是算出来的最小充分值:
+    /// 让内容在开场那一帧**完全**落到面板下缘之外(推导:icon + 30×scale;1.4×icon = 123×scale > 118×scale)
+    static var entryRiseDistance: CGFloat { PanelMetrics.icon * 1.4 }
 
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }

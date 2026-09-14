@@ -35,6 +35,8 @@ final class HotkeyTapCenter {
         case quitApp          // Q:退出选中 App(T12)
         case closeWindow      // W:关闭选中窗(T12)
         case minimizeWindow   // M:最小化选中窗(T12)
+        case toggleFullscreen // F:选中窗进出全屏(T29,AltTab 同键)
+        case hideApp          // H:隐藏选中 App(T29,AltTab 同键)
     }
 
     private(set) var state: State = .idle
@@ -64,8 +66,22 @@ final class HotkeyTapCenter {
     private static let keyQ: Int64 = 0x0C
     private static let keyW: Int64 = 0x0D
     private static let keyM: Int64 = 0x2E
+    private static let keyF: Int64 = 0x03
+    private static let keyH: Int64 = 0x04
     /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)
-    private static let navKeys: Set<Int64> = [keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM]
+    private static let navKeys: Set<Int64> =
+        [keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave]
+    /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
+    ///
+    /// 为什么这个键值得单独说:它同时是 macOS **全局**的"同 App 窗口循环"(⌘`) ——
+    /// 我们**不去关系统热键**(DockDoor 的做法,源码实证):靠 navTap 会话期吞键即可,
+    /// 系统那条热键在 WindowServer 层是更晚的环节,吞掉就收不到。
+    /// 代价与 Tab 循环同一条:tap 若被系统停用那一瞬,这一发会漏给系统(见 ADR-0005 的取舍)。
+    /// 默认**关**:它动的是系统级快捷键的肌肉记忆,只能用户显式开(与接管 ⌘Tab 同一纪律)。
+    private static let keyGrave: Int64 = 0x32
+    private static var graveCyclesWindows: Bool {
+        UserDefaults.standard.object(forKey: "switch.graveCyclesWindows") as? Bool ?? false
+    }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
@@ -288,8 +304,15 @@ final class HotkeyTapCenter {
         case Self.keyQ: emit(.quitApp)
         case Self.keyW: emit(.closeWindow)
         case Self.keyM: emit(.minimizeWindow)
+        case Self.keyF: emit(.toggleFullscreen)
+        case Self.keyH: emit(.hideApp)
         case Self.keyLeft: emit(.windowLeft)
         case Self.keyRight: emit(.windowRight)
+        case Self.keyGrave:
+            // 开关关着就**放行**(return false = 不吞),让系统那条 ⌘` 照旧工作
+            guard Self.graveCyclesWindows else { return false }
+            // ⇧` = 反向,与触发键的 ⇧ 反向约定一致
+            emit(event.flags.contains(.maskShift) ? .windowLeft : .windowRight)
         default: break
         }
         return true
@@ -349,7 +372,7 @@ final class HotkeyTapCenter {
 
     private func trace(_ line: String) {
         guard Self.traceEnabled else { return }
-        print("[tap] \(line)")
+        glog("[tap] \(line)")
     }
 
     private static func describe(_ action: Action) -> String {
@@ -365,6 +388,8 @@ final class HotkeyTapCenter {
         case .quitApp: return "Q → 退出选中 App(T12)"
         case .closeWindow: return "W → 关闭选中窗(T12)"
         case .minimizeWindow: return "M → 最小化选中窗(T12)"
+        case .toggleFullscreen: return "F → 全屏切换(T29)"
+        case .hideApp: return "H → 隐藏 App(T29)"
         }
     }
 }

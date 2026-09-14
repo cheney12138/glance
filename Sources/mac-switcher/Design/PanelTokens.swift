@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import GlanceCore
 
 /// 面板的度量、色板与阴影阶梯 —— **全系统规格的唯一来源**(`PanelController` 的定位数学与视图同源)。
 /// 本文件属于 `Design/` 模块:**不许 import 任何业务模块**(面板、设置、输入管线),只许被它们 import。
@@ -78,17 +79,23 @@ enum PanelMetrics {
     /// 就得在模糊之上再压一层**极淡的白/灰膜**(材质的做法) —— 那会改变画面亮度,单独一轮再议
     static let lightsBlur: CGFloat = 26
     static let lightsFade: CGFloat = 62
-    /// 标题条高 30 → 22(2026-09-14 用户实评"底部的项目名压缩一下空间,给的太多了")
-    static var titleH: CGFloat { k(22) }
-    static var thumbH: CGFloat { shotH + titleH }
-    static var captionH: CGFloat { k(22) }
+    /// 窗口名**芯片**(2026-09-14 用户要求:标题从卡片内挪到**卡片外**下方,做成芯片样式 ——
+    /// "显示在预览框里很丑…不影响文字显示,又不跟预览窗耦合,位置相对 app 的每个窗口居中")
+    static var chipH: CGFloat { k(18) }
+    /// 芯片前面的**选中圆点**(2026-09-14 用户要求:多窗口时"浮动效果不明显",要一眼看出选中的是哪扇窗)。
+    /// 颜色选**系统强调色**:与 macOS 的选中语言一致,而且跟随用户在系统设置里挑的强调色。
+    /// 未选中时留一颗极淡的灰点**占位** —— 否则圆点出现/消失会让芯片文字左右跳
+    static var chipDot: CGFloat { k(5) }
+    /// 卡片与芯片之间的缝:两者解耦的分界(芯片不在卡片的环/影/浮起里)
+    static var chipGap: CGFloat { k(6) }
+    static var thumbH: CGFloat { shotH + chipGap + chipH }
     static var thumbGap: CGFloat { k(14) }
-    static var trayGap: CGFloat { k(16) }
-    /// 预览托盘的题头留白(用户实评 2026-09-14:"顶部额头会不会有点宽了"):
-    /// 20 → 12。题头那一行本来就只有一行小字、左右大段空着,上方再留 24pt 就显得头重
-    static var trayPadTop: CGFloat { k(12) }
+    /// 托盘的**上**留白。走了一圈才定:题头行删掉之后,托盘的视觉重心掉到了下面
+    /// (上 12 / 下 18),用户实评"重心在顶部,留白跑到下面了" —— 于是**调换**:
+    /// 上 20 / 下 12。芯片是贴着卡片的一条注脚,它离卡片近才对;空气留在顶上,整块托盘才"浮"起来
+    static var trayPadTop: CGFloat { k(20) }
     static var trayPadX: CGFloat { k(22) }
-    static var trayPadBottom: CGFloat { k(18) }
+    static var trayPadBottom: CGFloat { k(12) }
     // 圆角
     static var rPanel: CGFloat { k(34) }
     static var rTray: CGFloat { k(30) }
@@ -100,8 +107,6 @@ enum PanelMetrics {
     /// 题头(App 名)13pt:2026-09-14 把面板截图丢给一份通用评审后对方**唯一说对的一条** ——
     /// "字体偏大偏黑,像网页弹窗"。原值是 15 基准 ×1.2 = **18pt**,而 macOS 自己的窗口标题是 13;
     /// 现在 13 ×1.2 ≈ 15.6,字重同步从 semibold 降到 medium(见 PreviewPanelView)
-    static var captionSize: CGFloat { k(13) }
-    static var countSize: CGFloat { k(12) }
     /// 标题字号 12 → 10.5(同上:"字体缩小一点")
     static var titleSize: CGFloat { k(10.5) }
     /// 标题双保险截断的**第一道**:只做病理保护(标量是字符数,中英混排靠宽度截断兜底)。
@@ -190,6 +195,16 @@ enum PanelColors {
                                     white(0.75))
     /// 缩略图标题条底色:截图之下的"纸"(与底纸同一档白度)
     static let thumbPaper = dynamic(white(0.60), white(0.16))
+    /// 芯片前的选中圆点:亮 = **系统强调色**(跟 macOS 的选中语言一致,且跟随用户在系统设置里挑的颜色);
+    /// 暗 = 极淡的灰点**占位**(圆点出现/消失会让芯片文字左右跳)
+    static let chipDotOn = Color.accentColor
+    static let chipDotOff = dynamic(ink(0.18), white(0.22))
+    /// 窗口名芯片的底与边。
+    /// 2026-09-14 用户实评"显示效果上感觉有点重了,芯片可以再轻盈一些" —— 于是两处都往下压:
+    /// 底从"近白实底"改成**半透**(和玻璃同呼吸,而不是贴在上面的一张标签),边从 .10 压到 .06。
+    /// 注意芯片不靠底色立住:它靠**文字**(深色)在托底上立住 —— 所以底可以很淡
+    static let chipBg = dynamic(white(0.26), white(0.12))
+    static let chipBorder = dynamic(ink(0.06), white(0.08))
     /// 红绿灯:macOS 系统规格色(#FF5F57 / #FEBC2E / #28C840),深浅一致不随外观变
     static let tlClose = dynamic(NSColor(srgbRed: 1.0, green: 95 / 255, blue: 87 / 255, alpha: 1),
                                  NSColor(srgbRed: 1.0, green: 95 / 255, blue: 87 / 255, alpha: 1))
@@ -256,9 +271,10 @@ extension View {
 // MARK: - 布局度量共享(规格唯一来源;PanelController 的定位数学与视图同源)
 
 enum PanelLayout {
-    /// 截断的第一道:超 12 字符先斩,宽度截断兜底中英混排
+    /// 截断的第一道:超 `titleCharLimit` 先按**中段**斩(信息在尾部,见 `WindowTitle.middleTruncate`),
+    /// 第二道由视图的 `.truncationMode(.middle)` 按真实宽度收尾(中英混排只有它算得准)。
     static func title(_ raw: String) -> String {
-        raw.count > PanelMetrics.titleCharLimit ? String(raw.prefix(PanelMetrics.titleCharLimit)) + "…" : raw
+        WindowTitle.middleTruncate(raw, limit: PanelMetrics.titleCharLimit)
     }
 
     /// 第 `appIndex` 个图标格的中心 X(长条**内容**坐标系)。

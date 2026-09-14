@@ -15,7 +15,10 @@ import AppKit
 import CoreGraphics
 
 private let keyCodes: [String: CGKeyCode] = [
-    "tab": 0x30, "space": 0x31, "grave": 0x32, "q": 0x0C, "w": 0x0D,
+    // 与 HotkeyTap 的 Carbon 键码**必须一致**(同码同键,不然工具压出来的不是面板认的那一颗)
+    "tab": 0x30, "space": 0x31, "grave": 0x32, "esc": 0x35, "return": 0x24,
+    "q": 0x0C, "w": 0x0D, "m": 0x2E, "z": 0x06, "f": 0x03, "h": 0x04,
+    "left": 0x7B, "right": 0x7C,
 ]
 private let modifiers: [String: (CGKeyCode, CGEventFlags, String)] = [
     "cmd": (0x37, .maskCommand, "⌘"),

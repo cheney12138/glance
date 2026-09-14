@@ -15,7 +15,10 @@ final class PanelController: ObservableObject {
     /// 那种情况下上膛反而要提前,见 showPanel。
     @Published private(set) var selectionArmed = false
     /// 托底的入场偏移(纵向,内容坐标系,渐近到 0)。只在"从底部升起"模式下非零
-    @Published private(set) var puckEntryRise: CGFloat = 0
+    /// 入场升起偏移。作用对象 = **托底 + 选中的那一格图标**(其余图标不动):
+    /// 只挂托底会读成"两个动作各走各的";整行一起升又太重("全部图标一起弹出来")。
+    /// 这一档正是"正常 Tab 切换"的范围 —— 切换时动的永远只有托底与新选中的那个图标
+    @Published private(set) var contentEntryRise: CGFloat = 0
     /// 确认涟漪的令牌(demo .ripple):每次确认 +1,`PanelView` 靠它的变化重挂涟漪视图重播一遍
 
     private var panel: NSPanel?
@@ -59,6 +62,11 @@ final class PanelController: ObservableObject {
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
     var expandedCount: Int { currentGroup?.windows.count ?? 0 }
 
+    /// 本局内被 H 隐藏的 App。为什么要记:
+    /// 隐藏是**异步**的(0.2–0.3s 动画),这期间重枚举**还看得见它的窗** ——
+    /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
+    private var hiddenPIDs: Set<pid_t> = []
+
     // MARK: - 触发层入口
 
     func handle(_ action: HotkeyTapCenter.Action) {
@@ -74,6 +82,8 @@ final class PanelController: ObservableObject {
         case .quitApp: destructive(.quit)
         case .closeWindow: destructive(.close)
         case .minimizeWindow: destructive(.minimize)
+        case .toggleFullscreen: destructive(.fullscreen)
+        case .hideApp: destructive(.hide)
         }
     }
 
@@ -86,6 +96,7 @@ final class PanelController: ObservableObject {
             return
         }
         contextScreen = screen
+        hiddenPIDs.removeAll() // 新一局:以系统现在的真实状态为准,清掉上一局的隐藏记忆
         beginGeneration &+= 1
         let generation = beginGeneration
         // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
@@ -169,6 +180,7 @@ final class PanelController: ObservableObject {
     private func showPanel() {
         buildPanelIfNeeded()
         panelOpenPoint = NSEvent.mouseLocation
+        gateBlockedLogged = false
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
         isVisible = true
         // 退场演出期间关掉的事件耳,开新局要还回来
@@ -176,21 +188,21 @@ final class PanelController: ObservableObject {
         previewPanel?.ignoresMouseEvents = false
         beginActivity()
 
-        // 托底入场(两种模式的区别只在**起点**,都会滑):
-        //   · 从底部升起(默认):先把托底按到选中格下方(那一帧它在面板下缘之外,
-        //     被圆角裁掉),再上膛 + 升到选中格 —— 距离恒定且短;
+        // 入场(两种模式的区别只在**起点**,都会滑):
+        //   · 从底部升起(默认):先把**托底与选中格**按到面板下缘之外(被圆角裁掉),
+        //     再上膛 + 一起升上来 —— 距离恒定且短,两者同一次 withAnimation、同一根弹簧;
         //   · 承接上一局:第一帧就上膛,弹簧自己会从"上一局那个格子"滑到新选中
         //     (窗口复用,上一局的偏移还在视图里 —— 那份残影在这里是故意的)。
         //
         // 顺序要紧:起点必须在 `orderFrontRegardless()` **之前**写好。
         // 写在后面的话第一帧会先在选中格把托底画出来,再瞬移到板外去 —— 屏幕上一道闪,
         // 本意(升起)反而变成了两跳。
-        let risesFromBottom = MotionPolicy.puckRisesFromBottom
+        let risesFromBottom = MotionPolicy.entryRisesFromBottom
         if risesFromBottom {
             selectionArmed = false
-            puckEntryRise = MotionPolicy.puckRiseDistance
+            contentEntryRise = MotionPolicy.entryRiseDistance
         } else {
-            puckEntryRise = 0
+            contentEntryRise = 0
             selectionArmed = true
         }
 
@@ -206,7 +218,7 @@ final class PanelController: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
                 guard let self, self.isVisible else { return }
                 self.selectionArmed = true
-                withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.puckEntryRise = 0 }
+                withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.contentEntryRise = 0 }
             }
         }
         // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
@@ -370,8 +382,8 @@ final class PanelController: ObservableObject {
         let cardsW = n * PanelMetrics.thumbW + max(n - 1, 0) * PanelMetrics.thumbGap
         return NSSize(
             width: cardsW + PanelMetrics.trayPadX * 2,
-            height: PanelMetrics.trayPadTop + PanelMetrics.captionH + PanelMetrics.trayGap
-                + PanelMetrics.thumbH + PanelMetrics.trayPadBottom
+            // 与 PreviewPanelView 同源:题头行已去掉,高度里也不再留它
+            height: PanelMetrics.trayPadTop + PanelMetrics.thumbH + PanelMetrics.trayPadBottom
         )
     }
 
@@ -406,8 +418,43 @@ final class PanelController: ObservableObject {
         // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
         previewPanel.alphaValue = 1
+        let before = previewPanel.frame
         setFrameIfNeeded(previewPanel, frame)
         if !previewPanel.isVisible { previewPanel.orderFrontRegardless() }
+        // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
+        if previewPanel.frame != before { resyncSelectionUnderPointer() }
+    }
+
+    /// 视图在指针底下**自己挪位**时,SwiftUI 不会补发 hover(它只在指针移动时发声)→
+    /// 选中态停在旧位置,用户读作"指针移过去了但选中不跟,要等一下"。
+    ///
+    /// 病例(2026-09-14,用户报"⌘Tab 起来后选多窗口 App,再移向对应窗口约 0.5s 延迟"):
+    /// 日志里每一对 `hover 到窗` → `窗口选中(指针)` 都相差 **0ms**,说明我们处理零延迟;
+    /// 而托盘**换组会换宽度**(1 扇 288pt、2 扇 540pt,各自按长条中线居中)→
+    /// 卡片整体平移 ~126pt,比一张卡还宽 —— 指针其实已经骑在另一张卡上,
+    /// 却没有任何事件告诉我们(手还在动,但一直落在"同一张卡"里)。
+    ///
+    /// 所以:尺寸变了之后,**自己按指针位置重判一次**,不依赖 hover。
+    /// 长条(图标)不走这条路:本局 App 数不变,长条宽度就是常量,图标不会在指针底下来回挪。
+    private func resyncSelectionUnderPointer() {
+        guard isVisible, pointerHasSpoken() else { return } // 指针没挪过窝就别抢选中(与 hover 同一道闸)
+        guard let tray = previewPanel, tray.isVisible else { return }
+        guard let g = currentGroup, g.windows.count > 1 else { return }
+        let p = NSEvent.mouseLocation
+        // 窗框 → 玻璃:shadowPadPop 是透明的呼吸区(视图与 previewSize 口径一致)
+        let glass = tray.frame.insetBy(dx: PanelMetrics.shadowPadPop, dy: PanelMetrics.shadowPadPop)
+        guard glass.contains(p) else { return }
+        // 玻璃 → 内容:视图是 .padding(top: trayPadTop, horizontal: trayPadX, bottom: trayPadBottom),
+        // 卡片那一横条因此从玻璃下沿 + trayPadBottom 起算
+        let x = p.x - glass.minX - PanelMetrics.trayPadX
+        let y = p.y - glass.minY - PanelMetrics.trayPadBottom
+        guard x >= 0, y >= 0, y <= PanelMetrics.thumbH else { return }
+        let pitch = PanelMetrics.thumbW + PanelMetrics.thumbGap
+        let i = Int(x / pitch)
+        guard i >= 0, i < g.windows.count, x - CGFloat(i) * pitch <= PanelMetrics.thumbW else { return }
+        guard i != winIndex else { return }
+        winIndex = i
+        glog("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
     }
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
@@ -418,7 +465,7 @@ final class PanelController: ObservableObject {
             appIndex = (appIndex + delta + groups.count) % groups.count
             winIndex = 0
             // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
-            print("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+            glog("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
             refreshSnapshotForSelection()
             updatePreview()
         }
@@ -449,7 +496,7 @@ final class PanelController: ObservableObject {
         let n = expandedCount
         guard n > 1 else { return }
         winIndex = (winIndex + delta + n) % n
-        print("[T6] 窗口选中: \(groups[appIndex].windows[winIndex].title)")
+        glog("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
     }
 
     /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
@@ -472,6 +519,8 @@ final class PanelController: ObservableObject {
     /// SwiftUI 会把静止悬停当成 hover 事件,把键盘刚移走的选中拽回来(实机现形:
     /// 面板开在指针下方时 ⌘Tab 移不动)。gate:指针自面板出现起没挪过窝,hover 一律不算数
     private var panelOpenPoint: CGPoint?
+    /// "hover 被闸掉"这行账每局只打一次(见 hoverAllowedByGate)
+    private var gateBlockedLogged = false
 
     private func pointerHasSpoken() -> Bool {
         guard let p = panelOpenPoint else { return true }
@@ -479,11 +528,27 @@ final class PanelController: ObservableObject {
         return abs(m.x - p.x) > 1 || abs(m.y - p.y) > 1
     }
 
+    /// 同一道闸,但**被闸掉时记一笔**(每局一次)。
+    ///
+    /// 2026-09-14 病例:用户报"多窗口 App 的卡片,指针移上去焦点不跟随、点不动,得等一会"。
+    /// 那种描述有两种完全不同的病因,而日志里当时只有"没反应"——
+    ///   · hover 事件**根本没到**(窗口/层级/事件投递问题);
+    ///   · 事件到了但**被这道闸吃了**(面板恰好开在指针下方)。
+    /// 有了这一行,下次一看就知道是哪一种,不用猜(本仓库的老规矩:先让它可观测,再改)。
+    private func hoverAllowedByGate() -> Bool {
+        if pointerHasSpoken() { return true }
+        if !gateBlockedLogged {
+            gateBlockedLogged = true
+            print("[T6] 指针 hover 被闸掉(面板开在指针下方,指针还没挪窝)")
+        }
+        return false
+    }
+
     /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"
     func hoverApp(_ i: Int) {
         // 选中没变 = 同块地砖上挪指针,免工——onHover 每像素都发声,不设闸就是现拍风暴
         // (实机现形:日志被系统 QUARANTINED 截流)
-        guard pointerHasSpoken(), groups.indices.contains(i), i != appIndex else { return }
+        guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex else { return }
         traceCost("指针换选中") {
             appIndex = i
             winIndex = 0
@@ -493,8 +558,17 @@ final class PanelController: ObservableObject {
     }
 
     func hoverWindow(_ i: Int) {
-        guard pointerHasSpoken(), i != winIndex else { return }
+        guard i != winIndex else { return } // 同一格的重复 hover(指针每像素都发声)不进账
+        // **到达**与**接受**分两行记:这一行证明"hover 事件到了",下一行证明"我们认了"。
+        // 两行之间的时间差 = 我们这边的处理耗时;两行都晚 = 事件本身就投递晚了(窗口/层级/系统侧)
+        if let g = currentGroup, g.windows.indices.contains(i) {
+            glog("[T6] hover 到窗 [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)(闸:\(pointerHasSpoken() ? "开" : "关"))")
+        }
+        guard hoverAllowedByGate() else { return }
         winIndex = i
+        if let g = currentGroup, g.windows.indices.contains(i) {
+            glog("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
+        }
     }
 
     // MARK: - 确认与放弃
@@ -505,12 +579,53 @@ final class PanelController: ObservableObject {
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 
-    private enum DestructiveOp { case quit, close, minimize, zoom }
+    /// 名字是历史(最早只有退出/关窗/最小化):它实际管的是「面板里**直接对窗或 App 生效**的动作」。
+    /// 后来进来的 zoom / fullscreen / hide 都**不改列表语义**,只是窗或 App 的状态变了 ——
+    /// 所以它们统一走这条"动作 → 重枚举 → 留在原地"的路(Snapshotter.prune 只剪被处决的那扇)。
+    private enum DestructiveOp { case quit, close, minimize, zoom, fullscreen, hide }
 
     /// 红绿灯按钮入口(T14):wid 反查组内位置后,走破坏性操作同一闸
     func closeWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .close) }
     func minimizeWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .minimize) }
     func zoomWindowClicked(_ wid: CGWindowID) { trafficOp(wid, .zoom) }
+
+    /// **乐观本地摘除** —— 这一条是病例逼出来的,别删:
+    ///
+    /// 病例(2026-09-14,用户报 H):"隐藏之后 App 还在 Switcher 栏上,松开 ⌥ 就把选中那个又唤起来了"。
+    /// 根因不在 H 的语义,而在**时间**:`NSRunningApplication.hide()` / AX 的关闭、最小化都是
+    /// **异步**的(隐藏与最小化都有 0.2–0.3s 动画,App 忙时更久),而 `refreshAfterAction()` 只等 0.18s
+    /// 重新枚举 —— 那一瞬间系统里那扇窗**还看得见**,分组没变、选中还停在它上面,
+    /// 于是松开 ⌥ 走 SLPS 前置,又把刚隐藏的 App 唤起来了(它只是"被隐藏",并没有消失)。
+    ///
+    /// 所以:发完动作**立刻**按我们已知的结果改本地列表(面板当帧就对上,选中当场被钳走),
+    /// 真数据 0.18s 后再来核对。**只摘确定的**:zoom/fullscreen 不摘 ——
+    /// 全屏是进出 Space(进入会离开本列表,退出又会回来),猜错方向反而会把窗摘没了。
+    private func optimisticRemoval(_ op: DestructiveOp, in g: AppGroup) {
+        // 注意 H **不走这里**(见 .hide:它只清窗、不摘组)
+        var next: [AppGroup] = []
+        for group in groups {
+            guard group.pid == g.pid else { next.append(group); continue }
+            switch op {
+            case .quit:
+                continue // 整组离开:App 真的没了
+            case .hide:
+                continue // 理论到不了(H 自己处理),留着只为穷尽枚举
+            case .close, .minimize:
+                // 关掉 / 最小化的那扇窗离开列表(最小化窗我们本来就不列);组空了就把组也去掉
+                let keep = group.windows.enumerated().filter { $0.offset != winIndex }.map(\.element)
+                if !keep.isEmpty { next.append(AppGroup(pid: group.pid, appName: group.appName,
+                                                        bundleID: group.bundleID, windows: keep)) }
+            case .zoom, .fullscreen:
+                next.append(group) // 不摘(见上面的理由),等核对
+            }
+        }
+        let before = groups.reduce(0) { $0 + $1.windows.count }
+        let after = next.reduce(0) { $0 + $1.windows.count }
+        guard next.count != groups.count || after != before else { return } // zoom/fullscreen:没摘,不必走这一趟
+        glog("[T12] 本地先摘: \(groups.count) 个 App / \(before) 窗 → "
+              + "\(next.count) 个 App / \(after) 窗")
+        applyRefreshed(next, keepPID: nil, keepWin: winIndex)
+    }
 
     private func trafficOp(_ wid: CGWindowID, _ op: DestructiveOp) {
         for (ai, g) in groups.enumerated() {
@@ -532,20 +647,45 @@ final class PanelController: ObservableObject {
         let g = groups[appIndex]
         switch op {
         case .quit:
-            print("[T12] 退出应用: \(g.appName)")
+            glog("[T12] 退出应用: \(g.appName)")
             WindowFocuser.quitApp(pid: g.pid)
+            optimisticRemoval(op, in: g)
             refreshAfterAction()
         case .close:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
-            print("[T12] 关闭窗口: \(g.appName) — \(w.title)")
+            glog("[T12] 关闭窗口: \(g.appName) — \(w.title)")
             WindowFocuser.close(window: w)
+            optimisticRemoval(op, in: g)
             refreshAfterAction()
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
-            print("[T12] 最小化: \(g.appName) — \(w.title)")
+            glog("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
+            optimisticRemoval(op, in: g)
+            refreshAfterAction()
+        case .fullscreen:
+            guard g.windows.indices.contains(winIndex) else { return }
+            let w = g.windows[winIndex]
+            glog("[T29] 全屏切换(F): \(g.appName) — \(w.title)")
+            WindowFocuser.toggleFullscreen(window: w)
+            // 全屏会**进出独立 Space**:窗可能整扇离开当前语境屏 → 必须重枚举(与 Z 不同)
+            refreshAfterAction()
+        case .hide:
+            let ok = WindowFocuser.hideApp(pid: g.pid)
+            hiddenPIDs.insert(g.pid)
+            glog("[T29] 隐藏 App(H): \(g.appName) → hide()=\(ok ? "已受理" : "被拒绝")")
+            // **不摘组**:图标留在原位,只把它的窗清空 —— 用户实报的首版做法(摘整组)会让整条栏
+            // 重排两次("乱跳"),而他期望的是"位置不变,只是窗口消失了"。
+            // 系统那边隐藏完之前,枚举仍会报出它的窗,所以 hiddenPIDs 还要压住这一段(见 mergeRefreshed)
+            var next = groups
+            if let i = next.firstIndex(where: { $0.pid == g.pid }) {
+                let keep = next[i]
+                next[i] = AppGroup(pid: keep.pid, appName: keep.appName,
+                                   bundleID: keep.bundleID, windows: [])
+            }
+            applyList(next, keepPID: g.pid, keepWin: 0)
             refreshAfterAction()
         case .zoom:
             guard g.windows.indices.contains(winIndex) else { return }
@@ -578,7 +718,41 @@ final class PanelController: ObservableObject {
     }
 
     private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {
-        let fresh = WindowEnumerator.orderByMRU(raw)
+        applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin)
+    }
+
+    /// 一局之内**顺序冻结**:本局的 App 顺序在开局那一刻定下(开局那次才走 MRU 排序),
+    /// 中途任何动作都只改"窗",不改"位"。
+    ///
+    /// 病例(2026-09-14 用户实报):H 之后图标先消失又出现,整条栏跟着重排 ——「乱跳」,
+    /// 期望是「位置不变,只是窗口消失了」。根因就是重枚举后又**按 MRU 排了一遍**,
+    /// 而动过手之后 MRU 必然变(刚碰过的 App 排到最前)。
+    /// macOS 自己的行为也是这样:按住 ⌘ 期间顺序是死的,MRU 只在**开局**那一刻起作用。
+    private func mergeRefreshed(_ raw: [AppGroup]) -> [AppGroup] {
+        let fresh = WindowEnumerator.orderByMRU(raw) // 只用来决定"本局中途新冒出来的 App"排哪
+        var byPID: [pid_t: AppGroup] = [:]
+        for g in fresh { byPID[g.pid] = g }
+        var merged: [AppGroup] = []
+        var seen = Set<pid_t>()
+        for old in groups {
+            seen.insert(old.pid)
+            if hiddenPIDs.contains(old.pid) {
+                // 被我们隐藏:窗当帧就没了,但系统那边的重枚举这 0.2–0.3s 还在骗我们
+                merged.append(AppGroup(pid: old.pid, appName: old.appName,
+                                       bundleID: old.bundleID, windows: []))
+            } else if let f = byPID[old.pid] {
+                merged.append(f) // 位置不动,只换内容(窗多了少了都还在这格)
+            }
+            // 不在 fresh 里 = 这个 App 真的没了(退出)→ 丢掉
+        }
+        for g in fresh where !seen.contains(g.pid) && !hiddenPIDs.contains(g.pid) {
+            merged.append(g) // 本局中途新出现的 App 挂到**尾部**:不插队,免得又跳一次
+        }
+        return merged
+    }
+
+    /// 列表落地(内容 → 屏幕):钳选中、剪缓存、重拍、重排长条与托盘。
+    private func applyList(_ fresh: [AppGroup], keepPID: pid_t?, keepWin: Int) {
         guard !fresh.isEmpty else {
             dismiss(reason: "处决后无窗可切")
             return
@@ -602,7 +776,8 @@ final class PanelController: ObservableObject {
             setFrameIfNeeded(panel, target)
         }
         updatePreview()
-        print("[T12] 处决后留在原地: \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+        glog("[T12] 处决后留在原地(核实): \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] "
+              + "\(groups[appIndex].appName) · 顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
     }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
@@ -613,6 +788,13 @@ final class PanelController: ObservableObject {
             return
         }
         let g = groups[appIndex]
+        // 被 H 隐藏的组:**不许**落到下面那条"无窗应用 = 激活"上 ——
+        // 那正是用户实报的原 bug(松开 ⌥ 又把刚隐藏的 App 唤起来了)。本轮到此结束,什么都不动。
+        if hiddenPIDs.contains(g.pid) {
+            glog("[T29] 选中的组已被隐藏:本轮结束,不唤起它")
+            dismiss(reason: "确认(已隐藏)")
+            return
+        }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
             WindowFocuser.focusWindowlessApp(pid: g.pid)

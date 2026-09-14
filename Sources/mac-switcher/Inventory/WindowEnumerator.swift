@@ -68,8 +68,29 @@ enum WindowEnumerator {
             candidates.append(WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds))
         }
 
+        // **AX 认可过滤**:杀掉"空壳 surface"(病例:Chrome 只有一扇窗却出两张卡片,那张无标题卡
+        // 快照还是一片空白 —— Chromium 挂在 layer 0、alpha 1、尺寸正常的辅助 surface)。
+        // 判据照 AltTab 的 WindowAdmissionResolver:可切换目标必须在 AX 侧也对得上。
+        // 安全阀:AX 没话说(nil)时**不过滤**,否则会把不暴露 AX 的 App 整组清空。
+        var axFiltered: [WindowRecord] = []
+        axFiltered.reserveCapacity(candidates.count)
+        for (pid, group) in Dictionary(grouping: candidates, by: \.pid) {
+            guard let admission = AXWindowList.admission(ofPID: pid) else {
+                axFiltered.append(contentsOf: group)
+                continue
+            }
+            let kept = group.filter { admission.admitted.contains($0.wid) }
+            let dropped = group.filter { !admission.admitted.contains($0.wid) }
+            if !dropped.isEmpty {
+                print("[幽灵窗滤除] \(group.first?.ownerName ?? "?"):AX 不认 \(dropped.count)/\(group.count) 扇 — "
+                      + dropped.map { "#\($0.wid)\"\($0.title)\"(\(admission.rejected[$0.wid] ?? "?"))" }
+                                .joined(separator: ", "))
+            }
+            axFiltered.append(contentsOf: kept)
+        }
+
         // 归属过滤:只留本屏窗
-        let records = candidates.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
+        let records = axFiltered.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,

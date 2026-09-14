@@ -103,4 +103,23 @@ final class WindowTitleTests: XCTestCase {
         XCTAssertFalse(WindowTitle.showsProjectName(bundleID: nil))
         XCTAssertFalse(WindowTitle.showsProjectName(bundleID: ""))
     }
+
+    // MARK: - 中段截断(AltTab `titleTruncation` 的 middle 档)
+
+    func testMiddleTruncateKeepsBothEnds() {
+        // 实机病例:IntelliJ 标题的区分位在**尾部**(ServiceImpl + .java)
+        XCTAssertEqual(
+            WindowTitle.middleTruncate("TrainXProductOrderServiceImpl.java", limit: 21),
+            "TrainXProd…eImpl.java"
+        )
+        // 不超长 → 原样(绝不允许"截断出一个比原文还长的东西")
+        XCTAssertEqual(WindowTitle.middleTruncate("short", limit: 21), "short")
+        XCTAssertEqual(WindowTitle.middleTruncate("abcd", limit: 4), "abcd")
+        // 总长恒等于 limit;取不整时**尾部多一个字符**(信息在尾部:扩展名、文件名区分位)
+        XCTAssertEqual(WindowTitle.middleTruncate("abcde", limit: 4), "a…de")
+        XCTAssertEqual(WindowTitle.middleTruncate("abcdef", limit: 4), "a…ef")
+        XCTAssertEqual(WindowTitle.middleTruncate("abcde", limit: 3), "a…e")
+        // 上限太小(放不下"头 + … + 尾")就不动,免得截出个残句
+        XCTAssertEqual(WindowTitle.middleTruncate("abcde", limit: 2), "abcde")
+    }
 }

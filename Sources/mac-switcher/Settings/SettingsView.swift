@@ -36,6 +36,8 @@ struct SettingsView: View {
     @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
     /// 图标呼吸感:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
+    /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
+    @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     @AppStorage("panel.puckRiseFromBottom") private var puckRiseFromBottom = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
@@ -90,6 +92,16 @@ struct SettingsView: View {
     private var generalPane: some View {
         Group {
             SettingsGroup {
+                SettingsRow(title: "颜色外观",
+                            desc: "浅色 / 深色 / 自动。面板的玻璃、发丝、纸面、芯片、文字取的都是"
+                                + "**按外观解析**的动态色,所以这一处开关管全套(设置窗一起换)。"
+                                + "自动 = 跟随系统 —— macOS 自己的习惯,默认就是它。") {
+                    BeamSegmented(options: [
+                        .init(id: AppearancePreference.auto, label: "自动"),
+                        .init(id: AppearancePreference.light, label: "浅色"),
+                        .init(id: AppearancePreference.dark, label: "深色"),
+                    ], value: $appearance)
+                }
                 SettingsRow(title: "开机时启动 Glance",
                             desc: "登录到这台 Mac 后自动拉起;关掉后需要手动从应用程序里启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
@@ -118,11 +130,13 @@ struct SettingsView: View {
                     }
                 }
             }
+            .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
             SettingsGroup {
-                SettingsRow(title: "托底从底部升起",
-                            desc: "开:无论新选中在第几格,托底都从面板**下缘升起** —— 距离恒定且短。"
-                                + "关:从**上一局那个格子**滑过来(例:从 a 切到 b 后 b 排到第一、"
-                                + "a 落在第六位,托底要横跨整条从右滑到左)。两种都会滑,区别只在起点。",
+                SettingsRow(title: "从底部升起",
+                            desc: "开:无论新选中在第几格,**托底与选中的那一格图标一起**从面板下缘升起"
+                                + "(同一次动画、同一根弹簧,其余图标不动)—— 距离恒定且短。关:直接在位,托底从**上一局那个格子**滑过来"
+                                + "(例:从 a 切到 b 后 b 排到第一、a 落在第六位,要横跨整条从右滑到左)。"
+                                + "两种都会滑,区别只在起点。",
                             hairline: false) {
                     BeamSwitch(isOn: $puckRiseFromBottom)
                 }
@@ -184,6 +198,9 @@ struct ShortcutPane: View {
     @State private var monitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
     @AppStorage("switch.advanceOnOpen") private var advanceOnOpen = true
+    /// 颜色外观:auto / light / dark(见 AppearancePreference)
+    /// ` 循环窗口(默认关:它是系统级快捷键,只能用户显式开)
+    @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
 
     var body: some View {
         Group {
@@ -216,6 +233,14 @@ struct ShortcutPane: View {
                 }
             }
             SettingsGroup(label: "面板内导航") {
+                SettingsRow(title: "` 循环窗口",
+                            desc: "开:面板里按 ` / ⇧` 在**当前 App 的窗口之间**循环(与 ←→ 等价)。"
+                                + "它只在面板打开那一瞬间生效 —— 那一发 ` 会被 Glance 吞掉,"
+                                + "所以**系统的 ⌘` 不会同时触发**;关掉则一行都不碰。"
+                                + "默认关:它动的是系统级快捷键的肌肉记忆,只能你显式开。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $graveCyclesWindows)
+                }
                 SettingsRow(title: "向后 / 向前循环切换") { KeyChip(text: "Tab / ⇧ Tab") }
                 SettingsRow(title: "在展开层的窗之间移动",
                             desc: "组内只有一扇窗时 ←→ 无语义,静默吞掉 —— 绝不允许跨界滑到邻 App。") {
@@ -225,9 +250,17 @@ struct ShortcutPane: View {
                     KeyChip(text: "松开 ⌥ / Esc")
                 }
                 SettingsRow(title: "退出 App / 关窗 / 最小化",
-                            desc: "破坏性操作,**处决即散场**:动作一发本轮切换事务立刻结束,想继续切就重新触发一局。",
-                            hairline: false) {
+                            desc: "破坏性操作。动作发完**面板留在原地**(按 pid 重枚举后再把选中钳回有效范围),"
+                                + "想继续切就不用重开一局。") {
                     KeyChip(text: "Q / W / M")
+                }
+                SettingsRow(title: "全屏 / 隐藏 App",
+                            desc: "F = 选中窗进出全屏(和 Z 的「铺满」不是一回事:全屏会进出独立 Space);"
+                                + "H = 隐藏选中 App:它的**窗**当帧从托盘消失,App 图标**留在原位**"
+                                + "(与 macOS 原生一致 —— 隐藏的 App 仍在 ⌘Tab 里,只是没有可预览的窗)。"
+                                + "本轮确认不会再把它唤起;下一局它作为无窗 App 出现,选中它即为唤回。",
+                            hairline: false) {
+                    KeyChip(text: "F / H")
                 }
             }
         }

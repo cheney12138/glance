@@ -247,3 +247,63 @@ struct SettingsTabRail: View {
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
     }
 }
+
+// MARK: - 分段控件
+
+/// 多选一(目前给「颜色外观」的三档用)。
+///
+/// 视觉不另起一套:凹槽轨道 `tabRail` + 选中处一枚会滑的实心舌 `puck` + 顶部受光唇 `puckLip`,
+/// 与 `SettingsTabRail` 完全同源 —— 同一个 App 里"多选一"只该有一种长相,
+/// 否则用户会以为它们不是一类东西。
+struct BeamSegmented: View {
+    struct Option: Identifiable {
+        let id: String   // 落进 UserDefaults 的值
+        let label: String
+    }
+
+    let options: [Option]
+    @Binding var value: String
+    @Namespace private var segNS
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options) { o in
+                Button {
+                    guard value != o.id else { return }
+                    withAnimation(MotionPolicy.animation(SettingsMotion.puck)) { value = o.id }
+                } label: {
+                    Text(o.label)
+                        .font(SettingsFont.tab)
+                        .foregroundStyle(value == o.id ? SettingsTheme.ink : SettingsTheme.ink2)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 3)
+                        .background {
+                            if value == o.id {
+                                RoundedRectangle(cornerRadius: SettingsMetrics.puckRadius,
+                                                 style: .continuous)
+                                    .fill(SettingsTheme.puck)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: SettingsMetrics.puckRadius,
+                                                         style: .continuous)
+                                            .strokeBorder(
+                                                LinearGradient(colors: [SettingsTheme.puckLip, .clear],
+                                                               startPoint: .top, endPoint: .center),
+                                                lineWidth: SettingsMetrics.hairline)
+                                    )
+                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: "seg", in: segNS)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                .accessibilityAddTraits(value == o.id ? [.isSelected] : [])
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(SettingsTheme.tabRail)
+        )
+    }
+}

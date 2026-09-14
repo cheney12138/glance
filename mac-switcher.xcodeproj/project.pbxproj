@@ -9,11 +9,14 @@
 /* Begin PBXBuildFile section */
 		5A0000000000000000000011 /* mac_switcherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000021 /* mac_switcherApp.swift */; };
 		AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F04 /* SingleInstanceGuard.swift */; };
+		AA0000000000000000000F0A /* AppearancePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F0B /* AppearancePreference.swift */; };
 		5A0000000000000000000012 /* PermissionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000023 /* PermissionMonitor.swift */; };
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
 		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
 		5A0000000000000000000016 /* WindowEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000027 /* WindowEnumerator.swift */; };
+		AA0000000000000000000F07 /* AXWindowList.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F08 /* AXWindowList.swift */; };
+		AA0000000000000000000F05 /* ThumbnailRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F06 /* ThumbnailRefresher.swift */; };
 		5A0000000000000000000017 /* MruEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000028 /* MruEvidence.swift */; };
 		5A0000000000000000000019 /* Snapshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000030 /* Snapshotter.swift */; };
 		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
@@ -41,12 +44,15 @@
 /* Begin PBXFileReference section */
 		5A0000000000000000000021 /* mac_switcherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mac_switcherApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F04 /* SingleInstanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleInstanceGuard.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F0B /* AppearancePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreference.swift; sourceTree = "<group>"; };
 		5A0000000000000000000022 /* mac-switcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "mac-switcher.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000023 /* PermissionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionMonitor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000025 /* CursorScreenAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorScreenAnchor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
 		5A0000000000000000000027 /* WindowEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowEnumerator.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F08 /* AXWindowList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXWindowList.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F06 /* ThumbnailRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailRefresher.swift; sourceTree = "<group>"; };
 		5A0000000000000000000028 /* MruEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MruEvidence.swift; sourceTree = "<group>"; };
 		5A0000000000000000000030 /* Snapshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshotter.swift; sourceTree = "<group>"; };
 		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
@@ -147,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				5A00000000000000000000A3 /* PanelTokens.swift */,
+				AA0000000000000000000F0B /* AppearancePreference.swift */,
 				5A00000000000000000000A4 /* PanelMotion.swift */,
 				5A00000000000000000000A5 /* PanelGlass.swift */,
 				5A00000000000000000000A6 /* AppIconProvider.swift */,
@@ -176,6 +183,8 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000027 /* WindowEnumerator.swift */,
+				AA0000000000000000000F08 /* AXWindowList.swift */,
+				AA0000000000000000000F06 /* ThumbnailRefresher.swift */,
 				5A0000000000000000000028 /* MruEvidence.swift */,
 				5A0000000000000000000030 /* Snapshotter.swift */,
 			);
@@ -289,11 +298,14 @@
 			files = (
 				5A0000000000000000000011 /* mac_switcherApp.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
+				AA0000000000000000000F0A /* AppearancePreference.swift in Sources */,
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,
 				5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */,
 				5A0000000000000000000015 /* HotkeyTap.swift in Sources */,
 				5A0000000000000000000016 /* WindowEnumerator.swift in Sources */,
+				AA0000000000000000000F07 /* AXWindowList.swift in Sources */,
+				AA0000000000000000000F05 /* ThumbnailRefresher.swift in Sources */,
 				5A0000000000000000000017 /* MruEvidence.swift in Sources */,
 				5A0000000000000000000019 /* Snapshotter.swift in Sources */,
 				5A0000000000000000000020 /* PanelController.swift in Sources */,

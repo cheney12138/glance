@@ -14,10 +14,10 @@ struct PreviewPanelView: View {
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
     var body: some View {
-        VStack(spacing: PanelMetrics.trayGap) {
-            caption
-            thumbRow
-        }
+        // **没有题头行**(2026-09-14 用户口径:"你把额头去掉我看看效果"):
+        // App 名已由长条里选中的那个图标承担、窗口数由卡片张数承担 —— 那行只是把两件已知的事各写一遍,
+        // 还占掉托盘顶部一整条高度。去掉后托盘 = 卡片 + 芯片
+        thumbRow
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom)
@@ -41,20 +41,6 @@ struct PreviewPanelView: View {
         // 入场与退场都不做动效(与长条同一裁决;退场是 2026-09-14 砍的:用户实评"拖沓")。
         // 窗口本身由控制器 orderOut,这里不再需要自己的 shown 状态
         .opacity(controller.isVisible ? 1 : 0)
-    }
-
-    private var caption: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 8) {
-            Text(controller.currentGroup?.appName ?? "")
-                // medium 而不是 semibold:18pt 的粗体标题是"网页弹窗感"的主因(macOS 窗口标题是 13 medium)
-                .font(.system(size: PanelMetrics.captionSize, weight: .medium))
-                .foregroundStyle(PanelColors.txt1)
-            Text("· \(windows.count) 个窗口")
-                .font(.system(size: PanelMetrics.countSize, weight: .medium))
-                .foregroundStyle(PanelColors.txt2)
-        }
-        .frame(height: PanelMetrics.captionH)
-        .lineLimit(1)
     }
 
     private var thumbRow: some View {
@@ -174,67 +160,64 @@ private struct WindowThumb<Overlay: View>: View {
     @ViewBuilder let traffic: () -> Overlay
     let motion: Animation?
 
-    /// 卡片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时尾部省略
+    /// 芯片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时先截文字再截宽度
     private var displayTitle: String {
         PanelLayout.title(WindowTitle.display(raw: record.title, bundleID: bundleID))
     }
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                if let image {
-                    // **fill 定版**(2026-09-14 试过 fit,退回):
-                    // fit 虽然不裁内容,但卡片是**定尺**的窗口卡,而红绿灯锚在卡片左上角 ——
-                    // 宽窗(终端 1.83)被 fit 上下留出"信纸边"后,三粒灯就落在浅色空边上,
-                    // 用户实评"加歪了"。fill 只裁两侧几个点,内容仍是满幅,灯稳稳落在画面里。
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle().fill(Color.gray.opacity(0.15))
-                    Text("截图中…")
-                        .font(.system(size: PanelMetrics.titleSize))
-                        .foregroundStyle(PanelColors.txt2)
-                }
-            }
-            .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
-            .clipped()
-            // 红绿灯叠在截图左上(macOS 窗的位置)。点它们不会关面板:
-            // 点击落在面板内,不触发"面板外点击 = 放弃"那套判定。
-            // 顶边先垫一条渐变(承接红绿灯,浅底截图上才不糊);再把三粒灯压上去。
-            // 点击落在面板内,不触发"面板外点击 = 放弃"那套判定
-            // 「座」= **毛玻璃的渐变**:把这张截图自己再画一份、模糊掉,然后用纵向渐变遮成"上糊下清"。
-            // 三版才走到这里,记下来免得重走:
-            //   · 径向暗斑   → 用户:"阴影做的太捞了"(浅色截图上就是一块脏印);
-            //   · 整条暗渐变 → 用户:"不是黑的一团,是**毛玻璃**的效果"(而且要和长条的模糊一致);
-            //   · 现在这版   → 不加任何暗色,只是把画面自己糊掉,再用渐变过渡回清晰。
-            // 几何必须与底图**逐像素对齐**(同样的 frame + .fill + clipped),否则模糊层会与底图错位。
-            .overlay {
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
-                        .clipped()
-                        .blur(radius: PanelMetrics.lightsBlur, opaque: true)
-                        .mask(alignment: .top) {
-                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                                .frame(height: PanelMetrics.lightsFade)
-                        }
-                        .allowsHitTesting(false)
-                }
-            }
-            .overlay(alignment: .topLeading) { traffic().padding(9) }
 
-            Text(displayTitle)
-                .font(.system(size: PanelMetrics.titleSize, weight: .regular))
-                .foregroundStyle(PanelColors.thumbTitle)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 7)
-                .frame(width: PanelMetrics.thumbW, height: PanelMetrics.titleH, alignment: .leading)
-                .background(PanelColors.thumbPaper)
+    var body: some View {
+        // 卡片与芯片**分离**:环、浮起、阴影都只长在卡片上,芯片是卡片之外的一枚胶囊
+        // (用户口径:"不跟预览窗耦合" —— 所以选中态的各种形变不会拖着芯片一起动)
+        VStack(spacing: PanelMetrics.chipGap) {
+            card
+            chip
         }
         .frame(width: PanelMetrics.thumbW, height: PanelMetrics.thumbH)
+    }
+
+    /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
+    private var card: some View {
+        ZStack {
+            if let image {
+                // **fill 定版**(2026-09-14 试过 fit,退回):
+                // fit 虽然不裁内容,但卡片是**定尺**的窗口卡,而红绿灯锚在卡片左上角 ——
+                // 宽窗(终端 1.83)被 fit 上下留出"信纸边"后,三粒灯就落在浅色空边上,
+                // 用户实评"加歪了"。fill 只裁两侧几个点,内容仍是满幅,灯稳稳落在画面里。
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.15))
+                Text("截图中…")
+                    .font(.system(size: PanelMetrics.titleSize))
+                    .foregroundStyle(PanelColors.txt2)
+            }
+        }
+        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
+        .clipped()
+        // 「座」= **毛玻璃的渐变**:把这张截图自己再画一份、模糊掉,再用纵向渐变遮成"上糊下清"。
+        // 三版才走到这里,记下来免得重走:
+        //   · 径向暗斑   → 用户:"阴影做的太捞了"(浅色截图上就是一块脏印);
+        //   · 整条暗渐变 → 用户:"不是黑的一团,是**毛玻璃**的效果"(而且要和长条的模糊一致);
+        //   · 现在这版   → 不加任何暗色,只是把画面自己糊掉,再用渐变过渡回清晰。
+        // 几何必须与底图**逐像素对齐**(同样的 frame + .fill + clipped),否则模糊层会与底图错位。
+        .overlay {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
+                    .clipped()
+                    .blur(radius: PanelMetrics.lightsBlur, opaque: true)
+                    .mask(alignment: .top) {
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: PanelMetrics.lightsFade)
+                    }
+                    .allowsHitTesting(false)
+            }
+        }
+        // 三粒灯压在最上面。点它们不会关面板:点击落在面板内,不触发"面板外点击 = 放弃"那套判定
+        .overlay(alignment: .topLeading) { traffic().padding(9) }
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
         .overlay(
@@ -249,5 +232,30 @@ private struct WindowThumb<Overlay: View>: View {
         .scaleEffect(selected ? 1.045 : 1)
         .elevation(selected ? .thumbActive : .thumb)
         .animation(motion, value: selected)
+    }
+
+    /// 窗口名**芯片**:卡片之外、按卡片居中;长了先截文字(不是截胶囊),绝不超过卡片宽
+    private var chip: some View {
+        HStack(spacing: 5) {
+            // 选中圆点:占位永远在(避免文字跳),只有选中那一枚亮成系统强调色
+            Circle()
+                .fill(selected ? PanelColors.chipDotOn : PanelColors.chipDotOff)
+                .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+            Text(displayTitle)
+                // regular 而不是 medium:芯片要"轻",字重是最直接的一档(题头那边用 medium 是因为它是标题)
+                .font(.system(size: PanelMetrics.titleSize, weight: .regular))
+                .foregroundStyle(PanelColors.thumbTitle)
+                .lineLimit(1)
+                // 中段:芯片宽度不够时保头保尾(尾部才是文件名/工程的区分位)
+                .truncationMode(.middle)
+        }
+            // 文字宽度上限里要扣掉圆点与间距,否则整枚芯片会超出卡片宽
+            .frame(maxWidth: PanelMetrics.thumbW - 18 - PanelMetrics.chipDot - 5)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 2)
+            .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
+            .overlay(Capsule(style: .continuous)
+                .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+            .frame(height: PanelMetrics.chipH)
     }
 }

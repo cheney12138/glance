@@ -60,6 +60,22 @@ public enum WindowTitle {
         return picked
     }
 
+    /// **中段截断**(借鉴 AltTab 的 `titleTruncation`:end/middle/start,默认 end)。
+    ///
+    /// 病例(为什么不能尾部截断):`TrainXProductOrderServiceImpl.java` 按尾部斩掉后是
+    /// `TrainXProductOrderServi…` —— 扩展名和文件名的区分位(ServiceImpl)全被吃掉,
+    /// 一排卡片全长得一样。中段截断保头保尾,损失落在中间。
+    ///
+    /// 分工:这里是**第一道**(按字符数,防止超长标题去撑布局);
+    /// 第二道由视图按**真实宽度**收尾(`.truncationMode(.middle)`,中英混排宽度才是准的)。
+    /// 头尾分配的取舍:取不整时**尾部多要一个字符** —— 与上面那条理由同源(信息在尾部)。
+    public static func middleTruncate(_ raw: String, limit: Int) -> String {
+        guard limit >= 3, raw.count > limit else { return raw }
+        let head = (limit - 1) / 2          // 向下取整 → 余下的那个字符留给尾部
+        let tail = limit - 1 - head
+        return String(raw.prefix(head)) + "…" + String(raw.suffix(tail))
+    }
+
     /// 结尾像 `.<扩展名>` 吗(≤12 字符的字母数字,`xcodeproj` 也要认)
     private static func looksLikeFileName(_ s: String) -> Bool {
         guard let dot = s.lastIndex(of: "."), dot != s.startIndex else { return false }

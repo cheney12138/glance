@@ -84,6 +84,12 @@ struct PanelView: View {
                     motion: controller.selectionAnimation(PanelMotion.select)
                 )
                 .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
+                // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
+                // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
+                //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的"。
+                // 裁切由外层玻璃圆角负责:超出下沿的部分被裁掉,像从板子下沿钻出来
+                .offset(y: i == controller.appIndex ? controller.contentEntryRise : 0)
                 .contentShape(Rectangle())
                 .onHover { inside in if inside { controller.hoverApp(i) } }
                 // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
@@ -122,8 +128,8 @@ struct PanelView: View {
             )
             .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
             .offset(x: CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap),
-                    // 入场偏移:从底部升起时,开场那一帧它还在面板下缘外面(被圆角裁掉)
-                    y: controller.puckEntryRise)
+                    // 纵向 = 入场升起(与选中那一格同源同值,所以两者永远同步)
+                    y: controller.contentEntryRise)
             .elevation(.puck)
             // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
             // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation

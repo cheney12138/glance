@@ -14,3 +14,15 @@ let stdoutIsLineBuffered: Void = {
         setvbuf(stdout, nil, _IOLBF, 0)
     }
 }()
+
+
+/// 输入管线日志的**统一时间戳**(毫秒,相对进程启动)。
+///
+/// 为什么需要(2026-09-14):用户报"指针选窗大概有 0.5s 延迟",而日志里没有时间 ——
+/// 这种"晚了多少毫秒"的毛病,没有时间戳就只能靠感觉争论(本仓库的老规矩:先让它可观测,再改)。
+/// 只在事件级/选中级的几行上用;不要撒到所有日志上,否则真正的信号会被淹掉。
+private let glanceLogStart = CFAbsoluteTimeGetCurrent()
+
+func glog(_ line: String) {
+    print(String(format: "[%7.0fms] %@", (CFAbsoluteTimeGetCurrent() - glanceLogStart) * 1000, line))
+}

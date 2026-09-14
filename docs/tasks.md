@@ -45,6 +45,45 @@
 > `design-system.md` 同属多个任务),按文件切出来的中间提交不可构建 —— 所以合成一笔提交,
 > 分任务账记在本文件里。要重放成五段可以再说,先把账记清楚。
 
+## 二·续、本轮增量(T23–T31,**未提交**)
+
+| T | 一句话 | 落点 | 证据 |
+|---|---|---|---|
+| T23 | 托盘版式三改:去掉题头行 → 芯片移出卡片成为独立胶囊 → 选中芯片前加**圆点**(系统强调色,未选中留淡灰占位防文字跳动)→ 留白**调换**(上 20 / 下 12,原来上 12 / 下 18) | `Panel/{PreviewPanelView,PanelController}.swift`、`Design/PanelTokens.swift` | 用户实机三张自截定稿;留白依据用户实评"重心在顶部,留白跑到下面了" |
+| T24 | ` 循环窗口(开关,默认关):**不碰系统热键**,靠会话期吞键(DockDoor 同法) | `Trigger/HotkeyTap.swift`、`Settings/SettingsView.swift` | DockDoor 源码实证(`KeybindHelper.swift`:`options: .defaultTap` + `return nil` + `guard isKeybindSessionActive`);用户"功能没问题" |
+| T25 | 缩略图管线:保温器(激活/换屏事件,无定时器)+ **AX 幽灵窗过滤** + macOS 26 `captureScreenshot` + 单次超时/重试/跨会话缓存 | `Inventory/{ThumbnailRefresher,AXWindowList,Snapshotter,WindowEnumerator}.swift`、`docs/architecture.md` §7 | 实测 SCShareableContent 28ms / 每窗 26–52ms / 10 窗串行 346ms;幽灵窗探针零误伤(用户"ok,剔除了") |
+| T26 | 事件日志加**毫秒时间戳**,hover 拆成"到达 / 接受"两行 —— 让"有多慢"变成数字,不再靠感觉争论 | `Diagnostics/Stdout.swift`、`Trigger/HotkeyTap.swift`、`Panel/PanelController.swift`、`Focus/WindowFocuser.swift` | 用户日志实据:每对 `hover 到窗`→`窗口选中` 相差 **0ms**,而 App 层选中到第一次卡片 hover 空着 **652ms** |
+| T27 | 指针重定位:视图在指针底下**自己挪位**时 SwiftUI 不补发 hover(托盘换组换宽度,1 扇 288pt / 2 扇 540pt → 卡片平移 ~126pt)→ 尺寸变了就按指针位置重判卡片 | `Panel/PanelController.swift`(`resyncSelectionUnderPointer`) | 同 T26 的日志;修后应出现 `[T6] 视图挪位后指针重定位(卡片)` |
+| T28 | 颜色外观:浅色 / 深色 / **自动(默认)**。一处 `NSApp.appearance` 管全套(面板取色全走按外观解析的动态色),设置窗一起换 | `Design/AppearancePreference.swift`、`Settings/{SettingsView,SettingsControls}.swift`(新 `BeamSegmented`)、`App/mac_switcherApp.swift` | 架构 ✅ / 构建 ✅;分段控件视觉复用 `SettingsTabRail` 的凹槽 + 会滑的实心舌 |
+| T29 | 借鉴 AltTab 三件:**全局 AX 消息超时 0.5s**(AltTab:全局 1s / app 元素 0.25s)、**F 全屏 / H 隐藏 App**(AltTab 默认键)、**标题中段截断**(AltTab `titleTruncation`) | `Inventory/AXWindowList.swift`、`App/mac_switcherApp.swift`、`Trigger/HotkeyTap.swift`、`Panel/PanelController.swift`、`Focus/WindowFocuser.swift`、`Packages/GlanceCore/WindowTitle.swift`、`Tools/HoldChord.swift` | `swift test` 22 passed(含中段截断 5 例);`AXUIElementSetMessagingTimeout(systemWide, 0.5)` 实测 err=0;构建 ✅ / 架构 ✅;H 的两幕病例见下 |
+| T30 | **一局之内顺序冻结**(`mergeRefreshed`):中途动作只改"窗"不改"位",MRU 只在**开局**排一次 | `Panel/PanelController.swift` | 由 T29 第二幕逼出来;核实行现在把顺序也打进日志,便于验证 |
+| T31 | 入场动效**同步**:升起偏移的作用范围 = **托底 + 选中的那一格图标**(同一次 `withAnimation`、同一根弹簧 `PanelMotion.entrance`),其余图标一律不动 | `Panel/{PanelView,PanelController}.swift`、`Design/PanelMotion.swift` | 用户实评两轮:①「托底块还没滑上去,App 图标已经上去了……期望跟正常 Tab 切换一样,动效是同步的」→ 我第一版做成**整行**一起升 ✗ 被否(「你改成全部图标一起弹出来了」);② 正确范围就是"正常 Tab 切换"的范围 —— 动的永远只有托底与新选中的那个图标。命名同步对齐(设置 key 不动,偏好不丢) |
+
+> T23–T31 都发生在同一个工作区(圆点 → 留白 → ` 开关 → 时间戳 → 重定位 → 外观 → AltTab 三件,
+> 层层压在同一批文件上),按文件切出来的中间提交不可构建 —— 与 T18–T22 同一种情况:
+> 合成一笔提交,分任务账记在这里。
+
+### T29 病例(H 隐藏的两幕,同日)
+
+**第一幕**:隐藏之后 App 还挂在 Switcher 栏上,松开 ⌥ 又把刚隐藏的 App 唤起来了。
+根因不在 H 的语义,而在**时间**:`hide()` / 关闭 / 最小化都是**异步**的(隐藏与最小化有
+0.2–0.3s 动画,App 忙时更久),而 `refreshAfterAction()` 只等 0.18s 重枚举 —— 那一刻系统里
+那扇窗**还看得见**:分组没变、选中还停在它上面,松开 ⌥ 走 SLPS 前置 → 被隐藏的 App 又回来了。
+修法:`PanelController.optimisticRemoval`(动作一发先按已知结果改本地列表,0.18s 后再核对)。
+Q/W/M 保留这条;**zoom/fullscreen 不摘**(全屏是进出 Space,猜错方向会把窗摘没)。教训见
+`docs/debugging.md` §4.2。
+
+**第二幕**:改完用户再报「先是消失了,然后又出现了……整条应用栏的排序乱跳」,
+期望「位置不变,只是窗口消失了」。两个叠加的错误:
+① 第一幕的修法对 H 是"摘**整组**" → App 数变 → 图标数变 → 整条栏重排;0.18s 后核对把组带回来
+→ 再排一次;隐藏动画放完 → 第三次;
+② 核对时**又按 MRU 排了一遍**(动作之后 MRU 必变:刚碰过的 App 排最前)→ 每次动作都重排一次。
+
+正确模型本来就在代码里:`WindowEnumerator` 的 **T15 无窗 App** —— 隐藏完的 App 会作为
+"无窗 App"继续列着(macOS 原生也是如此:隐藏的 App 仍在 ⌘Tab 里,只是没有可预览的窗)。
+所以 H 的正确做法是**留在原位、只把它的窗清空**(`hiddenPIDs` 压住系统还没隐完的那 0.2–0.3s);
+顺带把这一条推广成 T30 的**顺序冻结**。第一幕的 `optimisticRemoval` 因此收窄为只服务 Q/W/M。
+
 ## 三、下一批(候选,按收益排序)
 
 | 候选 | 为什么 | 参考 |
@@ -52,9 +91,27 @@
 | 🚧 **输入状态机进核**(`GlanceCore.HotkeyStateMachine`:`(state, event, config, pinPanel) → (state, actions, swallow)`) | 本轮连修三个输入 bug(漏一颗 ⌘↓ 就整局失守 / 超时那颗粒放行 / Carbon 不重复投递导致 Tab 不动),全靠真机连按才发现。抽成纯函数后**全都能写成测试** | `docs/architecture.md` §6.1 |
 | 🚧 **窗口归属几何进核**(`ownsByContextScreen` + `quartzFrame`) | 双屏/跨屏是最容易错的地方(T4 就翻过车),现在跟 AX/CGS 调用缠在一起,没法单独验 | §6.2 |
 | 🚧 **MRU 排序进核**(`MruEvidence.ordered`) | 输入是 pid 序列、输出是顺序,天然纯函数 | §6.3 |
-| 👀 应用黑名单 / Dock 悬停预览 | 被咬 ≥2 次再立项(README 观望项) | README |
-| 👀 退场淡出(380ms)若仍嫌重 | 一个常量 `PanelMetrics.tFade`;入场已下线(T19) | `Design/PanelMotion.swift` |
-| ❌ 同 App 窗互跳 | 原生 `⌘\`` 已覆盖,不重复造 | README |
+| 👀 **面板内搜索**(打字过滤 App) | **2026-09-14 用户判"先不做"**:不是刚需("不然我为什么不直接用 Raycast")。交互方案已想清,要做直接照做:面板起来**直接打字**即搜(吞键范围扩到 ASCII 可打印字符)、查询显示在图标行上方、只匹配 App 名子串、Esc 先清空再关闭、**不接 IME**(AltTab #5766 的输入法血案) | 本文 §五 |
+| 👀 应用例外名单(黑名单/白名单) | 成本最低、人人会要的一件(借鉴清单第 1 条) | 本文 §五 |
+| 👀 窗口排序可选(MRU / 标题 / 屏幕位置) | 纯函数进核 + 单测的正面案例 | 本文 §五 |
+| 👀 多屏/全空间窗开关 | 会动到"本屏窗"这条冻结定义,要先拍板 | `CONTEXT.md` |
+| 👀 应用黑名单 / Dock 悬停预览(DockDoor 看家功能) | 被咬 ≥2 次再立项(README 观望项);Dock 悬停预览要走监听 Dock 那一套,成本高 | README |
+| ✅ 同 App 窗互跳 | 已做(T24):` 循环窗口开关。**不关系统热键**,靠会话期吞键 —— 与原生 `⌘\`` 只差"面板开着的那一瞬间"由谁接管 | 本文 T24 |
+| ❌ 日历小组件 / Aero Shake / 自动滚动 / 钉控制条 | DockDoor 有,但那是"桌面工具";我们是"⌘Tab 切换器",定位不符 | 本文 §五 |
+
+## 五、参考项目的可抄清单(2026-09-14 侦察)
+
+源码都在本地:`~/alt-tab-macos`(设置页 = Appearance/Controls/Exceptions/General)、`~/DockDoor`(设置项 60+ 条)。
+按"能不能拿到 Glance"筛过一遍,结论如下(细节与理由见 `docs/architecture.md` §7 与上面第三节):
+
+| 值得拿 | 出处 | 备注 |
+|---|---|---|
+| 缩略图**事件驱动刷新** | AltTab `WindowCaptureEvents` | ✅ 已落地(`Inventory/ThumbnailRefresher.swift`,只用公开通知,无定时器) |
+| 例外名单 | AltTab `Exceptions` / DockDoor `Blacklist` | 待做,成本最低 |
+| 面板内搜索 | AltTab `Search` / DockDoor `searchFuzziness` | 用户判"先不做",方案已留档 |
+| 窗口排序可选 | AltTab `Order windows by` | 顺手能做,纯核 |
+| macOS 26 抓图 API 与并发闸 | AltTab `WindowCaptureEvents` 注释 | ✅ 已落地(见 §7) |
+| **不拿**:Dock 悬停预览 / 日历 / Aero Shake / 自动滚动 / 钉控制条 / 接管 ⌘\` | DockDoor / AltTab | 定位不符或已被判过 |
 
 ## 四、纪律
 

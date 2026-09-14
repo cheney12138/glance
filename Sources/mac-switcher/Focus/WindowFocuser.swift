@@ -70,7 +70,7 @@ enum WindowFocuser {
         }
         makeKeyWindow(&psn, wid: w.wid)
         raiseWithinApp(w)
-        print("[T7] 已聚焦: \(w.ownerName) — \(w.title)")
+        glog("[T7] 已聚焦: \(w.ownerName) — \(w.title)")
     }
 
     // MARK: - 私有区(以下不许被外部调用,也不许离开这个文件)
@@ -131,6 +131,36 @@ enum WindowFocuser {
 
     /// 缩放(绿灯):按它的 zoom 按钮——绿灯是"缩放"不是"全屏",
     /// App 自己决定 content-fit;动作收口与红绿灯语义对齐(预览卡 T14)
+    /// F:选中窗进出全屏(AltTab `toggleFullscreenWindowShortcut`,默认 F)。
+    ///
+    /// 与 Z(zoom,绿灯那颗"铺满")**不是一回事**:全屏会进出**独立的 Space** ——
+    /// 所以调用方要重枚举(窗可能整扇离开当前语境屏),面板位置也得跟着重算。
+    /// AX 没有公开常量,属性名是字符串 `AXFullScreen`(AltTab 同写法)。
+    /// 不支持全屏的窗(某些面板/工具窗)读属性就失败 —— 静默返回,不做任何提示。
+    static func toggleFullscreen(window w: WindowRecord) {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+        var current: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXFullScreen" as CFString, &current) == .success else {
+            print("[T29] 这扇窗不支持全屏,忽略")
+            return
+        }
+        let isFullscreen = (current as? Bool) ?? false
+        AXUIElementSetAttributeValue(element, "AXFullScreen" as CFString,
+                                     (!isFullscreen) as CFBoolean)
+    }
+
+    /// H:隐藏选中 App(AltTab `hideShowAppShortcut`,默认 H —— 他们那个是"隐藏/显示"切换)。
+    ///
+    /// 我们只能**单向隐藏**:本产品只列**在屏窗**(`.optionOnScreenOnly`),App 一隐藏,
+    /// 它的窗立刻离屏,面板里也就再也找不到它 —— 这正是原生 ⌘H 的语义,
+    /// 想唤回走 Dock 或另开一局。要做成"再按一次唤回",就得把隐藏窗也纳进枚举(那是 T30 候选)。
+    /// 返回是否受理(hide() 是**异步**的:受理 ≠ 已经隐完,面板不能等它 —— 见 PanelController.optimisticRemoval)
+    @discardableResult
+    static func hideApp(pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
+        return app.hide()
+    }
+
     static func zoom(window w: WindowRecord) {
         guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
         var button: AnyObject?

@@ -9,6 +9,10 @@ struct MacSwitcherApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
         _ = stdoutIsLineBuffered
+        // 外观要在任何窗/面板画出来之前摆好(面板取的全是按外观解析的动态色)
+        AppearancePreference.apply()
+        // AX 超时也在此刻定死:它是进程级设置,晚一步就有一次无上限的跨进程等待
+        AXWindowList.installGlobalMessagingTimeout()
         // **最先跑**:两个实例会抢同一组 ⌘Tab 并画出叠在一起的面板(见 SingleInstanceGuard 的病例),
         // 而且必须在 NativeHotkeys / 事件 tap 之前拦住,退出时系统状态才是一行没动
         SingleInstanceGuard.enforce()
@@ -41,6 +45,8 @@ struct MacSwitcherApp: App {
                     permissions.refresh()
                     if !permissions.allGranted { showPermissions() }
                     MruEvidence.shared.start()
+                    // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
+                    ThumbnailRefresher.shared.start()
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
                     panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
