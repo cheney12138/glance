@@ -26,6 +26,14 @@ enum WindowEnumerator {
 
     static func enumerate(owning screen: NSScreen?) -> [AppGroup] {
         guard let screen else { return [] }
+        return orderByMRU(rawGroups(on: screen))
+    }
+
+    /// 枚举里**与主线程无关**的那一半:CGWindowList 与 NSWorkspace 都是线程安全的读操作。
+    /// 拆出来是为了能在后台跑 —— 这几十毫秒压在事件 tap 的回调里,系统会判回调超时把 tap 停用,
+    /// 漏出去的那几颗 ⌘Tab 就是“用着用着变成原生切换器”的现场(实机量到 begin 后主线程被占 ~110ms)。
+    /// 剩下的排序证据(`MruEvidence`)是主线程状态,由 `orderByMRU` 在主线程补上。
+    nonisolated static func rawGroups(on screen: NSScreen) -> [AppGroup] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         guard let infos = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
@@ -83,6 +91,12 @@ enum WindowEnumerator {
             )
         }
 
+        return Array(byPID.values)
+    }
+
+    /// MRU 证据排序(主线程状态,必须在主线程调用)
+    static func orderByMRU(_ groups: [AppGroup]) -> [AppGroup] {
+        let byPID = Dictionary(groups.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
         return MruEvidence.shared.ordered(pids: Array(byPID.keys)).compactMap { byPID[$0] }
     }
 
@@ -91,7 +105,8 @@ enum WindowEnumerator {
     /// 坐标系注意:CGWindowList 的 bounds 是 Quartz 坐标(主屏左上原点),
     /// NSScreen.frame 是 AppKit 坐标(主屏左下原点),Y 轴反向。
     /// 交集前必须统一,否则外接屏恒无交集(T4 双屏实机现形)。
-    private static func ownsByContextScreen(_ bounds: CGRect, contextScreen: NSScreen) -> Bool {
+    /// `nonisolated`:归属判定要跟着枚举一起下后台(见 `rawGroups`);`NSScreen.screens` 是快照式读取。
+    nonisolated private static func ownsByContextScreen(_ bounds: CGRect, contextScreen: NSScreen) -> Bool {
         let area = bounds.width * bounds.height
         guard area > 0 else { return false }
         var bestScreen: NSScreen?
@@ -106,7 +121,7 @@ enum WindowEnumerator {
     }
 
     /// NSScreen.frame(AppKit)→ Quartz 坐标。只需翻转 Y:qy = 主屏高 - y - 高
-    static func quartzFrame(of screen: NSScreen) -> CGRect {
+    nonisolated static func quartzFrame(of screen: NSScreen) -> CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let f = screen.frame
         return CGRect(x: f.origin.x, y: primaryHeight - f.origin.y - f.height, width: f.width, height: f.height)

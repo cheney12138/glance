@@ -22,7 +22,19 @@
 		5A0000000000000000000073 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000071 /* SettingsStore.swift */; };
 		5A0000000000000000000074 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000072 /* SettingsView.swift */; };
 		5A0000000000000000000081 /* PreviewPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000080 /* PreviewPanelView.swift */; };
+		5A0000000000000000000091 /* SettingsTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000090 /* SettingsTheme.swift */; };
+		5A0000000000000000000093 /* SettingsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000092 /* SettingsControls.swift */; };
+		5A0000000000000000000095 /* NativeHotkeyGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000094 /* NativeHotkeyGuards.swift */; };
+		5A0000000000000000000097 /* Stdout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000096 /* Stdout.swift */; };
+		5A00000000000000000000A7 /* PanelTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A3 /* PanelTokens.swift */; };
+		5A00000000000000000000A8 /* PanelMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A4 /* PanelMotion.swift */; };
+		5A00000000000000000000A9 /* PanelGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A5 /* PanelGlass.swift */; };
+		5A00000000000000000000AA /* AppIconProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A6 /* AppIconProvider.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXBuildFile section(package) */
+		5A00000000000000000000B2 /* GlanceCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5A00000000000000000000B1 /* GlanceCore */; };
+/* End PBXBuildFile section(package) */
 
 /* Begin PBXFileReference section */
 		5A0000000000000000000021 /* mac_switcherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mac_switcherApp.swift; sourceTree = "<group>"; };
@@ -41,13 +53,36 @@
 		5A0000000000000000000071 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		5A0000000000000000000072 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000080 /* PreviewPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPanelView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000090 /* SettingsTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTheme.swift; sourceTree = "<group>"; };
+		5A0000000000000000000092 /* SettingsControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsControls.swift; sourceTree = "<group>"; };
+		5A0000000000000000000094 /* NativeHotkeyGuards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHotkeyGuards.swift; sourceTree = "<group>"; };
+		5A00000000000000000000A3 /* PanelTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTokens.swift; sourceTree = "<group>"; };
+		5A00000000000000000000A4 /* PanelMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelMotion.swift; sourceTree = "<group>"; };
+		5A00000000000000000000A5 /* PanelGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelGlass.swift; sourceTree = "<group>"; };
+		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
+		5A0000000000000000000096 /* Stdout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stdout.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5A00000000000000000000B0 /* XCLocalSwiftPackageReference "Packages/GlanceCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/GlanceCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5A00000000000000000000B1 /* GlanceCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GlanceCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		5A0000000000000000000042 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A00000000000000000000B2 /* GlanceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,8 +100,9 @@
 		5A0000000000000000000032 /* Sources/mac-switcher */ = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000021 /* mac_switcherApp.swift */,
-				5A0000000000000000000035 /* Shared */,
+				5A00000000000000000000A0 /* App */,
+				5A00000000000000000000A1 /* Design */,
+				5A00000000000000000000A2 /* Diagnostics */,
 				5A0000000000000000000034 /* Permissions */,
 				5A0000000000000000000036 /* Trigger */,
 				5A0000000000000000000037 /* Inventory */,
@@ -94,18 +130,38 @@
 			path = Permissions;
 			sourceTree = "<group>";
 		};
-		5A0000000000000000000035 /* Shared */ = {
+		5A00000000000000000000A0 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000025 /* CursorScreenAnchor.swift */,
+				5A0000000000000000000021 /* mac_switcherApp.swift */,
 			);
-			path = Shared;
+			path = App;
+			sourceTree = "<group>";
+		};
+		5A00000000000000000000A1 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				5A00000000000000000000A3 /* PanelTokens.swift */,
+				5A00000000000000000000A4 /* PanelMotion.swift */,
+				5A00000000000000000000A5 /* PanelGlass.swift */,
+				5A00000000000000000000A6 /* AppIconProvider.swift */,
+			);
+			path = Design;
+			sourceTree = "<group>";
+		};
+		5A00000000000000000000A2 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000096 /* Stdout.swift */,
+			);
+			path = Diagnostics;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000036 /* Trigger */ = {
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000026 /* HotkeyTap.swift */,
+				5A0000000000000000000094 /* NativeHotkeyGuards.swift */,
 			);
 			path = Trigger;
 			sourceTree = "<group>";
@@ -123,6 +179,7 @@
 		5A0000000000000000000038 /* Panel */ = {
 			isa = PBXGroup;
 			children = (
+				5A0000000000000000000025 /* CursorScreenAnchor.swift */,
 				5A0000000000000000000039 /* PanelController.swift */,
 				5A0000000000000000000040 /* PanelView.swift */,
 				5A0000000000000000000080 /* PreviewPanelView.swift */,
@@ -144,6 +201,8 @@
 			children = (
 				5A0000000000000000000071 /* SettingsStore.swift */,
 				5A0000000000000000000072 /* SettingsView.swift */,
+				5A0000000000000000000090 /* SettingsTheme.swift */,
+				5A0000000000000000000092 /* SettingsControls.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -167,6 +226,9 @@
 			productName = "mac-switcher";
 			productReference = 5A0000000000000000000022 /* mac-switcher.app */;
 			productType = "com.apple.product-type.application";
+			packageProductDependencies = (
+				5A00000000000000000000B1 /* GlanceCore */,
+			);
 		};
 /* End PBXNativeTarget section */
 
@@ -192,6 +254,9 @@
 				Base,
 			);
 			mainGroup = 5A0000000000000000000031;
+			packageReferences = (
+				5A00000000000000000000B0 /* XCLocalSwiftPackageReference "Packages/GlanceCore" */,
+			);
 			productRefGroup = 5A0000000000000000000033 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -231,6 +296,14 @@
 				5A0000000000000000000073 /* SettingsStore.swift in Sources */,
 				5A0000000000000000000074 /* SettingsView.swift in Sources */,
 				5A0000000000000000000081 /* PreviewPanelView.swift in Sources */,
+				5A0000000000000000000091 /* SettingsTheme.swift in Sources */,
+				5A0000000000000000000093 /* SettingsControls.swift in Sources */,
+				5A0000000000000000000095 /* NativeHotkeyGuards.swift in Sources */,
+				5A0000000000000000000097 /* Stdout.swift in Sources */,
+				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
+				5A00000000000000000000A8 /* PanelMotion.swift in Sources */,
+				5A00000000000000000000A9 /* PanelGlass.swift in Sources */,
+				5A00000000000000000000AA /* AppIconProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

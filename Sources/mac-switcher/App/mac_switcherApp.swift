@@ -1,10 +1,14 @@
 import SwiftUI
+import GlanceCore
 
 // mac-switcher 入口。T1 范围:菜单栏图标 + 设置占位 + 退出。
 // T2 追加:权限门禁——缺权限时启动即弹引导窗,菜单栏图标带警示态,菜单第一行实时报门禁。
 // 结构备忘:MenuBarExtra 取代 AppDelegate+StatusBarController;T9 设置面板同样走 openWindow。
 @main
 struct MacSwitcherApp: App {
+    /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
+    init() { _ = stdoutIsLineBuffered }
+
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
     private let hotkeys = HotkeyTapCenter()
@@ -25,6 +29,10 @@ struct MacSwitcherApp: App {
         } label: {
             Image(systemName: permissions.allGranted ? "rectangle.3.group" : "exclamationmark.triangle")
                 .onAppear {
+                    // 恢复守卫 + 启动自愈要先装:上一次运行如果被 SIGKILL,原生 ⌘Tab 会一直死着
+                    // (见 NativeSwitcherHotkeys),这件事与权限是否齐备无关
+                    NativeHotkeyGuards.install()
+                    NativeHotkeys.restoreAll()
                     permissions.refresh()
                     if !permissions.allGranted { showPermissions() }
                     MruEvidence.shared.start()
@@ -49,6 +57,9 @@ struct MacSwitcherApp: App {
             SettingsView(store: SettingsStore.shared, permissions: permissions)
         }
         .windowResizability(.contentSize)
+        // 设置窗是"一张纸":标题栏交给窗内的构图(demo 的红绿灯直接浮在纸的左上角,
+        // 棱镜边压在它们下面)。窗口标题仍在 Window 菜单里,窗口照旧可拖、可关。
+        .windowStyle(.hiddenTitleBar)
     }
 
     /// LSUIElement 应用的窗口不会自动到前台。macOS 14 起 activate 降级为"请求",

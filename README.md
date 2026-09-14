@@ -2,7 +2,19 @@
 
 macOS 窗口级 App 切换器(产品名 Glance,工程代号 mac-switcher,bundle id 不变):
 鼠标在哪块屏,就只看哪块屏的窗;选中哪扇窗,就只拉起哪扇窗。
-术语见 `CONTEXT.md`,样式契约见 `design/brand-spec.md`,决策见 `docs/adr/`。
+术语见 `CONTEXT.md`,样式契约见 `design/brand-spec.md`(交互语义)与 `design/v4/design-system.md`
+(面板视觉)、`design/settings-spec.md`(设置窗),决策见 `docs/adr/`。
+
+任务索引(T 号、状态、证据):`docs/tasks.md`。
+
+结构约定(模块怎么分、谁能引用谁、kernel 与 plumbing):`docs/architecture.md`,
+校验器 `Tools/check-architecture.swift`;纯核在 `Packages/GlanceCore`(`swift test` 可跑)。
+
+两套排查工具与手册:输入管线(事件 tap/合成按键)与视觉验证 —— `docs/debugging.md` + `Tools/`。
+
+⚠️ **⌘Tab 接管用私有 SkyLight API 关系统 symbolic hotkey**(见 `docs/adr/0005`):这是**系统级**状态,
+且跨进程退出持久化。动触发层时**必须保留** `NativeSwitcherHotkeys` 的四个兜底恢复口与启动自愈,
+否则用户的 ⌘Tab 会被弄死;手动保险 = `Tools/NativeHotkeys.swift restore`。
 
 ## 开发
 

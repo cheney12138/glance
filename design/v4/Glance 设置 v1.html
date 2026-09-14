@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Glance 设置</title>
+<style>
+  :root{
+    color-scheme: light dark;
+    --paper: #eceef2;
+    --canvas: #dfe2e8;
+    --ink: #16171c;
+    --ink-2: rgba(22,23,28,0.56);
+    --glass: rgba(255,255,255,0.55);
+    --glass-edge: rgba(255,255,255,0.8);
+    --hairline: rgba(22,23,28,0.09);
+    --tab-rail: rgba(22,23,28,0.05);
+    --track-off: rgba(22,23,28,0.14);
+    --key-bg: rgba(22,23,28,0.06);
+    --beam: #2f6fed;
+    --window-shadow: rgba(20,22,30,0.22);
+  }
+  :root[data-theme="dark"]{
+    --paper: #101116;
+    --canvas: #0a0b0e;
+    --ink: #eef0f4;
+    --ink-2: rgba(238,240,244,0.55);
+    --glass: rgba(255,255,255,0.07);
+    --glass-edge: rgba(255,255,255,0.14);
+    --hairline: rgba(255,255,255,0.09);
+    --tab-rail: rgba(255,255,255,0.05);
+    --track-off: rgba(255,255,255,0.18);
+    --key-bg: rgba(255,255,255,0.09);
+    --beam: #4c8dff;
+    --window-shadow: rgba(0,0,0,0.6);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper: #101116; --canvas: #0a0b0e; --ink: #eef0f4; --ink-2: rgba(238,240,244,0.55);
+      --glass: rgba(255,255,255,0.07); --glass-edge: rgba(255,255,255,0.14);
+      --hairline: rgba(255,255,255,0.09); --tab-rail: rgba(255,255,255,0.05);
+      --track-off: rgba(255,255,255,0.18); --key-bg: rgba(255,255,255,0.09);
+      --beam: #4c8dff; --window-shadow: rgba(0,0,0,0.6);
+    }
+  }
+
+  *{box-sizing:border-box;}
+  html,body{ margin:0; height:100%; font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; }
+  body{
+    display:flex; align-items:center; justify-content:center;
+    background: radial-gradient(ellipse at 50% 30%, var(--paper), var(--canvas));
+  }
+
+  .theme-switch{
+    position:fixed; top:20px; right:22px; display:flex; gap:2px;
+    padding:2px; border-radius:9px; background:var(--tab-rail);
+  }
+  .theme-switch button{
+    border:none; background:none; padding:5px 9px; border-radius:7px;
+    font-size:11.5px; color:var(--ink-2); cursor:pointer;
+  }
+  .theme-switch button.active{ background:var(--glass); color:var(--ink); }
+
+  /* ---------------- 窗口 ---------------- */
+  .window{
+    width:600px; height:480px;
+    border-radius:16px; overflow:hidden;
+    display:flex; flex-direction:column;
+    background: var(--paper);
+    box-shadow: 0 36px 70px var(--window-shadow), 0 0 0 1px var(--hairline);
+  }
+
+  .chrome{
+    position:relative; flex-shrink:0;
+    padding:14px 16px 0;
+  }
+  .traffic{ display:flex; gap:7px; }
+  .traffic span{ width:11px; height:11px; border-radius:50%; }
+  .traffic .a{ background:#ff5f57; } .traffic .b{ background:#febc2e; } .traffic .c{ background:#28c840; }
+
+  /* 唯一的高光时刻：棱镜色散边——glance 是关于光透过玻璃的名字，
+     这条细线是全设计里唯一出现光谱色的地方，克制地放在标题栏下沿。 */
+  .prism-edge{
+    margin-top:14px; height:2px;
+    background: linear-gradient(90deg,
+      #ff6b6b, #ffb648 16%, #ffe066 32%, #4ade80 48%, #38bdf8 66%, #8b7cf6 84%, #ff6b6b 100%);
+    opacity:0.55;
+  }
+
+  /* ---------------- 顶部导航：复用切换器本身的"滑动玻璃舌头"机制 ---------------- */
+  .tabs-wrap{ display:flex; justify-content:center; padding:16px 0 14px; flex-shrink:0; }
+  .tabs{
+    position:relative; display:flex; gap:2px;
+    padding:3px; border-radius:12px;
+    background: var(--tab-rail);
+  }
+  .tab-puck{
+    position:absolute; top:3px; bottom:3px; border-radius:9px;
+    background: var(--glass);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08), inset 0 1px 0 var(--glass-edge);
+    transition: transform .34s cubic-bezier(.22,1.5,.36,1), width .34s cubic-bezier(.22,1.5,.36,1);
+  }
+  .tab{
+    position:relative; z-index:1;
+    display:flex; align-items:center; gap:6px;
+    padding:7px 14px; border-radius:9px;
+    font-size:12.5px; font-weight:500; color:var(--ink-2);
+    cursor:pointer; user-select:none;
+    transition: color .2s ease;
+  }
+  .tab.active{ color:var(--ink); }
+  .tab svg{ width:15px; height:15px; opacity:.85; }
+
+  /* ---------------- 内容：单张平铺信息表，不做"每组一张卡片"的套娃 ---------------- */
+  .content{ flex:1; overflow-y:auto; padding:2px 28px 26px; }
+  .group{ margin-bottom:20px; }
+  .group:last-child{ margin-bottom:0; }
+  .group-label{
+    font-size:11px; color:var(--ink-2); padding:0 2px 7px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .group-label .dot{ width:4px; height:4px; border-radius:50%; background:var(--ink-2); }
+
+  .sheet{ border-radius:0; }
+  .row{
+    display:flex; align-items:center; gap:16px;
+    padding:13px 2px;
+    border-bottom:1px solid var(--hairline);
+  }
+  .group .row:last-child{ border-bottom:none; }
+  .row-text{ flex:1; min-width:0; }
+  .row-title{ font-size:13px; color:var(--ink); }
+  .row-desc{ font-size:11.5px; color:var(--ink-2); margin-top:4px; line-height:1.55; max-width:400px; }
+  .row-trailing{ flex-shrink:0; }
+  .row-value{ font-size:12.5px; color:var(--ink-2); }
+
+  /* ---------------- 开关：光束点亮的意象——关闭是玻璃灰，打开是那条唯一的强调蓝 ---------------- */
+  .switch{
+    width:34px; height:20px; border-radius:10px;
+    background: var(--track-off);
+    position:relative; cursor:pointer; flex-shrink:0;
+    transition: background .2s ease;
+  }
+  .switch::after{
+    content:""; position:absolute; top:2px; left:2px;
+    width:16px; height:16px; border-radius:50%;
+    background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.35);
+    transition: transform .22s cubic-bezier(.3,1.5,.6,1);
+  }
+  .switch.on{ background: var(--beam); }
+  .switch.on::after{ transform: translateX(14px); }
+
+  /* ---------------- 快捷键标签 ---------------- */
+  .key{
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:11.5px; font-weight:500; color:var(--ink);
+    background: var(--key-bg);
+    padding:4px 9px; border-radius:6px;
+  }
+</style>
+</head>
+<body>
+
+<div class="theme-switch">
+  <button id="tAuto" class="active">系统</button>
+  <button id="tLight">浅色</button>
+  <button id="tDark">深色</button>
+</div>
+
+<div class="window">
+  <div class="chrome">
+    <div class="traffic"><span class="a"></span><span class="b"></span><span class="c"></span></div>
+    <div class="prism-edge"></div>
+  </div>
+
+  <div class="tabs-wrap">
+    <div class="tabs" id="tabs">
+      <div class="tab-puck" id="tabPuck"></div>
+      <div class="tab active" data-pane="general">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.2 5.8l-1.6 1.6M7.4 16.6l-1.6 1.6M18.2 18.2l-1.6-1.6M7.4 7.4 5.8 5.8"/></svg>
+        通用
+      </div>
+      <div class="tab" data-pane="shortcuts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="18" height="11" rx="2.2"/><path d="M7 11h.01M11 11h.01M15 11h.01M17 11h.01M7 14.5h8"/></svg>
+        快捷键
+      </div>
+      <div class="tab" data-pane="about">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 8v.01"/></svg>
+        关于
+      </div>
+    </div>
+  </div>
+
+  <div class="content" id="content"></div>
+</div>
+
+<script>
+/* 数据只描述内容，不涉及任何样式数值——和之前的组件化思路一致，
+   只是这次渲染出来的视觉语言换成了跟 Glance 本体一致的"棱镜 + 光束"语言。 */
+const panes = {
+  general: [
+    { rows: [
+      { type:'toggle', title:'开机时启动 Glance', desc:'登录到这台 Mac 后自动拉起；关掉后需要手动从应用程序里启动。', key:'launch' },
+      { type:'toggle', title:'松手不关闭切换器面板', desc:'开启后松开 ⌥ 面板保持打开：Tab/←→ 继续导航，Enter 确认聚焦，Esc 放弃。关闭则回到「松手即确认」的原生节奏。', key:'keepOpen' },
+    ]},
+    { rows: [
+      { type:'value', title:'系统「减弱动态效果」', value:'未开启' },
+      { type:'toggle', title:'为本 App 放行完整动效', desc:'即使系统开启了减弱动态效果，Glance 的弹簧动画和玻璃反光依旧保留完整版本。', key:'fullMotion' },
+    ]},
+  ],
+  shortcuts: [
+    { label:'全局切换', rows:[
+      { type:'key', title:'向后循环切换', value:'⌥ Tab' },
+      { type:'key', title:'向前循环切换', value:'⌥ ⇧ Tab' },
+    ]},
+    { label:'面板内导航', rows:[
+      { type:'key', title:'在窗口间切换', value:'↑ / ↓' },
+      { type:'key', title:'确认选择', value:'⏎' },
+    ]},
+  ],
+  about: [
+    { rows:[
+      { type:'value', title:'App 名称', value:'Glance' },
+      { type:'value', title:'版本', value:'1.0.0' },
+      { type:'value', title:'构建', value:'2026.09' },
+    ]},
+  ],
+};
+
+const toggleState = { launch:false, keepOpen:false, fullMotion:true };
+
+function rowHTML(row){
+  if(row.type==='toggle'){
+    return `<div class="row">
+      <div class="row-text"><div class="row-title">${row.title}</div>${row.desc?`<div class="row-desc">${row.desc}</div>`:''}</div>
+      <div class="row-trailing"><div class="switch ${toggleState[row.key]?'on':''}" data-key="${row.key}"></div></div>
+    </div>`;
+  }
+  if(row.type==='value'){
+    return `<div class="row">
+      <div class="row-text"><div class="row-title">${row.title}</div></div>
+      <div class="row-trailing"><span class="row-value">${row.value}</span></div>
+    </div>`;
+  }
+  if(row.type==='key'){
+    return `<div class="row">
+      <div class="row-text"><div class="row-title">${row.title}</div></div>
+      <div class="row-trailing"><span class="key">${row.value}</span></div>
+    </div>`;
+  }
+  return '';
+}
+
+function groupHTML(group){
+  const label = group.label ? `<div class="group-label"><span class="dot"></span>${group.label}</div>` : '';
+  return `<div class="group">${label}${group.rows.map(rowHTML).join('')}</div>`;
+}
+
+const content = document.getElementById('content');
+function renderPane(key){
+  content.innerHTML = panes[key].map(groupHTML).join('');
+  content.querySelectorAll('.switch').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const k = el.dataset.key;
+      toggleState[k] = !toggleState[k];
+      el.classList.toggle('on', toggleState[k]);
+    });
+  });
+}
+
+const tabs = document.getElementById('tabs');
+const tabPuck = document.getElementById('tabPuck');
+
+function positionPuck(el, animate=true){
+  const r = el.getBoundingClientRect();
+  const wrapR = tabs.getBoundingClientRect();
+  tabPuck.style.transition = animate ? '' : 'none';
+  tabPuck.style.width = r.width + 'px';
+  tabPuck.style.transform = `translateX(${r.left - wrapR.left}px)`;
+  if(!animate){ void tabPuck.offsetWidth; tabPuck.style.transition = ''; }
+}
+
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    positionPuck(tab);
+    renderPane(tab.dataset.pane);
+  });
+});
+
+renderPane('general');
+positionPuck(document.querySelector('.tab.active'), false);
+
+const tBtns = { auto:document.getElementById('tAuto'), light:document.getElementById('tLight'), dark:document.getElementById('tDark') };
+function setTheme(mode){
+  if(mode==='auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', mode);
+  Object.values(tBtns).forEach(b=>b.classList.remove('active'));
+  tBtns[mode].classList.add('active');
+}
+tBtns.auto.addEventListener('click', ()=>setTheme('auto'));
+tBtns.light.addEventListener('click', ()=>setTheme('light'));
+tBtns.dark.addEventListener('click', ()=>setTheme('dark'));
+
+window.addEventListener('resize', ()=>positionPuck(document.querySelector('.tab.active'), false));
+</script>
+
+</body>
+</html>

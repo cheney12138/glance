@@ -1,7 +1,16 @@
 import SwiftUI
 import AppKit
+import GlanceCore
 
-/// 设置面板(DockDoor 式侧边栏)。内容边界见 Q8:通用 / 快捷键 / 关于,三节打住。
+/// 设置面板 —— 施工契约 = 设计 demo `design/v4/Glance 设置 v1.html`(纸面 + 棱镜边 + 玻璃舌头分段控件),
+/// token 与偏离备案见 `design/settings-spec.md`。
+///
+/// 与旧版(DockDoor 式 `NavigationSplitView` 侧边栏 + `Form`)的分野:
+/// 1. 侧边栏换成 demo 的**居中分段控件**,舌头用 `matchedGeometryEffect` 滑;
+/// 2. `Form` 换成**平铺信息表**:组 → 行(标题 + 说明 + 尾部控件),不再"每组一张卡片"套娃;
+/// 3. 开关自绘成 demo 的 34×20 小号(demo 的"光束点亮"意象 = 关闭玻璃灰 / 打开强调蓝)。
+///
+/// 内容边界不变(Q8 冻结:通用 / 快捷键 / 关于,三节打住)。
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var permissions: PermissionMonitor
@@ -11,6 +20,7 @@ struct SettingsView: View {
         case shortcut = "快捷键"
         case about = "关于"
         var id: String { rawValue }
+        /// demo 的三枚线性图标;SF Symbols 取语义最近的一对一
         var icon: String {
             switch self {
             case .general: return "gearshape"
@@ -30,139 +40,204 @@ struct SettingsView: View {
     @State private var systemReduced = MotionPolicy.systemReduced
 
     var body: some View {
-        NavigationSplitView {
-            List(Page.allCases, selection: $page) { p in
-                Label(p.rawValue, systemImage: p.icon).tag(p)
-            }
-            .navigationSplitViewColumnWidth(min: 130, ideal: 140, max: 160)
-        } detail: {
-            Group {
+        VStack(spacing: 0) {
+            prismEdge
+            SettingsTabRail(page: $page)
+                .padding(.top, SettingsMetrics.tabsTop)
+                .padding(.bottom, SettingsMetrics.tabsBottom)
+            content
+        }
+        .frame(width: SettingsMetrics.windowW, height: SettingsMetrics.contentH)
+        // 纸铺满整窗:窗口用 `.hiddenTitleBar`,红绿灯直接浮在这张纸的左上角(demo 的构图)
+        .background {
+            SettingsWindowChrome().frame(width: 0, height: 0) // 零尺寸:只管窗,不接事件
+            SettingsTheme.paper
+        }
+        // 棱镜边量的是**窗顶**,不是"标题栏下沿":隐藏标题栏后系统仍会给顶部留 32pt 安全区,
+        // 不豁免的话整条光带会被顶下去 32pt(实测 39 → 71),跟 demo 就不是一回事了。
+        // 红绿灯占的是最上面 0…32pt,光带在 39pt,不会撞上。
+        .ignoresSafeArea(.container, edges: .top)
+        .onAppear { systemReduced = MotionPolicy.systemReduced }
+    }
+
+    /// demo `.prism-edge`:窗顶唯一一道光谱(张力备案见 `SettingsTheme.prism`)
+    private var prismEdge: some View {
+        SettingsTheme.prism
+            .frame(height: SettingsMetrics.prismHeight)
+            .opacity(SettingsMetrics.prismOpacity)
+            .padding(.top, SettingsMetrics.prismTop)
+    }
+
+    private var content: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: SettingsMetrics.groupGap) {
                 switch page {
-                case .general: generalPage
-                case .shortcut: ShortcutPage()
-                case .about: aboutPage
+                case .general: generalPane
+                case .shortcut: ShortcutPane()
+                case .about: aboutPane
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, SettingsMetrics.contentPadX)
+            .padding(.top, SettingsMetrics.contentPadTop)
+            .padding(.bottom, SettingsMetrics.contentPadBottom)
         }
-        .frame(width: 560, height: 380)
     }
 
     // MARK: - 通用
 
-    private var generalPage: some View {
-        Form {
-            Toggle("开机时启动 mac-switcher", isOn: $store.launchAtLogin)
-            Text("登录到这台 Mac 后自动拉起;关掉后需要手动从应用程序里启动。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
-            Toggle("松手不关闭切换器面板", isOn: $pinPanel)
-            Text("开启后松开 ⌥ 面板保持打开:Tab/←→ 继续导航,Enter 确认聚焦,Esc 放弃。关闭则回到「松手即确认」的原生节奏。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
-            LabeledContent("系统「减弱动态效果」") {
-                Text(systemReduced ? "已开启" : "未开启")
-                    .foregroundStyle(systemReduced ? .orange : .secondary)
-            }
-            Toggle("为本 App 放行完整动效", isOn: $alwaysAnimate)
-            Text("macOS 的「减弱动态效果」只有系统级开关,没有按 App 豁免的接口 —— 这一项就是本 App "
-                 + "自己的放行开关(默认开):开启时哪怕系统减弱也播完整弹簧动效,关掉则跟随系统。"
-                 + "关掉后动效不会消失,只是位移类降级成 160ms 淡入淡出。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
-            LabeledContent("图标呼吸感") {
-                HStack(spacing: 8) {
-                    Slider(value: $iconClearance, in: 4...28, step: 1)
-                        .frame(width: 150)
-                    Text("\(Int(iconClearance)) pt")
-                        .monospacedDigit()
-                        .frame(width: 46, alignment: .trailing)
+    private var generalPane: some View {
+        Group {
+            SettingsGroup {
+                SettingsRow(title: "开机时启动 Glance",
+                            desc: "登录到这台 Mac 后自动拉起;关掉后需要手动从应用程序里启动。") {
+                    BeamSwitch(isOn: $store.launchAtLogin)
+                }
+                SettingsRow(title: "松手不关闭切换器面板",
+                            desc: "开启后松开 ⌥ 面板保持打开:Tab/←→ 继续导航,Enter 确认聚焦,Esc 放弃。"
+                                + "关闭则回到「松手即确认」的原生节奏。") {
+                    BeamSwitch(isOn: $pinPanel)
+                }
+                SettingsRow(title: "图标呼吸感",
+                            desc: "选中图标放大 \(String(format: "%.2f", PanelMetrics.iconScale)) 倍后,它与左右邻居"
+                                + "之间还剩多少净空 —— 间隙由它倒推(当前 "
+                                + "\(String(format: "%.1f", PanelMetrics.iconGap)) pt)。设计 demo 只有 0.5 pt,"
+                                + "再算上图标那圈软阴影,实际是压在邻居身上的。",
+                            hairline: false) {
+                    HStack(spacing: 8) {
+                        Slider(value: clearanceBinding, in: 4...28)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text("\(Int(iconClearance)) pt")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                    }
                 }
             }
-            Text("选中图标放大 1.14 倍后,画面与左右邻居之间**还剩**多少净空(间隙由它倒推,当前 "
-                 + "\(String(format: "%.1f", PanelMetrics.iconGap)) pt)。设计 demo 只有 0.5 pt —— "
-                 + "再算上图标那圈软阴影,实际是压在邻居身上的。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            SettingsGroup {
+                SettingsRow(title: "系统「减弱动态效果」") {
+                    RowValue(systemReduced ? "已开启" : "未开启")
+                }
+                SettingsRow(title: "为本 App 放行完整动效",
+                            desc: "即使系统开启了减弱动态效果,Glance 的弹簧动画和玻璃反光依旧保留完整版本。"
+                                + "关掉后动效不会消失,只是位移类降级成 160ms 淡入淡出。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $alwaysAnimate)
+                }
+            }
         }
-        .formStyle(.grouped)
-        .onAppear { systemReduced = MotionPolicy.systemReduced }
     }
 
     // MARK: - 关于
 
-    private var aboutPage: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-            LabeledContent("版本") { Text("\(version) (\(build))") }
-            Divider()
-            LabeledContent("辅助功能") { statusDot(granted: permissions.accessibilityGranted) }
-            LabeledContent("屏幕录制") { statusDot(granted: permissions.screenCaptureGranted) }
-            Text("权限异常时:菜单栏 → 权限 一行可重开引导;也可用 README 里的 tccutil 命令彻底重置。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
+    private var aboutPane: some View {
+        Group {
+            SettingsGroup {
+                SettingsRow(title: "App 名称") { RowValue("Glance") }
+                SettingsRow(title: "版本") { RowValue(bundle("CFBundleShortVersionString")) }
+                SettingsRow(title: "构建", hairline: false) { RowValue(bundle("CFBundleVersion")) }
+            }
+            SettingsGroup {
+                SettingsRow(title: "辅助功能",
+                            desc: "监听 ⌥Tab、读取与聚焦窗口 —— 没有它,切换器整体不工作。") {
+                    PermissionBadge(granted: permissions.accessibilityGranted)
+                }
+                SettingsRow(title: "屏幕录制",
+                            desc: "预截窗口缩略图 —— 没有它,展开层显示不出窗口内容。"
+                                + "权限异常时:菜单栏 →「权限」可重开引导,或用 README 里的 tccutil 命令彻底重置。",
+                            hairline: false) {
+                    PermissionBadge(granted: permissions.screenCaptureGranted)
+                }
+            }
         }
     }
 
-    private func statusDot(granted: Bool) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(granted ? .green : .orange).frame(width: 8, height: 8)
-            Text(granted ? "已授权" : "未授权")
-        }
+    private func bundle(_ key: String) -> String {
+        Bundle.main.object(forInfoDictionaryKey: key) as? String ?? "?"
+    }
+
+    /// 取整到 1pt 的滑杆:不用 `Slider(step:)` —— 带 step 的滑杆会在轨道下方画一排刻度点,
+    /// demo 里没有任何刻度语言。连续拖动、落在整数上,读数与 `PanelMetrics` 读到的值一致。
+    private var clearanceBinding: Binding<Double> {
+        Binding(get: { iconClearance }, set: { iconClearance = $0.rounded() })
     }
 }
 
-/// 快捷键页:录制式改键(Q8 冻结)。按一下按钮进录制态,下一次"修饰键+普通键"
-/// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键——⇧ 永久留给反向导航。
-struct ShortcutPage: View {
+/// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
+/// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
+struct ShortcutPane: View {
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
 
     var body: some View {
-        Form {
-            Toggle("接管系统切换器(⌘Tab)", isOn: takeoverBinding)
-            Text("开启后 ⌘Tab 归 mac-switcher:我们的 tap 在 HID 层抢先,系统自带切换器收不到事件。本 App 退出/崩溃,原生 ⌘Tab 自动复活,无副作用。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
-            LabeledContent("自定义触发键") {
-                Button(recording ? "请按新组合…(Esc 取消)" : config.display) {
-                    recording ? stopRecording() : startRecording()
+        Group {
+            SettingsGroup(label: "触发") {
+                SettingsRow(title: "接管系统切换器(⌘Tab)",
+                            desc: "默认关闭,触发键是 ⌥Tab —— 系统热键一行都不动。开启后 Glance 会关掉系统自己那条 "
+                                + "⌘Tab 热键(私有 SkyLight API,与 alt-tab 同款做法),再以 Carbon 热键接管:"
+                                + "不吞键、不抢事件。退出时会还原;若被强制杀掉,下次启动 Glance 会自动把它修回来"
+                                + "(见 docs/adr/0005)。") {
+                    BeamSwitch(isOn: takeoverBinding)
                 }
-                .keyboardShortcut(.cancelAction) // 录制态显示期间 Esc 也有兜底
+                SettingsRow(title: "触发键",
+                            desc: "默认 ⌥Tab。点一下进录制态,按下新的「修饰键 + 普通键」即写入,Esc 取消;"
+                                + "修饰键只收 ⌥ / ⌘ / ⌃。改完即时生效,不用重启。",
+                            hairline: false) {
+                    Button {
+                        recording ? stopRecording() : startRecording()
+                    } label: {
+                        KeyChip(text: recording ? "按下新组合…" : chip(config), highlighted: recording)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                    .help(recording ? "按 Esc 取消录制" : "点一下开始录制新的触发键")
+                }
             }
-            Text("默认 ⌥Tab。修饰键只收 ⌥ / ⌘ / ⌃;改完即时生效,不用重启。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            SettingsGroup(label: "面板内导航") {
+                SettingsRow(title: "向后 / 向前循环切换") { KeyChip(text: "Tab / ⇧ Tab") }
+                SettingsRow(title: "在展开层的窗之间移动",
+                            desc: "组内只有一扇窗时 ←→ 无语义,静默吞掉 —— 绝不允许跨界滑到邻 App。") {
+                    KeyChip(text: "← →")
+                }
+                SettingsRow(title: "确认 / 放弃", desc: "松开 ⌥ = 聚焦当前选中的那扇窗;Esc = 什么都不聚焦。") {
+                    KeyChip(text: "松开 ⌥ / Esc")
+                }
+                SettingsRow(title: "退出 App / 关窗 / 最小化",
+                            desc: "破坏性操作,**处决即散场**:动作一发本轮切换事务立刻结束,想继续切就重新触发一局。",
+                            hairline: false) {
+                    KeyChip(text: "Q / W / M")
+                }
+            }
         }
-        .formStyle(.grouped)
         .onDisappear { stopRecording() }
     }
 
-    /// 篡位开关:开 = 触发键写成 ⌘Tab;关 = 还原默认 ⌥Tab(现状即读即时生效)
+    /// 触发键胶囊文案:demo 的键位块是"修饰键 + 空格 + 键名",`TriggerConfig.display` 是紧贴写法
+    private func chip(_ c: TriggerConfig) -> String {
+        c.modifierSymbol + " " + c.keyName
+    }
+
+    /// 篡位开关:开 = 触发键写成 ⌘Tab + 显式记下"用户要接管";关 = 清掉键(⇒ ⌥Tab)+ 撤销接管。
+    /// **读的是显式 flag**,不是"触发键恰好是 ⌘Tab"——口径见 `TriggerConfig.takeoverEnabled`。
     private var takeoverBinding: Binding<Bool> {
         Binding(
-            get: {
-                let d = UserDefaults.standard
-                return d.string(forKey: "trigger.modifier") == "command" && d.integer(forKey: "trigger.keyCode") == 0x30
-            },
+            get: { TriggerConfig.takeoverEnabled },
             set: { on in
                 if on {
                     UserDefaults.standard.set(0x30, forKey: "trigger.keyCode")
                     UserDefaults.standard.set("command", forKey: "trigger.modifier")
+                    TriggerConfig.setTakeover(true)
                 } else {
                     UserDefaults.standard.removeObject(forKey: "trigger.keyCode")
                     UserDefaults.standard.removeObject(forKey: "trigger.modifier")
+                    TriggerConfig.setTakeover(false)
                 }
                 config = TriggerConfig.load()
-                print("[T13] ⌘Tab 篡位: \(on ? "接管" : "还原 ⌥Tab")")
+                print("[T13] ⌘Tab 篡位: \(on ? "接管(系统热键将被关掉)" : "还原 ⌥Tab(系统热键恢复)")")
             }
         )
     }
@@ -175,7 +250,12 @@ struct ShortcutPage: View {
             guard let mod = allowedModifier(in: flags) else { return event } // 没有合法修饰键,继续等
             UserDefaults.standard.set(Int(event.keyCode), forKey: "trigger.keyCode")
             UserDefaults.standard.set(mod, forKey: "trigger.modifier")
-            config = TriggerConfig.load()
+            // 录到与系统热键重叠的和弦(⌘Tab / ⌘`)→ 显式标记"用户要接管"。
+            // 不标的话原生那条会在 Dock/WindowServer 层就吃掉事件,我们注册的 Carbon 热键根本收不到
+            // (见 docs/adr/0005);标记之后那个开关会跟着亮起来,用户看得见自己动了什么。
+            let recorded = TriggerConfig.load()
+            TriggerConfig.setTakeover(NativeHotkeys.overlapsNativeHotkey(recorded))
+            config = recorded
             print("[T9] 触发键改为: \(config.display)")
             stopRecording()
             return nil

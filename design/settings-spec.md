@@ -1,0 +1,91 @@
+# Glance 设置窗 · 设计规格(v1 定案)
+
+> **契约**:设计 demo `design/v4/Glance 设置 v1.html`(自包含,直接双击可见形态)。
+> **施工**:`Sources/mac-switcher/Settings/{SettingsView,SettingsControls,SettingsTheme}.swift`。
+> **范围**:本文只管**设置窗**;切换器面板归 `design/v4/design-system.md`,交互语义归 `design/brand-spec.md`。
+> 样式争议一律回到 demo 与本文,不回代码、不回口头。
+
+## 0. 与面板的分工
+
+面板是**液态玻璃浮层**,设置窗是**一张纸** —— 不透明纸底、顶上唯一一道棱镜色散边、
+一颗会滑的玻璃舌头。同一套"光透过玻璃"的语言,两种材质:面板的玻璃交给系统材质,
+设置窗的"玻璃"只剩那颗舌头。
+
+## 1. Token 翻译表(demo → 原生)
+
+| 语义 | demo | 原生 |
+|---|---|---|
+| 纸底 | `--paper` `#eceef2` / `#101116` | `SettingsTheme.paper`(dynamic NSColor) |
+| 主/次文案 | `--ink` `#16171c` / `--ink-2` 墨 56% | `SettingsTheme.ink` / `.ink2` |
+| 行发丝 | `--hairline` 墨 9% / 白 9%,**1px** | `SettingsTheme.hairline`,高 1pt(不是面板的 0.5pt) |
+| 分段控件底槽 | `--tab-rail` 墨 5% / 白 5% | `SettingsTheme.tabRail` |
+| 玻璃舌头 | `--glass` 白 55% / 白 7%,`inset 0 1px 0 --glass-edge` | `SettingsTheme.puck` + `puckLip`(自顶向下收干的描线) |
+| 开关关闭态 | `--track-off` 墨 14% / 白 18% | `SettingsTheme.trackOff` |
+| 键位胶囊 | `--key-bg` 墨 6% / 白 9% | `SettingsTheme.keyBg` |
+| 光束(开关打开态) | `--beam` `#2f6fed` / `#4c8dff` | **系统 accent**(`SettingsTheme.beam` = `.accentColor`) |
+| 棱镜边 | `.prism-edge` 七色光谱,α .55 | `SettingsTheme.prism` + `prismOpacity` |
+| 窗口形态 | 600×480,红绿灯浮在纸上 | `Window` + `.windowStyle(.hiddenTitleBar)`,纸铺满整窗 |
+
+## 2. 度量(HTML px = pt)
+
+- 窗宽 **600**(demo `.window`);内容区高 **480** → 窗口实到 **512**(480 + 系统标题栏那一条 32pt,
+  `.hiddenTitleBar` 下它仍然占位)。demo 的 mock 窗是整窗 600×480,但它的「通用」只有 4 行;
+  本 App 多一行真设置(图标呼吸感),照 480 排会把最后一行说明切掉半行 —— 宁可比 mock 高一条标题栏。
+- 窗底色 **必须**是纸(`SettingsWindowChrome` 把窗口自己的 backgroundColor 也刷成纸):
+  内容区只有 480,窗口 512,不刷就露一条白边。
+- 棱镜边:**距窗顶 39pt**(14 上留白 + 11 红绿灯 + 14 下留白),高 2pt。
+- 顶部导航:上 16 / 下 14;底槽内缩 3,单项内缩 14×7;圆角 12,舌头 9。
+- 内容区:左右 28、上 2、下 26;组间距 20。
+- 行:上下 13,行内左右间距 16;说明文案 `max-width:400pt`。
+- 开关 34×20,钮 16,内缩 2(行程 14)。
+- 字阶:标题 13 / 值 12.5 / 分段与说明 11.5 / 组小标题 11。
+
+## 3. 动效
+
+demo 的两条过冲 bezier 在原生一律**折算成弹簧**(理由同 `PanelMotion`:SwiftUI 的过冲
+`timingCurve` 不可靠,且每次打断从零速度重起):
+
+| 动作 | demo | 原生 |
+|---|---|---|
+| 舌头滑移 | `.34s cubic-bezier(.22,1.5,.36,1)` | `SettingsMotion.puck` = `PanelMotion.slide`(demo 自己就说这条舌头复用切换器的机制) |
+| 开关拨杆 | `.22s cubic-bezier(.3,1.5,.6,1)` | `SettingsMotion.knob`(spring 0.22 / 阻尼 .72) |
+| 状态色过渡 | `.2s ease` | `SettingsMotion.tint` |
+
+全部经 `MotionPolicy.animation(_:)`:系统"减弱动态效果"开着且未放行本 App 时,位移类降级成 160ms 淡入淡出。
+
+## 4. 有意偏离 demo 的地方(别再"修回去")
+
+1. **不做 `theme-switch`**(右上角 系统/浅色/深色):那是 demo 自己的评审开关。原生窗跟随系统外观 —— token 只有一份、深浅两态。
+2. **棱镜边是唯一的光谱色**,其余仍守"只有 accent + 红绿灯"两源。张力备案见 §5。
+3. **不用 `Slider(step:)`**:带 step 的滑杆会在轨道下画一排刻度点,demo 里没有任何刻度语言。改连续滑杆 + 取整 Binding。
+4. **快捷键页列的是真实语义**(Tab/⇧Tab 循环、←→ 只在展开层内、松开 ⌥ 确认、Esc 放弃、Q/W/M 处决即散场),不是 demo 里占位的 ↑↓/⏎。
+5. **棱镜边量到的是"窗顶"而不是"标题栏下沿"**:`.hiddenTitleBar` 下系统仍留 32pt 顶部安全区,不豁免 `.ignoresSafeArea(.container, edges: .top)` 的话整条光带会掉到 71pt(实测)。
+6. **通用页多一行"图标呼吸感"**:demo 没有,但它是 App 里已有的真设置(面板间隙由它倒推)。
+7. **关于页的值取真实 `Bundle` 版本/构建**,权限行沿用 `PermissionGuideView` 的绿/橙状态色(状态语义,非装饰色)。
+8. **"接管系统切换器(⌘Tab)"默认关闭**:触发键默认 ⌥Tab,系统热键一行都不动;开启后才会关掉系统那条
+   ⌘Tab 热键(私有 SkyLight API)。开关读的是显式 flag,不由"触发键是不是 ⌘Tab"反推 —— 见 `docs/adr/0005`。
+9. **无标题栏窗整张纸可拖**(`isMovableByWindowBackground`):无标题栏窗口若只能拖顶上一条,手感是残的。
+10. **一律不画焦点环**(`SettingsTheme.showsFocusRing = false`):SwiftUI 在开窗时就把第一个可聚焦控件
+   (分段控件的"通用")点成聚焦态,纸上会**常驻**一个 demo 里没有的蓝框。按 FKA 收口试过了 ——
+   `NSApp.isFullKeyboardAccessEnabled` 在本机就是 `true`,等于没收。代价:键盘导航用户看不到焦点指示
+   (Tab 照旧走得动、空格/回车照旧能激活)。回滚一口 Bool。
+
+## 4.1 实机验证方法(改完设置窗务必重跑)
+
+焦点环是 **AppKit 在 key window 上单独画的**,离屏 `ImageRenderer` / `cacheDisplay` 都抓不到
+(踩过:离屏渲染永远干净,就复现不了蓝框;滚动容器在 `ImageRenderer` 下更是直接渲成空白)。
+要让真窗口自己截自己:临时给 App 接一段 `CGWindowListCreateImage(.null, .optionIncludingWindow, id, …)`
+的探针(Glance 自带录屏权限,截自己不需要额外授权),验完删掉。验过的四件事:
+
+1. 窗口 frame 实测尺寸(按 `.contentSize` 算出来的高度对不对);
+2. 底部那条白边在不在(纸有没有铺满整窗);
+3. 棱镜边到窗顶的像素距离是不是 39(采样一下就行);
+4. 蓝框在不在——**必须开着窗口、key window 状态**截图,否则验的不是同一件事。
+
+## 5. 备案:棱镜边 vs design-system 不变量 2
+
+`design-system.md` 不变量 2 写的是"全系统彩色仅两源:聚焦蓝 + 红绿灯";本窗按 demo 保留
+了顶上那道光谱边(Glance = 光透过玻璃,这是全窗唯一一次出现光谱色)。
+
+- 裁决口径:不变量 2 约束的是**切换器面板**;设置窗这道边是 demo 指定的签名时刻,予以豁免。
+- 若要回严格合规:`SettingsTheme.prism` 换成同一个 `beam` 色的渐变即可,一处改完,其余不动。

@@ -65,3 +65,8 @@ _Avoid_: 严格 MRU、窗口时间戳
 **⌘+click 补焦**:
 带 `⌘` 的左键点击落在非前台 App 的窗口时,只激活该窗而不级联拉起。
 _Avoid_: 焦点修复
+
+## 代码结构
+
+**kernel**(纯逻辑,`Packages/GlanceCore`,`swift test` 可测)/ **plumbing**(AppKit 与事件层,留 App target)
+的分家,模块图与依赖方向、命名约定见 `docs/architecture.md`;边界由 `Tools/check-architecture.swift` 校验。

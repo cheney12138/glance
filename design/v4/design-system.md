@@ -108,8 +108,8 @@
 
 | 动作 | 时长 | 曲线 | 位移 |
 |---|---|---|---|
-| 面板弹出 | 120ms | `cubic-bezier(.2,.8,.2,1)` | scale .96→1 + 透明 |
-| 浮窗出现 | 120ms | 同上 | translateY -5→0 + 透明 |
+| 面板弹出 | **无(瞬现)** | — | —(v1.12 下线,见 Changelog) |
+| 浮窗出现 | **无(瞬现)** | — | —(v1.12 下线) |
 | 卡片入场 | 160ms/张,相邻延迟 18ms | 同上 | translateY -6→0 + scale .97→1 + 透明 |
 | 浮窗换组 | 本体静止,仅卡片重排 | — | 横滑已传达"换组",本体再动是重复播报 |
 | 浮窗滑移 | 180ms | `cubic-bezier(.25,.8,.3,1)` | 仅 `left` |
@@ -254,3 +254,32 @@
 ### v1.10(评审:"这条边还是有,改不好就直接去掉")
 - 边缘三层全废:rim 折光环、fringe 色散边、lens 透镜带一律下线;玻璃配方收敛为 tint + blur/saturate/brightness + `--edge-ring` 发丝轮廓 + E 级阴影 + 指针游光。原生 `NSGlassEffectView` 的边缘折射不再由 HTML 逼近
 - 不变量 2 的色散豁免随 fringe 下线一并收回
+
+### v1.12(评审:"动效太重了,⌘Tab 的登场淡入淡出给毙掉,不实用、影响效率")
+- **入场动效全部下线**:面板与预览托盘一律瞬现(删掉 demo 的 `.switcher-wrap` scale .90→1 与 `.preview-tray` translateY+scale 两段登场)。**退场保留淡出**——那是动作之后的余韵,不在关键路径上;`PanelMotion.rise` 随之删除
+- 为什么这次不是审美问题:入场不只是"多花 120ms 看动画",它还占着主线程。事件 tap 的 runloop 挂在主线程上,实测"按键→面板就位"整段会占住主线程 ~110ms,期间系统投递的按键全在排队;超过 tap 超时就会被系统停用,而停用那一瞬漏出去的 ⌘Tab 正好交给 **macOS 原生切换器**(用户实机反馈:"用着用着变成原生那个")。同批修复:
+  - 枚举(`WindowEnumerator.rawGroups`)搬后台,让 tap 回调立刻返回(回调内阻塞 ~110ms → ~12ms);MRU 排序仍在主线程(`orderByMRU`)
+  - 开启判定改用**事件自带 flags**,不再只信内部 `state == armed`:漏掉一颗 ⌘↓ 的 flagsChanged 也接得住
+  - 退场拆迁单带**世代号**:新一轮 begin 之后,迟到的拆迁单既不能拆窗、也不能通知触发层收尾(通知了就把新一局的状态机从 navigating 拉回 idle,后续 ⌘Tab 全漏给系统)
+  - 新增 `GLANCE_TRACE=1` 的事件级 trace(输入管线看不见摸不着,这类问题只能靠事件流水账定位)
+- **上面这些加固随后被 v1.13 整体替代**:防线不再建在"吞键"上,见下。
+
+### v1.13(评审:"人家 alt-tab 都用那么久的私有 API 了,我们也直接用;靠吞键屏蔽原生按键太重")
+
+**架构级裁决:⌘Tab 的接管从"事件层吞键"搬到"系统快捷键注册表层"**(详见 `docs/adr/0005`)。
+
+- 关掉系统 symbolic hotkey:`CGSSetSymbolicHotKeyEnabled` 关 `⌘⇥`(1)+ 配对关 `⌘⇧⇥`(2),
+  `⌘`` 在键位重叠时才关;触发键改由 Carbon `RegisterEventHotKey` 收 —— 系统直接把和弦交给我们,
+  前台 App 收不到,**不需要吞**
+- tap 收缩成三块:`.listenOnly` 的 flagsChanged(只听修饰键,撑 hold 语义)+ `.listenOnly` 的
+  leftMouseDown(⌘+点击补焦)+ **唯一有吞键权的 navTap**(创建即禁用,只在导航态打开,吞 Esc/←→/Q/W/M)
+- 赚:v1.12 那一整类"漏一颗 → 原生切换器接管"的失败模式**结构上消失**;tap 的破坏性面只剩会话期那几百毫秒
+- 赔:接管的是**系统级**状态且**跨退出持久化** → 恢复责任做全(正常退出 / ObjC 异常 / 四种信号 /
+  **启动自愈**);`SIGKILL` 拦不住,那种情况要靠下次启动或 `Tools/NativeHotkeys.swift restore` 手动救
+- 实测口径(唯一可信的那种):按住 ⌘Tab 若干秒,看窗口清单里有没有 `程序坞 / layer=20 / 全屏`
+  —— 有 = 原生切换器在(热键开着),没有 = 被我们关着。工具见 `docs/debugging.md` 第 7 节
+- **默认不许接管**(评审:这个禁用逻辑只能是用户显式开启的):触发键默认 ⌥Tab,一行系统设置都不碰;
+  开关 `trigger.takeoverSystemSwitcher` 默认 false,`plan(for:takeover:)` 要求"开关为真 **且** 触发键与
+  系统热键重叠"才动手;老版本的遗留状态(键=⌘Tab 但没有开关)启动时归一回 ⌥Tab
+- **Carbon 热键不重复投递**:同一个和弦按住期间只来第一发 `kEventHotKeyPressed`
+  —— 实机病"⌘Tab 唤起了但继续按 Tab 不动"。修法:Carbon 只管开局,导航期的循环移动交回 navTap

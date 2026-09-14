@@ -45,9 +45,14 @@ brand-fidelity: 9/10       # 违例即丑:禁渐变/禁品牌色/禁 emoji 图�
 
 | 动作 | 时长 | 曲线 |
 |---|---|---|
-| 面板弹出 | 120ms | easeOut(近似 cubic-bezier(0.2,0.8,0.2,1)),scale .96→1 + 透明 |
-| 预览行弹出 | 80ms | ease-out,translateY -5→0 |
+| 面板弹出 | **无(瞬现)** | — |
+| 预览行弹出 | **无(瞬现)** | — |
 | 选中切换 | 100ms | ease(块透明度过渡) |
+
+**v1.12 裁决:入场动效全部下线。** 面板与预览托盘一律瞬现,只有退场保留淡出
+(退场在动作之后,不在关键路径上)。理由 = 效率:⌘Tab 是高频动作,任何"登场"都是把
+可用时间往后拖;实机量到入场每会期要多占主线程一截,而事件 tap 的 runloop 就挂在主线程上
+(详见 `design/v4/design-system.md` Changelog v1.12)。
 
 `prefers-reduced-motion` 原生等价:`NSWorkspace.accessibilityDisplayShouldReduceMotion` → 三档动效全部降到 0。
 

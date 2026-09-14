@@ -38,12 +38,10 @@ struct PreviewPanelView: View {
         )
         .elevation(.tray)
         .padding(PanelMetrics.shadowPadPop) // 必须与 PanelController.previewSize 口径一致
-        // 入场 = demo 的 .preview-tray:translateY(8) scale(.96) → 归位(.28s 过冲)+ 渐入(.22s)
-        .scaleEffect(shown ? 1 : 0.96)
-        .offset(y: shown ? 0 : 8)
-        .animation(MotionPolicy.animation(PanelMotion.rise), value: shown)
+        // 入场**不做动效**(v1.12,与长条同一裁决):托盘要在选中态一变就到位,
+        // 平移 + 缩放登场同样只是拖时间。退场保留淡出(短一档)。
         .opacity(shown ? 1 : 0)
-        .animation(MotionPolicy.animation(PanelMotion.fade(PanelMetrics.tSettle)), value: shown)
+        .animation(shown ? nil : MotionPolicy.animation(PanelMotion.fade(PanelMetrics.tSettle)), value: shown)
         // 入场每会期播一遍、退场也播一遍 —— 由 isVisible 驱动,不做重挂载。
         // 旧版 `.id(isVisible)` 重挂载会把退场整个掐掉:新实例把 shown 重置成 false,
         // 第一帧就是 opacity 0,没有动画可言

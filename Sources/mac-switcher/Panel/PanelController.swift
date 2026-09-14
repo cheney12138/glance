@@ -25,6 +25,8 @@ final class PanelController: ObservableObject {
     /// 导航期间的 App Nap 豁免票:菜单栏型 App 在"用户没在动它"时会被系统降优先级,
     /// 表现就是动画掉帧、动效发涩。一局切换器只活几百毫秒,全程按住不放,代价可忽略
     private var activityToken: NSObjectProtocol?
+    /// begin 的世代号:后台枚举回来时,若已开了新一局就丢掉旧结果(连按 ⌘Tab 的竞态)
+    private var beginGeneration = 0
 
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
     var onSessionEnd: (() -> Void)?
@@ -75,19 +77,41 @@ final class PanelController: ObservableObject {
 
     private func begin() {
         // ADR-0001:触发即定场。语境屏快照只活在本轮导航态里
-        let beganAt = CFAbsoluteTimeGetCurrent()
-        defer {
-            let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
-            print(String(format: "[T8] 按键→枚举就位 %.0fms", ms))
+        guard let screen = CursorScreenAnchor.cursorScreen else {
+            print("[T6] 取不到语境屏,面板不出现")
+            return
         }
-        let screen = CursorScreenAnchor.cursorScreen
         contextScreen = screen
-        groups = WindowEnumerator.enumerate(owning: screen)
+        beginGeneration &+= 1
+        let generation = beginGeneration
+        // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
+        // (取不到屏/本屏无窗)不会走到 showPanel,那张迟到的单子就会在新一局里执行,
+        // 把触发层状态机一起打死 —— 之后 ⌘Tab 全部漏给系统 = macOS 原生切换器。
+        teardown?.cancel()
+        teardown = nil
+        let beganAt = CFAbsoluteTimeGetCurrent()
+        // 枚举搬后台(v1.12)。这不是性能微调,是 bug 修复:
+        // 事件 tap 的 runloop 挂在主线程,枚举(几十毫秒)一旦压在 tap 回调里,系统会判回调超时
+        // 把 tap 停用 —— 停用那一瞬漏出去的 ⌘Tab 就是 macOS 原生切换器(实机量到:
+        // begin 之后主线程被占 ~110ms,期间投递的按键全在排队)。让回调立刻返回,枚举在后台跑。
+        Task.detached(priority: .userInitiated) {
+            let raw = WindowEnumerator.rawGroups(on: screen)
+            await MainActor.run { self.finishBegin(raw, generation: generation, beganAt: beganAt) }
+        }
+    }
+
+    private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime) {
+        // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
+        guard generation == beginGeneration else { return }
+        let screen = contextScreen
+        groups = WindowEnumerator.orderByMRU(raw)
         appIndex = 0
         winIndex = 0
         Snapshotter.shared.clear()
         let targets = groups.flatMap { $0.windows }
         Task { [targets] in await Snapshotter.shared.precapture(targets) }
+        let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
+        print(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
             print("[T6] 本屏无窗,面板不出现(语境屏 = \(screen?.localizedName ?? "?"))")
             return
@@ -100,9 +124,6 @@ final class PanelController: ObservableObject {
 
     private func showPanel() {
         buildPanelIfNeeded()
-        // 上一轮的退场演出还没拆完就又开一局:先把拆迁单撤了,否则它会把新面板一起 orderOut
-        teardown?.cancel()
-        teardown = nil
         panelOpenPoint = NSEvent.mouseLocation
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
         isVisible = true
@@ -132,6 +153,9 @@ final class PanelController: ObservableObject {
     /// 旧行为 `dismiss` 当场 `orderOut` —— 面板"啪"地消失,demo 的退场与确认涟漪被整段砍掉。
     /// `flourish` = 带涟漪的确认退场,多留一会儿给白光炸完。
     private func dismiss(reason: String, flourish: Bool = false) {
+        // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——
+        // 不拦的话枚举回来会把面板在放弃之后又冒出来(闪一下再被拆迁单收走)。
+        beginGeneration &+= 1
         removeOutsideClickMonitor()
         isVisible = false
         // 演出期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
@@ -142,7 +166,8 @@ final class PanelController: ObservableObject {
         // 拆迁不能早于淡出:早了就是"半透明啪一下没了"。降级动效模式没有涟漪,淡出也短,跟着缩
         let hold: Double = reduceMotion ? 0.22 : (flourish ? PanelMetrics.tFlourish : PanelMetrics.tFade)
         teardown?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.teardownPanel() }
+        let generation = beginGeneration // 拆的时候得知道自己是哪一局的单子(见 `teardownPanel`)
+        let work = DispatchWorkItem { [weak self] in self?.teardownPanel(generation: generation) }
         teardown = work
         DispatchQueue.main.asyncAfter(deadline: .now() + hold, execute: work)
     }
@@ -163,7 +188,15 @@ final class PanelController: ObservableObject {
     }
 
     /// 真正的拆窗:orderOut + 清场。与 `dismiss` 分开,是为了让退场动画有地方播
-    private func teardownPanel() {
+    ///
+    /// `generation` 是保险:这张拆迁单发出后,若又开了一局(`beginGeneration` 已变),
+    /// 它既不能拆窗(窗正被新一局用着),也不能通知触发层收尸 —— 通知了就是把新一局
+    /// 的状态机从 navigating 拉回 idle,接下来的 ⌘Tab 会全部漏给系统。
+    private func teardownPanel(generation: Int) {
+        guard generation == beginGeneration else {
+            print("[T6] 过期的退场拆迁单(已开新局),作废")
+            return
+        }
         endActivity()
         panel?.orderOut(nil)
         previewPanel?.orderOut(nil)
