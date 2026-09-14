@@ -68,7 +68,18 @@ enum PanelMetrics {
     /// 2026-09-14 用户实评"预览窗口太小":128×64 → 196×122(≈16:10,看得清窗口里写了什么)
     static var thumbW: CGFloat { k(196) }
     static var shotH: CGFloat { k(122) } // 截图区
-    static var titleH: CGFloat { k(30) }
+    /// 红绿灯上方那层**毛玻璃**的模糊半径与渐变高度(固定 UI 规格:灯本身固定 11pt,不随卡片缩放)。
+    /// 用户口径:"要跟现在 Switcher 长条一样的模糊,但是是渐变效果" —— 所以这是模糊,不是暗色遮罩
+    /// 14 → 26、46 → 62(2026-09-14 用户实评"模糊度不够高,而且好像没覆盖红绿灯的区域")。
+    /// 高度的取法:要**盖过灯那一行并留出余量** —— 灯在 9…20pt,渐变到 62pt 才收干,
+    /// 头顶这一行才算真的"坐在毛玻璃上"。
+    /// ⚠️ 一句技术实话:纯模糊对**白色内容**几乎无效(白糊了还是白),所以"看不出覆盖"很大程度
+    /// 是内容太素,不是没生效(对比同位置的结构化内容最明显)。要让白底内容也读得出"毛玻璃",
+    /// 就得在模糊之上再压一层**极淡的白/灰膜**(材质的做法) —— 那会改变画面亮度,单独一轮再议
+    static let lightsBlur: CGFloat = 26
+    static let lightsFade: CGFloat = 62
+    /// 标题条高 30 → 22(2026-09-14 用户实评"底部的项目名压缩一下空间,给的太多了")
+    static var titleH: CGFloat { k(22) }
     static var thumbH: CGFloat { shotH + titleH }
     static var captionH: CGFloat { k(22) }
     static var thumbGap: CGFloat { k(14) }
@@ -86,9 +97,13 @@ enum PanelMetrics {
     /// 发丝不随尺寸缩放:0.5pt 的物理意义就是"一根线",放大成 2pt 就不再是发丝了
     static let hairline: CGFloat = 1
     // 字阶(随卡片一起放大)
-    static var captionSize: CGFloat { k(15) }
-    static var countSize: CGFloat { k(13.5) }
-    static var titleSize: CGFloat { k(12) }
+    /// 题头(App 名)13pt:2026-09-14 把面板截图丢给一份通用评审后对方**唯一说对的一条** ——
+    /// "字体偏大偏黑,像网页弹窗"。原值是 15 基准 ×1.2 = **18pt**,而 macOS 自己的窗口标题是 13;
+    /// 现在 13 ×1.2 ≈ 15.6,字重同步从 semibold 降到 medium(见 PreviewPanelView)
+    static var captionSize: CGFloat { k(13) }
+    static var countSize: CGFloat { k(12) }
+    /// 标题字号 12 → 10.5(同上:"字体缩小一点")
+    static var titleSize: CGFloat { k(10.5) }
     /// 标题双保险截断的**第一道**:只做病理保护(标量是字符数,中英混排靠宽度截断兜底)。
     /// 2026-09-14 实评:12 把终端 tab 名 "π - tab-group-search" 斩成 "π - tab-grou…",
     /// 卡片加宽到 196 后提到 28;同时又随尺寸同比例放宽(面板调大 = 一行能装更多字)
@@ -145,7 +160,19 @@ enum PanelColors {
     ///   · 黑 .20 —— 实了,但观感是"灰膏",丢了滑块感。
     /// 代价(已知并接受):**纯白底上它比有色背景上显弱** —— 因为它是"亮",亮在白上不显形。
     /// 白底的"形"由暗发丝边与卡片纸面承担(见下面 V2 那几行),不再让舌头兼职。
+    /// 托底本体:**半透明白 .62**(用户终审过的"滑块感")。
+    ///
+    /// 试过 P2 的实白 .96(实验台推荐档),用户实测评:
+    ///   · 纯白底**确实好转**;
+    ///   · 但**深色背景上太白、丢了果冻感,变成纸质卡片** —— .96 不透明,就没有"背景从它里面透出来"的那口气了。
+    /// 所以回到 .62 的**果冻质感**,改用"形"的两味补丁去救白底(见 puckBorder 与 PanelElevation.puck):
+    /// 轮廓给出边界、影子贴身给出归属,不再要求本体自己变不透明。
     static let puck = dynamic(white(0.62), white(0.26))
+    /// 托底发丝边(保留):白底上"本体隐形"的那一半就靠它 —— 边是暗的,白底上才看得见形。
+    /// 半透明本体 + 一道发丝边 = 白底有形、深底仍有果冻感。深色不留(实验台 dark 为透明)
+    static let puckBorder = dynamic(ink(0.08), NSColor.clear)
+    /// 上缘受光唇:浅色**保留** .6 —— 它是"果冻感"的一半(本体回到半透明白之后,这道唇才有意义;
+    /// 只在 P2 那张不透明纸片上是多余的双层高光)。深色 .35 不动
     static let puckLip = dynamic(white(0.6), white(0.35))
     /// 窗数点
     static let dot = dynamic(ink(0.55), white(0.65))
@@ -207,7 +234,9 @@ enum PanelElevation {
         // 托盘:2026-09-14 用户实评"外圈怎么有一圈阴影晕染" —— blur 22 太散,在深底上读成
         // 一圈光晕而不是"贴在面上"。收到 13,并压低 alpha:阴影该紧贴边缘、只交代"浮起"这一件事
         case .tray: Layer(y: 14, radius: 13, light: 0.17, dark: 0.40)
-        case .puck: Layer(y: 8, radius: 11, light: 0.22, dark: 0.22) // 0 8px 22px rgba(0,0,0,.22)
+        // puck:浅色按实验台 P2 收成"贴身影"(0 5px 14px .14 → radius = 14÷2),
+        // 影子贴身、永远有所属,不再悬空;深色保持原值(实验台 dark 未改)
+        case .puck: Layer(y: 5, radius: 7, light: 0.14, dark: 0.22)
         // icon:浅色 .30 → .18(2026-09-14 用户实评"底下的阴影在白底下看着像缺了一块")
         // —— 那圈阴影紧贴图标下方,浅色托底上会读成"托底被挖了一块";深色不动
         case .icon: Layer(y: 5, radius: 5, light: 0.18, dark: 0.30) // 0 4px 10px rgba(0,0,0,.3)

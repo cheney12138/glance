@@ -114,6 +114,12 @@ struct PanelView: View {
                     .frame(height: 6)
             }
             .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous))
+            // 发丝边:把"纸片"放在玻璃上(实验台 P2)。用 strokeBorder = 画在边界**内侧**,
+            // 所以托底的尺寸/位置一个像素都没动(用户口径:只改颜色,大小位置动效别动)
+            .overlay(
+                RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
+                    .strokeBorder(PanelColors.puckBorder, lineWidth: 1)
+            )
             .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
             .offset(x: CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap),
                     // 入场偏移:从底部升起时,开场那一帧它还在面板下缘外面(被圆角裁掉)

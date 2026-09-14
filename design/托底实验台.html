@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glance · 托底统一感实验台</title>
+<style>
+  /* ================= 实验台骨架(非产品) ================= */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    background: #232428; color: rgba(255,255,255,.85);
+    padding: 48px 40px 80px; -webkit-font-smoothing: antialiased;
+  }
+  header { max-width: 1060px; margin: 0 auto 36px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: .5px; }
+  .pathology { margin-top: 14px; font-size: 14px; line-height: 1.8; color: rgba(255,255,255,.55); }
+  .pathology code, footer code {
+    font-family: ui-monospace, "SF Mono", monospace; font-size: 12.5px;
+    background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 6px;
+    color: rgba(255,255,255,.75);
+  }
+  .bg-switch { display: flex; gap: 10px; margin-top: 22px; }
+  .bg-switch button {
+    font: inherit; font-size: 13px; font-weight: 600;
+    color: rgba(255,255,255,.7); background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 99px;
+    padding: 7px 18px; cursor: pointer; transition: all .15s;
+  }
+  .bg-switch button.on { background: #fff; color: #111; border-color: #fff; }
+  .bg-switch .hint { align-self: center; font-size: 12px; color: rgba(255,255,255,.35); margin-left: 8px; }
+
+  .prow { max-width: 1060px; margin: 0 auto 40px; }
+  .vlabel { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+  .vlabel .tag {
+    font-size: 12px; font-weight: 700; letter-spacing: .8px;
+    padding: 3px 10px; border-radius: 6px; background: rgba(255,255,255,.1);
+  }
+  .vlabel .name { font-size: 15px; font-weight: 600; }
+  .vlabel .delta { font-size: 12.5px; color: rgba(255,255,255,.42); font-family: ui-monospace, monospace; }
+  .vlabel .rec {
+    font-size: 11px; font-weight: 700; color: #0a0a0a; background: #ffd60a;
+    border-radius: 4px; padding: 2px 8px;
+  }
+
+  /* ================= 舞台 ================= */
+  .stage {
+    position: relative; height: 400px; border-radius: 18px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; gap: 90px;
+    transition: background .3s;
+  }
+  .stage.bg-white { background: #ffffff; }
+  .stage.bg-color {
+    background:
+      radial-gradient(500px 320px at 18% 20%, rgba(140,180,255,.55), transparent 70%),
+      radial-gradient(480px 300px at 82% 30%, rgba(255,170,200,.5), transparent 70%),
+      radial-gradient(520px 340px at 50% 90%, rgba(150,230,190,.5), transparent 70%),
+      linear-gradient(160deg, #eef2f8, #f6f0f4);
+  }
+  .stage.bg-dark { background: linear-gradient(160deg, #28323f 0%, #161c26 70%, #10151d 100%); }
+  .webpage { position: absolute; inset: 0; display: none; background: #fff; }
+  .stage.bg-web .webpage { display: block; }
+  .webpage .nav { height: 52px; background: #f7f8fa; border-bottom: 1px solid #eceef1; }
+  .webpage .lines { padding: 36px 44px; }
+  .webpage .lines i { display: block; height: 12px; border-radius: 6px; background: #eef0f3; margin-bottom: 16px; }
+  .webpage .lines i:nth-child(1) { width: 42%; } .webpage .lines i:nth-child(2) { width: 88%; }
+  .webpage .lines i:nth-child(3) { width: 76%; } .webpage .lines i:nth-child(4) { width: 60%; }
+  .webpage .lines i:nth-child(5) { width: 83%; } .webpage .lines i:nth-child(6) { width: 35%; }
+  .termlines { position: absolute; inset: 0; display: none; padding: 40px 48px; }
+  .stage.bg-dark .termlines { display: block; }
+  .termlines i { display: block; height: 11px; border-radius: 5px; background: rgba(90,255,170,.14); margin-bottom: 18px; }
+  .termlines i:nth-child(1) { width: 55%; } .termlines i:nth-child(2) { width: 80%; }
+  .termlines i:nth-child(3) { width: 38%; } .termlines i:nth-child(4) { width: 70%; }
+  .termlines i:nth-child(5) { width: 62%; }
+
+  /* ================= 产品组件 ================= */
+  /* 玻璃 = V3 灰骨(浅)/ 深色 scrim(深),不再逐方案变 */
+  .stage {
+    --glass-bg: rgba(235,238,243,.55);
+    --glass-filter: blur(28px) saturate(1.3) brightness(.99);
+    --glass-border: rgba(20,22,28,.10);
+    --dot: rgba(22,22,28,.55);
+  }
+  .stage.bg-dark {
+    --glass-bg: rgba(12,14,20,.32);
+    --glass-filter: blur(28px) saturate(1.6);
+    --glass-border: rgba(255,255,255,.22);
+    --dot: rgba(255,255,255,.65);
+  }
+
+  /* 托底变量:默认 = Q0 现状(纸卡,深浅同色) */
+  .stage {
+    --pfill: rgba(255,255,255,.96);
+    --pborder: rgba(0,0,0,.08);
+    --plip: 0 0 0 transparent;
+    --pshade: 0 0 0 transparent;
+    --psh: 0 5px 14px rgba(0,0,0,.14);
+    --pfilter: none;
+  }
+  .stage.bg-dark {
+    --pfill: rgba(255,255,255,.96);
+    --pborder: rgba(0,0,0,.08);
+    --plip: 0 0 0 transparent;
+    --pshade: 0 0 0 transparent;
+    --psh: 0 5px 14px rgba(0,0,0,.30);
+    --pfilter: none;
+  }
+
+  .glass {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    border: 1px solid var(--glass-border);
+  }
+
+  .strip {
+    position: relative; z-index: 1;
+    display: flex; align-items: flex-end; gap: 23px;
+    padding: 26px 31px; border-radius: 41px;
+    box-shadow: 0 30px 60px rgba(0,0,0,.22);
+  }
+  .cell { position: relative; width: 106px; height: 106px; }
+  .cell img {
+    width: 100%; height: 100%;
+    filter: drop-shadow(0 5px 5px rgba(0,0,0,.3));
+  }
+  .cell.sel img { transform: translateY(-8px) scale(1.14); }
+  .puck {
+    position: absolute; inset: -9px -11px; border-radius: 29px;
+    background: var(--pfill);
+    -webkit-backdrop-filter: var(--pfilter);
+    backdrop-filter: var(--pfilter);
+    border: 1px solid var(--pborder);
+    box-shadow: var(--plip), var(--pshade), var(--psh);
+  }
+  .cell .dots {
+    position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%);
+    display: flex; gap: 4px;
+  }
+  .cell .dots i { width: 4.8px; height: 4.8px; border-radius: 50%; background: var(--dot); }
+
+  .loupe { position: relative; z-index: 1; text-align: center; }
+  .loupe .zoom { zoom: 2.2; display: inline-block; }
+  .loupe .cap { margin-top: 6px; font-size: 12px; color: rgba(127,127,132,.9); font-weight: 600; }
+  .stage.bg-dark .loupe .cap { color: rgba(255,255,255,.4); }
+
+  /* ================= Q1:软糖(角色统一,数值分档) ================= */
+  .prow.q1 .stage:not(.bg-dark) {
+    --pfill: rgba(255,255,255,.80);
+    --pborder: rgba(0,0,0,.06);
+    --plip: inset 0 1.5px 2px rgba(255,255,255,.95);
+    --pshade: inset 0 -3px 5px rgba(0,0,0,.07);
+    --psh: 0 3px 10px rgba(0,0,0,.10);
+  }
+  .prow.q1 .stage.bg-dark {
+    --pfill: rgba(255,255,255,.26);
+    --pborder: rgba(255,255,255,.14);
+    --plip: inset 0 1.5px 2px rgba(255,255,255,.45);
+    --pshade: inset 0 -3px 5px rgba(0,0,0,.12);
+    --psh: 0 4px 12px rgba(0,0,0,.20);
+  }
+
+  /* ================= Q2:玻璃糖(材质统一,两模同方) ================= */
+  .prow.q2 .stage:not(.bg-dark),
+  .prow.q2 .stage.bg-dark {
+    --pfill: rgba(255,255,255,.30);
+    --pfilter: blur(12px) saturate(1.3) brightness(1.10);
+    --pborder: rgba(255,255,255,.45);
+    --plip: inset 0 1px 1.5px rgba(255,255,255,.65);
+    --pshade: inset 0 -2px 4px rgba(0,0,0,.06);
+    --psh: 0 4px 12px rgba(0,0,0,.12);
+  }
+  .prow.q2 .stage.bg-dark { --psh: 0 4px 12px rgba(0,0,0,.25); }
+
+  /* ================= 结论 ================= */
+  footer {
+    max-width: 1060px; margin: 52px auto 0; padding: 26px 30px;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 16px; font-size: 14px; line-height: 2; color: rgba(255,255,255,.6);
+  }
+  footer h2 { font-size: 16px; color: rgba(255,255,255,.9); margin-bottom: 10px; }
+  footer b { color: rgba(255,255,255,.85); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Glance · 托底统一感实验台</h1>
+  <p class="pathology">
+    上一轮的雷:P2「实白卡片」在白底成立,但它的角色是<b style="color:rgba(255,255,255,.8)">纸</b>——纸搬到深色就死了,深色的托底要的是<b style="color:rgba(255,255,255,.8)">糖</b>(透光、受光、有厚度)。<br>
+    <b style="color:rgba(255,255,255,.8)">统一感的正解:统一的不是数值,是角色——两态都读作「一颗受光的糖」。</b>
+    糖的光学三件套:顶唇受光、底部背光(厚度)、贴身影。两条路线:Q1 工艺统一(三件套,数值分档);Q2 材质统一(托底自身也是玻璃,两模同方,通透感由材质承担)。<br>
+    一句诚实的话:白底没有光可透,「糖」在白底只能靠受光唇和背光厚度演出来,深色才有真透光——两态不可能肉眼一致,能统一的是「读作同一物件」。
+  </p>
+  <div class="bg-switch">
+    <button data-bg="bg-white" class="on">纯白</button>
+    <button data-bg="bg-web">白色网页</button>
+    <button data-bg="bg-color">浅彩</button>
+    <button data-bg="bg-dark">深色</button>
+    <span class="hint">这轮请重点切「纯白 ↔ 深色」对比:看同一颗托底两态是否读作同一物件</span>
+  </div>
+</header>
+
+<!-- ============ Q0 现状(纸卡病例) ============ -->
+<section class="prow q0">
+  <div class="vlabel">
+    <span class="tag">Q0</span><span class="name">现状:实白纸卡(病例)</span>
+    <span class="delta">fill 白.96 两模同色 · 白底成立 / 深色成纸</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i></div></div>
+    </div>
+    <div class="loupe">
+      <div class="zoom"><div class="strip glass">
+        <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      </div></div>
+      <div class="cap">×2.2</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Q1 软糖 ============ -->
+<section class="prow q1">
+  <div class="vlabel">
+    <span class="tag">Q1</span><span class="name">软糖(角色统一,数值分档)</span>
+    <span class="delta">浅 白.80 / 深 白.26 + 顶唇 + 背光 + 贴身影</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i></div></div>
+    </div>
+    <div class="loupe">
+      <div class="zoom"><div class="strip glass">
+        <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      </div></div>
+      <div class="cap">×2.2</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Q2 玻璃糖 ============ -->
+<section class="prow q2">
+  <div class="vlabel">
+    <span class="tag">Q2</span><span class="name">玻璃糖(材质统一,两模同方)</span>
+    <span class="delta">白.30 + blur 12 + brightness 1.10 · 托底自身是玻璃</span>
+    <span class="rec">推荐</span>
+  </div>
+  <div class="stage bg-white">
+    <div class="webpage"><div class="nav"></div><div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="termlines"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="strip glass">
+      <div class="cell"><img src="v4/assets-src/icon-idea.png" alt="IDEA"><div class="dots"><i></i><i></i></div></div>
+      <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      <div class="cell"><img src="v4/assets-src/icon-sublime.png" alt="Sublime"><div class="dots"><i></i></div></div>
+    </div>
+    <div class="loupe">
+      <div class="zoom"><div class="strip glass">
+        <div class="cell sel"><div class="puck"></div><img src="v4/assets-src/icon-ghostty.png" alt="Ghostty"><div class="dots"><i></i></div></div>
+      </div></div>
+      <div class="cap">×2.2</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <h2>判词与落地映射</h2>
+  <b>Q0 的病</b>:同一个「纸」角色套两态——白底下纸是对的(没有光可透,实白最诚),深底下纸是错的(有光可透,实心就是糊死)。<br>
+  <b>Q1 软糖</b>:角色统一为「受光的糖」,数值分档——浅色 白.80(够可见)+ 三件套演糖;深色 白.26(本来就好)+ 三件套补工艺。
+  零新依赖,纯 <code>PanelColors</code> + 两层 inset 阴影,改动最小。<br>
+  <b>Q2 玻璃糖(推荐)</b>:材质统一——托底自身是一块玻璃(白.30 + blur + brightness 1.10 提亮),
+  通透感不再由颜色数值承担,而由材质承担,<b>两模同一个配方</b>,深色和白底各自透各自的光。
+  原生映射现成:<code>GlassBackground</code>(已封装 NSGlassEffectView)包一个 29pt 圆角的小实例就是托底,
+  macOS 26 边缘折射系统自带;低版本回退 <code>NSVisualEffectView</code> 小 pill + 白.30 填充。
+  唯一要看实机的一点:玻璃叠玻璃(托底玻璃叠长条玻璃)的双重折射,macOS 26 上是系统行为,以实机为准。<br>
+  若 Q2 实机有意外,退回 Q1——它也是完整答案,只是「糖」靠演不靠材质。
+</footer>
+
+<script>
+  function setBg(bg) {
+    document.querySelectorAll('.bg-switch button').forEach(b => b.classList.toggle('on', b.dataset.bg === bg));
+    document.querySelectorAll('.stage').forEach(s => {
+      s.classList.remove('bg-white', 'bg-web', 'bg-color', 'bg-dark');
+      s.classList.add(bg);
+    });
+  }
+  document.querySelectorAll('.bg-switch button').forEach(btn => {
+    btn.addEventListener('click', () => setBg(btn.dataset.bg));
+  });
+  if (location.hash) setBg(location.hash.slice(1));
+</script>
+
+</body>
+</html>

@@ -46,7 +46,8 @@ struct PreviewPanelView: View {
     private var caption: some View {
         HStack(alignment: .lastTextBaseline, spacing: 8) {
             Text(controller.currentGroup?.appName ?? "")
-                .font(.system(size: PanelMetrics.captionSize, weight: .semibold))
+                // medium 而不是 semibold:18pt 的粗体标题是"网页弹窗感"的主因(macOS 窗口标题是 13 medium)
+                .font(.system(size: PanelMetrics.captionSize, weight: .medium))
                 .foregroundStyle(PanelColors.txt1)
             Text("· \(windows.count) 个窗口")
                 .font(.system(size: PanelMetrics.countSize, weight: .medium))
@@ -181,6 +182,10 @@ private struct WindowThumb<Overlay: View>: View {
         VStack(spacing: 0) {
             ZStack {
                 if let image {
+                    // **fill 定版**(2026-09-14 试过 fit,退回):
+                    // fit 虽然不裁内容,但卡片是**定尺**的窗口卡,而红绿灯锚在卡片左上角 ——
+                    // 宽窗(终端 1.83)被 fit 上下留出"信纸边"后,三粒灯就落在浅色空边上,
+                    // 用户实评"加歪了"。fill 只裁两侧几个点,内容仍是满幅,灯稳稳落在画面里。
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -194,7 +199,30 @@ private struct WindowThumb<Overlay: View>: View {
             .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
             .clipped()
             // 红绿灯叠在截图左上(macOS 窗的位置)。点它们不会关面板:
+            // 点击落在面板内,不触发"面板外点击 = 放弃"那套判定。
+            // 顶边先垫一条渐变(承接红绿灯,浅底截图上才不糊);再把三粒灯压上去。
             // 点击落在面板内,不触发"面板外点击 = 放弃"那套判定
+            // 「座」= **毛玻璃的渐变**:把这张截图自己再画一份、模糊掉,然后用纵向渐变遮成"上糊下清"。
+            // 三版才走到这里,记下来免得重走:
+            //   · 径向暗斑   → 用户:"阴影做的太捞了"(浅色截图上就是一块脏印);
+            //   · 整条暗渐变 → 用户:"不是黑的一团,是**毛玻璃**的效果"(而且要和长条的模糊一致);
+            //   · 现在这版   → 不加任何暗色,只是把画面自己糊掉,再用渐变过渡回清晰。
+            // 几何必须与底图**逐像素对齐**(同样的 frame + .fill + clipped),否则模糊层会与底图错位。
+            .overlay {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
+                        .clipped()
+                        .blur(radius: PanelMetrics.lightsBlur, opaque: true)
+                        .mask(alignment: .top) {
+                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                .frame(height: PanelMetrics.lightsFade)
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay(alignment: .topLeading) { traffic().padding(9) }
 
             Text(displayTitle)

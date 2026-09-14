@@ -25,6 +25,7 @@ final class HotkeyTapCenter {
     /// 导航期间的一次动作。T6 面板、T7 聚焦以后订阅这个出口,不直接碰事件层。
     enum Action {
         case begin            // 首次 ⌥+Tab:进入导航态(面板应出现)
+        case beginReverse     // 首次 ⇧⌥+Tab:同上,但方向相反(落点判断要用,见 PanelController)
         case next             // Tab:图标层后移
         case prev             // ⇧Tab:图标层前移
         case windowLeft       // ←:展开层左移
@@ -185,7 +186,8 @@ final class HotkeyTapCenter {
         // 也顺手避免了"Carbon 重复投递 + navTap 各动一次"的双跳。
         guard state != .navigating else { return }
         setState(.navigating)
-        emit(.begin)
+        // 方向要传下去:「唤起即切换」开着时,正向落"上一个 App"、反向落"最后一个"
+        emit(hotKey == .reverse ? .beginReverse : .begin)
     }
 
     // MARK: - 事件 tap
@@ -353,6 +355,7 @@ final class HotkeyTapCenter {
     private static func describe(_ action: Action) -> String {
         switch action {
         case .begin: return "首次 ⌥+Tab → 导航开始(面板应出现)"
+        case .beginReverse: return "首次 ⇧⌥+Tab → 导航开始(反向)"
         case .next: return "Tab → 后移"
         case .prev: return "⇧Tab → 前移"
         case .windowLeft: return "← → 窗口左移"

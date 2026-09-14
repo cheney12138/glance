@@ -182,6 +182,8 @@ struct ShortcutPane: View {
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
+    /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
+    @AppStorage("switch.advanceOnOpen") private var advanceOnOpen = true
 
     var body: some View {
         Group {
@@ -192,6 +194,12 @@ struct ShortcutPane: View {
                                 + "不吞键、不抢事件。退出时会还原;若被强制杀掉,下次启动 Glance 会自动把它修回来"
                                 + "(见 docs/adr/0005)。") {
                     BeamSwitch(isOn: takeoverBinding)
+                }
+                SettingsRow(title: "唤起即切换",
+                            desc: "开(默认,与 macOS 一致):唤起面板时已选中**上一个 App**,"
+                                + "一次 ⌘Tab 就完成一次切换;⇧⌘Tab 落到最后一个。"
+                                + "关:唤起只定位到**当前 App**,再按一次 Tab 才切走。") {
+                    BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
                             desc: "默认 ⌥Tab。点一下进录制态,按下新的「修饰键 + 普通键」即写入,Esc 取消;"

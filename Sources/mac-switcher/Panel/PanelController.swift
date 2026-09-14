@@ -63,7 +63,8 @@ final class PanelController: ObservableObject {
 
     func handle(_ action: HotkeyTapCenter.Action) {
         switch action {
-        case .begin: begin()
+        case .begin: begin(reverse: false)
+        case .beginReverse: begin(reverse: true)
         case .next: moveApp(1)
         case .prev: moveApp(-1)
         case .windowLeft: moveWindow(-1)
@@ -78,7 +79,7 @@ final class PanelController: ObservableObject {
 
     // MARK: - 生命周期
 
-    private func begin() {
+    private func begin(reverse: Bool) {
         // ADR-0001:触发即定场。语境屏快照只活在本轮导航态里
         guard let screen = CursorScreenAnchor.cursorScreen else {
             print("[T6] 取不到语境屏,面板不出现")
@@ -99,16 +100,28 @@ final class PanelController: ObservableObject {
         // begin 之后主线程被占 ~110ms,期间投递的按键全在排队)。让回调立刻返回,枚举在后台跑。
         Task.detached(priority: .userInitiated) {
             let raw = WindowEnumerator.rawGroups(on: screen)
-            await MainActor.run { self.finishBegin(raw, generation: generation, beganAt: beganAt) }
+            await MainActor.run {
+                self.finishBegin(raw, generation: generation, beganAt: beganAt, reverse: reverse)
+            }
         }
     }
 
-    private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime) {
+    private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime, reverse: Bool) {
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
         let screen = contextScreen
         groups = WindowEnumerator.orderByMRU(raw)
-        appIndex = 0
+        // **唤起落点**(2026-09-14 做成开关;用户口径:"默认肯定是用 macOS 原生的习惯,不要调教用户"):
+        //   开(**默认**)= 直接落在"上一个 App" —— 一次 ⌘Tab 就完成一次切换,这是 macOS 原生节奏;
+        //   关        = 落在第一个(当前 App),要再按一次 Tab 才切走 —— 留给"先唤起看清列表再决定"的人。
+        // 默认值必须是原生的那个:开关是给少数人的出口,不是让所有人先改一次习惯。
+        // 反向(⇧⌘Tab)对应地落到**最后一个**:方向从触发层传下来(HotkeyTapCenter.handleHotKey)。
+        let advanceOnOpen = UserDefaults.standard.object(forKey: "switch.advanceOnOpen") as? Bool ?? true
+        if advanceOnOpen, groups.count > 1 {
+            appIndex = reverse ? groups.count - 1 : 1
+        } else {
+            appIndex = 0
+        }
         winIndex = 0
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
         // 不再先闪一下"截图中…"。AltTab 也是这个路子 —— 缓存保活 + 后台刷新。
@@ -116,9 +129,9 @@ final class PanelController: ObservableObject {
         Snapshotter.shared.prune(keeping: Set(allWindows.map(\.wid)))
         // **正在显示的那一组排最前面**:卡片要等的就是它那一张。
         // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
-        let firstGroup = groups.first?.windows ?? []
-        let firstIDs = Set(firstGroup.map(\.wid))
-        Snapshotter.shared.precapture(firstGroup + allWindows.filter { !firstIDs.contains($0.wid) })
+        let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
+        let shownIDs = Set(shown.map(\.wid))
+        Snapshotter.shared.precapture(shown + allWindows.filter { !shownIDs.contains($0.wid) })
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         print(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
