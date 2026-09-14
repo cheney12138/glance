@@ -29,6 +29,8 @@ struct PanelView: View {
             GlassBackground(cornerRadius: PanelMetrics.rPanel)
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
+            // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
+            glassTopEdge
             // demo .panel-sheen:玻璃之上、图标之下。
             //
             // v0.3 回退(2026-09-14 实拍):曾经试过给高光**挖掉图标格**(even-odd 遮罩),
@@ -136,6 +138,24 @@ struct PanelView: View {
             .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
     }
 
+    /// 顶缘一道**极窄的**受光边(深色专用)。
+    ///
+    /// 深色面板的"厚度"不来自阴影 —— 黑影子在黑底上没有对手。真正让人读出"这是块板"
+    /// 的是顶缘这道亮线:光从上方来,玻璃的上沿受光,下沿背光,板子就有了厚度。
+    /// macOS 自己的深色窗口、NSGlassEffectView 的深色态都有这道线。
+    ///
+    /// 与已删的 `glassTopLight`(白 .18 铺到 30% 高度)的区别在**高度**:
+    /// 那道是一层纱(浅色上就是"透明度不行"的元凶),这道只有 1.5% 高度、只够描一条边。
+    /// 浅色返回透明色(不改浅色)。
+    private var glassTopEdge: some View {
+        LinearGradient(
+            colors: [PanelColors.glassTopEdge, .clear],
+            startPoint: .top,
+            endPoint: UnitPoint(x: 0.5, y: 0.015)
+        )
+        .allowsHitTesting(false)
+    }
+
     /// 确认涟漪的圆心 = 选中图标的中心(含 14px 上浮,demo 取的是变换后的 rect 中心)。
     /// X 与托盘锚点同源(`PanelLayout.iconCenterX`)
     private var selectedIconCenter: CGPoint {
@@ -184,7 +204,10 @@ private struct IconCell: View {
             .animation(motion, value: selected)
     }
 
-    /// 窗数点:每扇窗一粒,坐在图标下缘 7…11px 处(demo bottom:-11)
+    /// 窗数点:每扇窗一粒,坐在图标下缘(demo bottom:-11)。
+    ///
+    /// 选中时必须跟着图标一起抬(`dotLift`,理由见 PanelTokens)—— 点挂的是**格子**底边,
+    /// 而图标选中后是"上浮 + 放大"两件事一起动,点不跟就会掉队到托盘底边上去。
     @ViewBuilder private var windowDots: some View {
         if group.windows.count > 0 {
             HStack(spacing: PanelMetrics.dotGap) {
@@ -195,7 +218,7 @@ private struct IconCell: View {
                 }
             }
             .opacity(0.8)
-            .offset(y: PanelMetrics.dotBottom)
+            .offset(y: PanelMetrics.dotBottom - (selected ? PanelMetrics.dotLift : 0))
         }
     }
 }

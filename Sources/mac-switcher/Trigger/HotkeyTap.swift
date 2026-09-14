@@ -32,6 +32,7 @@ final class HotkeyTapCenter {
         case windowRight      // →:展开层右移
         case confirm          // ⌥ 释放:确认(聚焦选中窗)
         case cancel           // Esc:放弃
+        case yieldToCapture   // 截图中按回车:关面板、不聚焦(回车的第一所有权在截图工具,见 CaptureSessionRule)
         case quitApp          // Q:退出选中 App(T12)
         case closeWindow      // W:关闭选中窗(T12)
         case minimizeWindow   // M:最小化选中窗(T12)
@@ -69,6 +70,7 @@ final class HotkeyTapCenter {
     private static let keyF: Int64 = 0x03
     private static let keyH: Int64 = 0x04
     /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)
+    /// ⚠️ 唯一的例外是**截图会话里的回车**:那一发不吞(它是截图工具的"完成"),见 `handleReturn()`
     private static let navKeys: Set<Int64> =
         [keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave]
     /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
@@ -297,6 +299,8 @@ final class HotkeyTapCenter {
             return true
         }
         guard Self.navKeys.contains(keyCode) else { return false }
+        // ★ 截图会话:整套导航键让权(T32)。放在 trace 之前 —— 这一支的整条路都与面板无关了
+        if captureSessionTookOver(keyCode: keyCode) { return false }
         trace("navKey kc=\(keyCode)")
         switch keyCode {
         case Self.keyReturn: setState(.idle); emit(.confirm) // 钉住模式的确认键
@@ -314,6 +318,33 @@ final class HotkeyTapCenter {
             // ⇧` = 反向,与触发键的 ⇧ 反向约定一致
             emit(event.flags.contains(.maskShift) ? .windowLeft : .windowRight)
         default: break
+        }
+        return true
+    }
+
+    /// 截图会话里的**让权**(T32)。返回 true = "这一颗已经被截图会话接管",调用方直接放行(不吞)。
+    ///
+    /// 病例(2026-09-14 用户实报):「在截图的情况下,我按回车会同时触发截图的复制和选中的逻辑」。
+    /// 一次击键被两个主人收下:截图工具的取景框自己也在收回车(Return = 完成/复制),
+    /// 而 navTap 是**后装**的 tap,排在同一颗事件的后半段 —— 它照样看见、照样确认了一次,
+    /// 于是用户眼里就是"截图拷走了,App 也被拉起来了"。
+    ///
+    /// 裁决只有一条:**屏幕上正等着"完成"的那一刻,键盘归截图工具**。于是:
+    ///   · **一律不吞** —— 吞了,截图工具的"完成/复制"(Esc 取消、方向键微调选区)就都没了;
+    ///   · **一律不动选中** —— 此刻方向键是"微调选区",不是"换一扇窗";Q/W/M 更是不能乱动;
+    ///   · **只有回车多走一步:把面板关掉**(用户口径:"如果是截图,按回车之后不要触发打开某一个 APP,
+    ///     glance 面板应该直接关闭")。它也**不聚焦** —— 打开 App 是副作用,用户要的是把区域拷走。
+    ///
+    /// 判据在核里(`GlanceCore.CaptureSessionRule`,可单测),证据由 `CaptureSessionProbe` 采集。
+    private func captureSessionTookOver(keyCode: Int64) -> Bool {
+        let capture = CaptureSessionProbe.verdict()
+        guard capture.isCapture else { return false }
+        if keyCode == Self.keyReturn {
+            print("[T32] 回车落在截图会话里:\(capture.reason)→ 只关面板、不聚焦,这一颗放行给截图工具")
+            setState(.idle)
+            emit(.yieldToCapture)
+        } else {
+            trace("截图会话里放行 kc=\(keyCode):\(capture.reason)")
         }
         return true
     }
@@ -385,6 +416,7 @@ final class HotkeyTapCenter {
         case .windowRight: return "→ → 窗口右移"
         case .confirm: return "⌥ 释放 → 确认(T7 聚焦此处)"
         case .cancel: return "Esc → 放弃(面板关闭,不聚焦)"
+        case .yieldToCapture: return "回车落在截图会话 → 只关面板、不聚焦(T32;这一颗不吞)"
         case .quitApp: return "Q → 退出选中 App(T12)"
         case .closeWindow: return "W → 关闭选中窗(T12)"
         case .minimizeWindow: return "M → 最小化选中窗(T12)"

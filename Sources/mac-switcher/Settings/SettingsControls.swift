@@ -41,6 +41,8 @@ struct SettingsGroup<Content: View>: View {
 /// SwiftUI 里没有"我是最后一个子视图"的查询,与其搞一层序号推导,不如显式标注。
 struct SettingsRow<Trailing: View>: View {
     let title: String
+    /// 一句话说清"关掉会怎样",不解释实现。**别写 Markdown**:它是 `String`,
+    /// `Text(_: some StringProtocol)` 不解析,`**加粗**` 会把星号原样印在纸上。
     var desc: String? = nil
     var hairline: Bool = true
     @ViewBuilder var trailing: Trailing
@@ -57,6 +59,8 @@ struct SettingsRow<Trailing: View>: View {
                             .font(SettingsFont.rowDesc)
                             .foregroundStyle(SettingsTheme.ink2)
                             .lineSpacing(4) // demo line-height:1.55 @ 11.5px
+                            // 硬上限两行:设置项不是文档,超了说明该写进代码注释而不是 UI
+                            .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: SettingsMetrics.descMaxW, alignment: .leading)
                     }

@@ -1,4 +1,5 @@
 import AppKit
+import GlanceCore
 import SwiftUI
 
 /// 面板控制器:导航态状态机的唯一权威。
@@ -79,6 +80,10 @@ final class PanelController: ObservableObject {
         case .windowRight: moveWindow(1)
         case .confirm: confirmSelection()
         case .cancel: dismiss(reason: "放弃")
+        // 截图会话里的回车(T32):面板退场、**不聚焦任何窗**。
+        // 语义上它就是"放弃"(不生效),但理由不同 —— 用户不是不要了,是那一发回车归截图工具,
+        // 所以日志里必须分得清这两件事(否则复盘时会把"截图让权"读成"用户反悔")
+        case .yieldToCapture: dismiss(reason: "截图会话让权")
         case .quitApp: destructive(.quit)
         case .closeWindow: destructive(.close)
         case .minimizeWindow: destructive(.minimize)
@@ -127,11 +132,37 @@ final class PanelController: ObservableObject {
         //   关        = 落在第一个(当前 App),要再按一次 Tab 才切走 —— 留给"先唤起看清列表再决定"的人。
         // 默认值必须是原生的那个:开关是给少数人的出口,不是让所有人先改一次习惯。
         // 反向(⇧⌘Tab)对应地落到**最后一个**:方向从触发层传下来(HotkeyTapCenter.handleHotKey)。
+        //
+        // ★ 2026-09-14 二修:原生的"落点"与**原生的循环序**是两件事,上一版只做对了一半。
+        // `orderByMRU` 给的是 [**当前 App**, 上一个 App, 更早的…, 最久没用的]。
+        // 原生 ⌘Tab 的环是:**上一个 App → 更早的… → 最久没用的 → 当前 App → 回到上一个 App**
+        // (即"当前 App 只在绕完一圈后才出现")。落点必须是环上的第一格 = 上一个 App。
+        //
+        // 上一版用的是 `swapAt(0,1)`:高亮是落到第一格了(修掉了"选中第二个"的观感),
+        // 但它把**当前 App 放到了第二格** —— 于是环变成"上一个 App → 当前 App → …",
+        // 用户按一下 Tab 就绕回了自己所在的地方。实机日志对得上账:唤起后第一发 Tab 落在
+        // `[2/6]` 而那一格正是当前 App(实评:"这个开关没生效,我还是能选中第一个")。
+        // 开关其实生效了,是**环走错了** —— 循环序错了,落点对也白搭。
+        //
+        // 正解是**左旋一格**(当前 App 从队首沉到队尾),不是交换:
+        //   · 落点 = 队首 = 上一个 App   (与上一版一致,观感不变)
+        //   · 正向 Tab  → 更早的… → 最久没用的 → 最后才轮到当前 App(与原生同序)
+        //   · 反向 ⇧Tab → 直接到队尾 = 当前 App(原生也是这样:从第 2 格往回一格就是第 1 格)
+        // 交换只能改两格的相对位置,旋转改的是整条环 —— 这是两种完全不同的操作。
         let advanceOnOpen = UserDefaults.standard.object(forKey: "switch.advanceOnOpen") as? Bool ?? true
         if advanceOnOpen, groups.count > 1 {
-            appIndex = reverse ? groups.count - 1 : 1
-        } else {
-            appIndex = 0
+            // 旋的是**整条环**(纯核规则,带用例);反向不旋 —— 原生 ⇧⌘Tab 直接落在最久没用的那个
+            if !reverse { groups = LandingRule.rotatedForAdvance(groups) }
+        }
+        appIndex = advanceOnOpen
+            ? LandingRule.landingIndex(count: groups.count, reverse: reverse)
+            : 0
+        // 落点这行**每次都打**:上面这套(开关 × 正反向 × 环序)组合下来有 4 种走法,
+        // 只靠"高亮在第几格"根本分不清是哪一种 —— 下次再说"开关没生效",看这一行就够。
+        if groups.indices.contains(appIndex) {
+            print("[T6] 落点:唤起即切换=\(advanceOnOpen ? "开" : "关") · \(reverse ? "反向" : "正向")"
+                  + " · 选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)"
+                  + " · 顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
         }
         winIndex = 0
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
@@ -156,31 +187,133 @@ final class PanelController: ObservableObject {
         showPanel()
     }
 
+    /// 本会期托盘可用的**玻璃**空间(2026-09-14 换行那轮引入)。
+    /// 宽 = 可视宽 − 两侧安全边;高 = 长条**头顶**那一半 —— 长条是垂直居中的,
+    /// 托盘挂在它上沿之上,所以只有 (可视高 − 长条高) / 2 可用,不是整个屏高。
+    private var trayRoomW: CGFloat = 1440
+    private var trayRoomH: CGFloat = 420
+
     /// 把本会期的尺寸上限算出来(放不下就收紧,见 `PanelMetrics.sessionCap`)。
     ///
-    /// 量的是**基准宽**(每 1.0 倍尺寸的面板宽度):长条按 App 数、托盘按本屏最大窗数,
-    /// 两者取更紧的一个。不手写第二份几何公式 —— 直接把限制解掉后读真实的布局数学再除回来,
+    /// ★ 2026-09-14 改「托盘不再替长条决定尺寸」:
+    /// 旧算法是 `min(宽够不够长条, 宽够不够托盘一行摆完)` —— 托盘一旦摆不下就一路把
+    /// **整块面板**(连带长条图标)压下去。实测 14" MBP / 12 扇窗:整块缩到 **57%**,
+    /// 图标只剩 51pt、缩略图 113×70 —— 那已经不是"缩",是看不清了。
+    ///
+    /// 用户的裁决是"整块面板跟着缩,跟长条一个做法"(2026-09-14)。顺着它推到底就会撞上一件事:
+    /// **长条只能缩**(托底在横轴上滑,没法换行),而托盘**可以换行**。
+    /// 让一个能换行的容器去压一个不能换行的容器,是把最不灵活的那个逼到墙上。
+    ///
+    /// 于是分工改成:
+    ///   · 长条 = 唯一的**缩**驱动者(App 越多越小,与用户记忆里"长条到上限就缩"一致);
+    ///   · 托盘 = 先跟着一起缩,缩到**一行摆不下**就换行(`trayFitScale` 取能用的最大尺寸)。
+    /// 结果:12 扇窗从 57% 回到 **98%**(2 行),20 扇窗 69%(2 行),24 扇窗 66%(3 行)。
+    ///
+    /// 不手写第二份几何公式 —— 直接把限制解掉后读真实的布局数学再除回来,
     /// 这样任何度量改动都会自动跟着走(手写的话一定会漂)。
     private func applySessionScaleCap(on screen: NSScreen?) {
-        let avail = (screen?.visibleFrame.width ?? 1440) - 48 // 左右各留 24 的安全边
+        // 量的是**玻璃**的可用宽(透明呼吸区可以出屏,不参与"放不放得下")。
+        // 口径与 previewFrame 的收边共用 PanelMetrics.screenMargin,见那里的注释
+        let frame = screen?.visibleFrame
+        let margin = PanelMetrics.screenMargin
+        let availW = (frame?.width ?? 1440) - margin * 2
         let saved = PanelMetrics.sessionCap
+        PanelMetrics.sessionCap = .greatestFiniteMagnitude
+        // 长条按**固定档**估高(它与本局 cap 无关):托盘的竖向空间 = 长条头顶那一半,
+        // 这一步只决定"要几行",估值的误差远小于一行卡片的高度,不会翻盘
+        let stripH = PanelMetrics.rowPadY * 2 + PanelMetrics.icon
+        let seam = PanelMetrics.seam // 同档读,别让它跟着上一局的 cap 变
+        PanelMetrics.sessionCap = saved
+        let availH = ((frame?.height ?? 900) - stripH) / 2 - margin - seam
+        trayRoomW = max(availW, 320)
+        // 高度的下限只兜"取不到屏"的病态情况(140pt 还放得下一行小卡);
+        // 真拿到了屏就按真值算 —— 抬高低限等于允许托盘顶出屏外
+        trayRoomH = max(availH, 140)
+
         PanelMetrics.sessionCap = .greatestFiniteMagnitude
         let s = PanelMetrics.scale
         let stripBase = contentSize().width / s
-        let trayBase = groups.map { previewContentSize(for: $0).width / s }.max() ?? 0
         PanelMetrics.sessionCap = saved
-        let cap = min(avail / max(stripBase, 1), avail / max(trayBase, 1))
+
+        var cap = availW / max(stripBase, 1)
+        var worstN = 0
+        var worstScale = CGFloat.greatestFiniteMagnitude
+        for g in groups where !g.windows.isEmpty {
+            let fit = trayFitScale(count: g.windows.count).scale
+            cap = min(cap, fit)
+            if fit < worstScale { worstScale = fit; worstN = g.windows.count }
+        }
         PanelMetrics.sessionCap = cap
-        // 一行账,永远打:面板为什么变小了,看一眼日志就知道(比“尺寸不对但不知道为什么”值钱)
-        print(String(format: "[尺寸] 固定 %.0f%% · 屏宽 %.0f · 本局上限 %.0f%% · 基准宽 %.0fpt(长条)/%.0fpt(托盘)%@",
-                     s * 100, screen?.visibleFrame.width ?? 0, cap * 100, stripBase, trayBase,
+        // 行/列要在**收紧之后**再算:列数取的是当前尺寸下能放几张,
+        // 收紧前算出来的会是上一局的尺寸(日志里就会看到对不上的行 × 列)
+        let worstLayout = trayLayout(count: worstN)
+        // 一行账,永远打:面板为什么变小了,看一眼日志就知道(比"尺寸不对但不知道为什么"值钱)
+        print(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
+                     s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
+                     cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : ""))
+        if cap < 0.6 {
+            print("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
+        }
+    }
+
+    /// 托盘在 `count` 扇窗下能拿到的**最大**尺寸:穷举行数 1…`trayMaxRows`,
+    /// 每个行数取「宽与高都放得下」的尺寸上限,取最大的那个。
+    ///
+    /// 为什么不固定"一行摆完":一行摆完意味着窗数一多就一路缩到看不清(12 窗 → 57%)。
+    /// 为什么不固定"两行":6 窗明明一行放得下,分两行是把能用 113% 的一局压到 98% —— 白牺牲。
+    /// 所以是**取最大可用尺寸**,行数只是它的副产品。
+    private func trayFitScale(count n: Int) -> (scale: CGFloat, rows: Int, cols: Int) {
+        guard n > 0 else { return (.greatestFiniteMagnitude, 0, 0) }
+        let saved = PanelMetrics.sessionCap
+        PanelMetrics.sessionCap = .greatestFiniteMagnitude
+        let s = PanelMetrics.scale
+        // 每行/每列在 1.0 倍下的占位(含间隙;末尾那一份间隙要减掉,所以 pad 里是减不是加)
+        let cardW = (PanelMetrics.thumbW + PanelMetrics.thumbGap) / s
+        let padW = (PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap) / s
+        let rowH = (PanelMetrics.thumbH + PanelMetrics.trayRowGap) / s
+        let padH = (PanelMetrics.trayPadTop + PanelMetrics.trayPadBottom - PanelMetrics.trayRowGap) / s
+        PanelMetrics.sessionCap = saved
+
+        var best = (scale: CGFloat(0), rows: 1, cols: n)
+        for r in 1...min(n, PanelMetrics.trayMaxRows) {
+            let c = (n + r - 1) / r
+            let fit = min(trayRoomW / (CGFloat(c) * cardW + padW),
+                          trayRoomH / (CGFloat(r) * rowH + padH))
+            if fit > best.scale { best = (fit, r, c) }
+        }
+        return best
+    }
+
+    /// 托盘的行 × 列 —— **唯一来源**:视图排网格与 `previewContentSize` 都取它。
+    /// 两处各算一遍必然漂(上一次漂的代价是"托盘出屏")。
+    ///
+    /// 取**放得下的最少行数**(不是"一行塞到最满"):最小行数意味着每行列数均衡 ——
+    /// 8 扇窗在 1512 上贪心会排成 **7 + 1**(末行孤零零一张),取最少行数是 **4 + 4**。
+    ///
+    /// `+ 0.5` 是**容差**,不是凑数:尺寸上限就是按"刚好放满"解出来的,于是
+    /// `c × 卡宽 == 可用宽` 是这里的常态输入 —— 纯浮点下这一步会随机掉一个
+    /// (15 窗 / 2 行:8 列正好 1464.0pt,算出来 7 列 → 行数 2 变 3 → 托盘**竖向**溢出)。
+    /// 0.5pt 肉眼不可见,但足以让"刚好放得下"稳定成立。
+    func trayLayout(count n: Int) -> (rows: Int, cols: Int) {
+        guard n > 0 else { return (0, 1) }
+        let cardW = PanelMetrics.thumbW + PanelMetrics.thumbGap
+        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap
+        for r in 1...min(n, PanelMetrics.trayMaxRows) {
+            let c = (n + r - 1) / r
+            if CGFloat(c) * cardW + padW <= trayRoomW + 0.5 { return (r, c) }
+        }
+        // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
+        // (由 glassConstrainedX 居中、两端对称地切)也不往上堆成一面墙
+        let r = min(n, PanelMetrics.trayMaxRows)
+        return (r, (n + r - 1) / r)
     }
 
     private func showPanel() {
         buildPanelIfNeeded()
         panelOpenPoint = NSEvent.mouseLocation
         gateBlockedLogged = false
+        trayOverflowLogged = false
         guard let panel, let target = centerFrame(for: paddedSize()) else { return }
         isVisible = true
         // 退场演出期间关掉的事件耳,开新局要还回来
@@ -378,12 +511,19 @@ final class PanelController: ObservableObject {
     /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let g = group, !g.windows.isEmpty else { return .zero }
-        let n = CGFloat(g.windows.count)
-        let cardsW = n * PanelMetrics.thumbW + max(n - 1, 0) * PanelMetrics.thumbGap
+        let n = g.windows.count
+        // 一行摆不下就换行:宽度按**实际列数**算(不是总窗数),高度按行数叠加。
+        // 行/列只从 `trayLayout` 出 —— 与 PreviewPanelView 的网格同源,不许各算各的
+        let (rows, cols) = trayLayout(count: n)
+        let c = CGFloat(cols)
+        let r = CGFloat(max(rows, 1))
         return NSSize(
-            width: cardsW + PanelMetrics.trayPadX * 2,
-            // 与 PreviewPanelView 同源:题头行已去掉,高度里也不再留它
-            height: PanelMetrics.trayPadTop + PanelMetrics.thumbH + PanelMetrics.trayPadBottom
+            width: c * PanelMetrics.thumbW + max(c - 1, 0) * PanelMetrics.thumbGap
+                + PanelMetrics.trayPadX * 2,
+            // 题头行已去掉,高度里也不再留它
+            height: PanelMetrics.trayPadTop
+                + r * PanelMetrics.thumbH + max(r - 1, 0) * PanelMetrics.trayRowGap
+                + PanelMetrics.trayPadBottom
         )
     }
 
@@ -395,17 +535,61 @@ final class PanelController: ObservableObject {
         return NSSize(width: c.width + pad, height: c.height + pad)
     }
 
+    /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
+    private var trayOverflowLogged = false
+
     /// 托盘正中 = 长条正中(demo 的 .switcher-wrap 是 column 居中,托盘不跟图标滑移);
-    /// 超界时收进语境屏可视区(内 12);视觉缝 = seam
+    /// 超界时**只在玻璃层面**收进语境屏;视觉缝 = seam。
+    ///
+    /// ★ 2026-09-14 修「窗口一多,最左边那张预览卡被推出屏幕」:
+    ///
+    /// 旧写法是 `min(max(desired, area.minX + 12), area.maxX - size.width - 12)` —— 边界里的
+    /// `size` 是**窗口**宽 = 玻璃 + 两侧 `shadowPadPop`(96pt)的**透明呼吸区**。透明区根本不渲染,
+    /// 它越出屏幕什么也看不见,拿它算"放不放得下"是算错了对象;更要命的是**呼吸区一旦把可用宽吃穿,
+    /// 两条边界就反向**(lo > hi),`min(max())` 静默退化成"把右缘钉在 area.maxX - 12":
+    ///
+    ///   实测(14" MBP,屏宽 1512,6 扇窗 → 会话上限把 scale 收到 113.5%):
+    ///     玻璃 1464 + 呼吸区 192 = 窗口 1656  >  可用 1488
+    ///     → 窗口 x = -156,玻璃左缘 **-60**,右缘 1404(离屏右还白空 108)
+    ///     → 最左那张卡左缘 -35:卡被切掉 35pt,托盘的左圆角与左边距整片出屏,右侧却对着空气
+    ///
+    /// 现在把约束换成玻璃:只要玻璃放得下(会话上限保证了这一点),**一定居中且不出屏**。
     private func previewFrame() -> NSRect? {
         guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
-        let x = min(max(panel.frame.midX - size.width / 2, area.minX + 12), area.maxX - size.width - 12)
+        let x = glassConstrainedX(desired: panel.frame.midX - size.width / 2,
+                                  windowWidth: size.width,
+                                  pad: PanelMetrics.shadowPadPop,
+                                  area: area)
         // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip - 帧距,
         // 反解出帧距 = padPop + padStrip - seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
         let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
         let y = panel.frame.maxY - frameGap
         return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    /// 把窗口的 x 收进语境屏 —— **约束是玻璃,不是窗口**(两侧 pad 是透明的,允许出屏)。
+    /// 玻璃放得下时返回"收进屏内的期望位置";放不下时原样居中(两端对称地切)。
+    ///
+    /// 长条不走这条路:它的窗口与玻璃**同轴居中**(`centerFrame`),超界是对称的,且尺寸上限已保证
+    /// 玻璃放得下 —— 只有托盘会因为"居中于长条 + 自身过宽"而被推到单侧出屏。
+    private func glassConstrainedX(desired: CGFloat,
+                                   windowWidth: CGFloat,
+                                   pad: CGFloat,
+                                   area: NSRect) -> CGFloat {
+        let glass = windowWidth - pad * 2
+        let room = area.width - PanelMetrics.screenMargin * 2
+        guard glass <= room else {
+            // 玻璃比屏还宽:会话上限本该拦住(它按最宽的那一组算),这里只是兜底 ——
+            // 居中 = 两端对称地切,比旧写法"钉住右缘、左缘整片吃到屏外"诚实,也保证与长条仍然同轴
+            if !trayOverflowLogged {
+                trayOverflowLogged = true
+                glog("[尺寸] 托盘玻璃 \(Int(glass))pt > 可用 \(Int(room))pt,已居中(两端会被切)")
+            }
+            return desired
+        }
+        return min(max(desired, area.minX + PanelMetrics.screenMargin - pad),
+                   area.maxX - PanelMetrics.screenMargin - glass + pad)
     }
 
     private func updatePreview() {

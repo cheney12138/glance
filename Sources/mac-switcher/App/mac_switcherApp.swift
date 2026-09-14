@@ -36,7 +36,23 @@ struct MacSwitcherApp: App {
                 NSApplication.shared.terminate(nil)
             }
         } label: {
-            Image(systemName: permissions.allGranted ? "rectangle.3.group" : "exclamationmark.triangle")
+            // 自绘菜单栏图(Assets 里的 MenuBarIcon,按 template 渲染:形状定 / 颜色系统给)。
+            // 权限缺失时仍回退到系统符号,警示语义不让位
+            //
+            // ★ 两格走的是**两个不同的构造器**,不能合并成三元表达式:
+            //   · `Image(_ name:)` —— 只查 asset catalog("MenuBarIcon" 在里面);
+            //   · `Image(systemName:)` —— 只查 SF Symbols("exclamationmark.triangle" 在里面)。
+            //   2026-09-14 真机日志连报两行
+            //   “No image named 'exclamationmark.triangle' found in asset catalog” ——
+            //   合并写法把 SF Symbol 名喂给了 asset catalog,查不到就画一个**空图**,
+            //   于是“缺权限”这件事在菜单栏上其实一直**没有可见信号**(日志之外无人知晓)。
+            Group {
+                if permissions.allGranted {
+                    Image("MenuBarIcon")
+                } else {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+            }
                 .onAppear {
                     // 恢复守卫 + 启动自愈要先装:上一次运行如果被 SIGKILL,原生 ⌘Tab 会一直死着
                     // (见 NativeSwitcherHotkeys),这件事与权限是否齐备无关

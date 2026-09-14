@@ -44,9 +44,17 @@ enum MotionPolicy {
         UserDefaults.standard.object(forKey: "panel.puckRiseFromBottom") as? Bool ?? true
     }
 
-    /// "从底部升起"的距离。取 1.4×图标边长,是算出来的最小充分值:
-    /// 让内容在开场那一帧**完全**落到面板下缘之外(推导:icon + 30×scale;1.4×icon = 123×scale > 118×scale)
-    static var entryRiseDistance: CGFloat { PanelMetrics.icon * 1.4 }
+    /// "从底部升起"的距离。
+    ///
+    /// 曾经是 **1.4 × icon**(= 123pt),取的是"让内容在开场那一帧**完全**落到面板下缘之外"的
+    /// 最小充分值 —— 数学上没错,但它比面板内容高(132pt)还接近,观感就是**整块东西从板子最底下
+    /// 整个钻出来**,用户实评"弹起的幅度有点太大了"。
+    ///
+    /// 2026-09-14 改成 **0.4 × icon**(≈ 35pt):足够读出"从下面升上来"这件事,又不至于变成一次
+    /// 大位移。代价要认下来:**开场第一帧内容不再完全藏住**,会在面板下半部露出一点 ——
+    /// "幅度小"与"完全藏住"在几何上互斥(藏住 = 至少下移 rowPadY + icon + 托底下溢),
+    /// 这一次选幅度。想回到藏住的老行为,把系数调回 1.4 即可。
+    static var entryRiseDistance: CGFloat { PanelMetrics.icon * 0.4 }
 
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }

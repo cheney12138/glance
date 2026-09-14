@@ -17,13 +17,20 @@ struct PreviewPanelView: View {
         // **没有题头行**(2026-09-14 用户口径:"你把额头去掉我看看效果"):
         // App 名已由长条里选中的那个图标承担、窗口数由卡片张数承担 —— 那行只是把两件已知的事各写一遍,
         // 还占掉托盘顶部一整条高度。去掉后托盘 = 卡片 + 芯片
-        thumbRow
+        thumbGrid
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
         .background(GlassBackground(cornerRadius: PanelMetrics.rTray))
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous))
+        // 顶缘受光边:与长条同一道(深色靠它交代厚度;浅色透明)
+        .overlay(
+            LinearGradient(colors: [PanelColors.glassTopEdge, .clear],
+                           startPoint: .top,
+                           endPoint: UnitPoint(x: 0.5, y: 0.015))
+                .allowsHitTesting(false)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
                 .strokeBorder(PanelColors.glassBorder, lineWidth: PanelMetrics.hairline)
@@ -43,30 +50,48 @@ struct PreviewPanelView: View {
         .opacity(controller.isVisible ? 1 : 0)
     }
 
-    private var thumbRow: some View {
-        HStack(spacing: PanelMetrics.thumbGap) {
-            ForEach(Array(windows.enumerated()), id: \.element.wid) { i, w in
-                WindowThumb(
-                    record: w,
-                    bundleID: controller.currentGroup?.bundleID,
-                    image: snapshotter.cache[w.wid],
-                    selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
-                    traffic: {
-                        // 三粒灯的动作 T14 就实现了(WindowFocuser.close/minimize/zoom),
-                        // T15 换卡片样式时把 UI 丢了 —— 2026-09-14 用户要求恢复
-                        TrafficLights(
-                            wid: w.wid,
-                            close: { controller.closeWindowClicked(w.wid) },
-                            minimize: { controller.minimizeWindowClicked(w.wid) },
-                            zoom: { controller.zoomWindowClicked(w.wid) }
-                        )
-                    },
-                    motion: MotionPolicy.animation(PanelMotion.thumb)
-                )
-                .onHover { inside in if inside { controller.hoverWindow(i) } }
-                .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
+    /// 卡片网格。一行摆得下就是一行(与旧版完全一样),摆不下才换行 ——
+    /// 换行是"托盘不再替长条压尺寸"的另一半(见 `PanelController.applySessionScaleCap`)。
+    ///
+    /// 行数由 `trayLayout` 取"放得下的最少行数",所以各行是**均衡**的(8 扇窗 = 4+4,
+    /// 不是 7+1);末行少几张时**左对齐留空**,不拉伸、不居中 —— 居中的话卡片间距会随
+    /// 末行张数变,左右扫视时每一行的节凑都不一样。
+    private var thumbGrid: some View {
+        let (rows, cols) = controller.trayLayout(count: windows.count)
+        let rowsSafe = max(rows, 1)
+        let colsSafe = max(cols, 1)
+        return VStack(spacing: PanelMetrics.trayRowGap) {
+            ForEach(0..<rowsSafe, id: \.self) { r in
+                HStack(spacing: PanelMetrics.thumbGap) {
+                    ForEach(r * colsSafe..<min(r * colsSafe + colsSafe, windows.count), id: \.self) { i in
+                        thumb(at: i)
+                    }
+                }
             }
         }
+    }
+
+    private func thumb(at i: Int) -> some View {
+        let w = windows[i]
+        return WindowThumb(
+            record: w,
+            bundleID: controller.currentGroup?.bundleID,
+            image: snapshotter.cache[w.wid],
+            selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
+            traffic: {
+                // 三粒灯的动作 T14 就实现了(WindowFocuser.close/minimize/zoom),
+                // T15 换卡片样式时把 UI 丢了 —— 2026-09-14 用户要求恢复
+                TrafficLights(
+                    wid: w.wid,
+                    close: { controller.closeWindowClicked(w.wid) },
+                    minimize: { controller.minimizeWindowClicked(w.wid) },
+                    zoom: { controller.zoomWindowClicked(w.wid) }
+                )
+            },
+            motion: MotionPolicy.animation(PanelMotion.thumb)
+        )
+        .onHover { inside in if inside { controller.hoverWindow(i) } }
+        .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
     }
 }
 
@@ -256,6 +281,12 @@ private struct WindowThumb<Overlay: View>: View {
             .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
             .overlay(Capsule(style: .continuous)
                 .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+            // **没有高光唇**(2026-09-14 深夜删掉的那一段,别加回来):
+            // 这里原本有一条"上缘受光唇"—— 沿胶囊弧走、往下收干的一道亮边,理由是"深色里靠受光边
+            // 交代我是一块玻璃"。但用户看到的是另一种东西:"像是零几年的 macOS 那种玻璃质感,太过时了"。
+            // 这个判断是对的:上缘高光 + 亮描边就是 Aqua 时代那对"会反光的玻璃胶囊"的签名,
+            // 而现在的 macOS 早就不用它了(浅色那格当年也没这道唇,它返回的是全透明)。
+            // 芯片要的"清透"由**底的半透**承担(透过它看到的是已毛玻璃化的画面),不再由受光边承担。
             .frame(height: PanelMetrics.chipH)
     }
 }
