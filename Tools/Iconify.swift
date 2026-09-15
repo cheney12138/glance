@@ -11,6 +11,8 @@ import UniformTypeIdentifiers
 
 let src = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "chosen.png"
 let outDir = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "/tmp/glance-icon"
+// 遮罩圆角占边长的比例。默认 0.29;可作第三个参数传入以便**扫参**(衡量方法见 design/icon/README.md 坑六)
+let cornerRatio = CommandLine.arguments.count > 3 ? (Double(CommandLine.arguments[3]) ?? 0.29) : 0.29
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
 let isrc = CGImageSourceCreateWithURL(URL(fileURLWithPath: src) as CFURL, nil)!
@@ -74,7 +76,9 @@ let cx = CGFloat(left) + CGFloat(side0) / 2, cy = CGFloat(top) + CGFloat(side0) 
 // 与"满幅、和 DockDoor/Ghostty 一样大"这个目标无冲突。
 // (82% 时代的那段"沿四边比背景色"扫描的结论恰好也是 1.75%,两次独立测量互相印证。)
 let sideC = CGFloat(side0)          // Int/CGFloat 混算会让类型检查器超时,先转干净
-let inset0 = sideC * 0.018
+// 第四个参数:裁切内缩比例(默认 0.018)。可扫参 —— 见 design/icon/README.md「坑六」
+let insetRatio = CommandLine.arguments.count > 4 ? (Double(CommandLine.arguments[4]) ?? 0.018) : 0.018
+let inset0 = sideC * CGFloat(insetRatio)
 let boxOriginX = cx - sideC / 2 + inset0
 let boxOriginY = cy - sideC / 2 + inset0
 let box = CGRect(x: boxOriginX, y: boxOriginY,
@@ -96,7 +100,7 @@ func make(_ px: Int) -> CGImage {
     ctx.interpolationQuality = .high
     ctx.saveGState()
     let mask = CGPath(roundedRect: target.insetBy(dx: side*0.004, dy: side*0.004),
-                      cornerWidth: side*0.29, cornerHeight: side*0.29, transform: nil)
+                      cornerWidth: side*CGFloat(cornerRatio), cornerHeight: side*CGFloat(cornerRatio), transform: nil)
     ctx.addPath(mask); ctx.clip()
     // 源图按 box → target 缩放后绘制
     ctx.translateBy(x: 0, y: S); ctx.scaleBy(x: 1, y: -1)   // 目标翻转(左上原点)
@@ -127,4 +131,4 @@ for (bgName, bg) in [("light", CGColor(srgbRed: 0.97, green: 0.97, blue: 0.96, a
     let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "/tmp/koala/icon/preview-\(bgName).png") as CFURL, UTType.png.identifier as CFString, 1, nil)!
     CGImageDestinationAddImage(d, ctx.makeImage()!, nil); CGImageDestinationFinalize(d)
 }
-print("导出完成 → \(outDir)/")
+print("导出完成 → \(outDir)/  (圆角 \(cornerRatio) · 内缩 \(insetRatio))")
