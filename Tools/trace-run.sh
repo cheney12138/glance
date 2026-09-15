@@ -19,8 +19,8 @@ if pgrep -x Glance >/dev/null; then
   swift "$(dirname "$0")/NativeHotkeys.swift" restore >/dev/null 2>&1 || true
 fi
 
-: > "$LOG"
-GLANCE_TRACE=1 "$APP/Contents/MacOS/Glance" >> "$LOG" 2>&1 &
+# 不在这里重定向:进程自己会写(~Library/Logs/Glance/trace.log),所以 Xcode 起、终端起都落同一个文件
+GLANCE_TRACE=1 "$APP/Contents/MacOS/Glance" >/dev/null 2>&1 &
 disown || true
 echo "已启动(后台)✓  日志:$LOG"
 echo "测完跟我说一声就行 —— 我会自己读这个文件。"

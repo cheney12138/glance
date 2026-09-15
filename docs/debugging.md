@@ -518,12 +518,24 @@ defaults delete com.cheney12138.macswitcher debug.noElementShadows             #
 **病**:Glance 从终端直接起时,stdout 绑在**那个 tty** 上(`lsof -p <pid> -a -d 1` 能看到
 `/dev/ttys011` 这种)—— 别人读不到,只能人肉复制粘贴,而一次测试动辄上千行 ✗。
 
-**改**:`bash Tools/trace-run.sh` —— 起之前先按规矩收掉旧实例(TERM → 不行才 KILL + 手动还原热键),
-然后把 `GLANCE_TRACE=1` 的输出固定写到:
+**改(两层保险)**:
+
+① **进程自己落盘**(主要手段):只要 trace 开着,`GlanceApp.init` 就把 stdout 重定向到
 
 ```
 ~/Library/Logs/Glance/trace.log
 ```
+
+—— 于是 **Xcode 起、终端起、图标起,都写同一个文件**,不再取决于启动方式。
+单文件上限 5MB(超了重开,诊断日志是"最近一次测试"用的,不是档案)。
+终端那边会留一行提示(走 stderr,不进文件)。
+
+② `bash Tools/trace-run.sh`(顺手的入口):先按规矩收掉旧实例(TERM → 不行才 KILL + 手动还原热键),
+再带 `GLANCE_TRACE=1` 起它。
+
+**病例(为什么两层都要)**:第一版只有脚本,**用户没用脚本**,于是日志仍旧绑在那个 tty 上;
+而用户的终端是 Ghostty —— **连 AppleScript 读 scrollback 这条后路都没有**(Terminal.app 的
+`contents of tab` 够不着它)。所以真正的解法是"进程自己写文件",不是"要求用户换个方式起"。
 
 以后"我测完了" → 助手直接读这个文件 ✓。**只关心某几行**时可以自己先看一眼:
 ```bash

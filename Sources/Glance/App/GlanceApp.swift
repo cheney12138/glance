@@ -9,6 +9,7 @@ struct GlanceApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
         _ = stdoutIsLineBuffered
+        mirrorStdoutToLogFileIfTracing()   // trace 时把 stdout 落到 ~/Library/Logs/Glance/trace.log
         // 外观要在任何窗/面板画出来之前摆好(面板取的全是按外观解析的动态色)
         AppearancePreference.apply()
         // AX 超时也在此刻定死:它是进程级设置,晚一步就有一次无上限的跨进程等待

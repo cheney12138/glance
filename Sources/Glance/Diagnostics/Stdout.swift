@@ -46,6 +46,32 @@ private func glogCostAccumulate(_ dt: CFAbsoluteTime) {
     }
 }
 
+/// trace 开着时,把进程自己的 stdout 落到**固定文件** —— 不再依赖"它是怎么被启动的"。
+///
+/// 病例(2026-09-15):诊断期日志的落点一直取决于启动方式 ——
+/// Xcode 起 → 在调试器控制台;终端起 → 绑在那个 tty 上(实测 `/dev/ttys011`)。
+/// 后者别人读不到,只能人肉复制上千行;而用户用的终端是 Ghostty,**连 AppleScript 读 scrollback 这条后路都没有** ✗。
+/// 于是干脆让进程自己写:只要 trace 开着,stdout 就重定向到
+/// `~/Library/Logs/Glance/trace.log`(追加),终端那边只留一行提示 —— 提示走 stderr,不进这个文件。
+///
+/// 单文件上限 5MB:诊断日志是"最近一次测试"用的,不是档案
+/// (同机另一个调试日志长到 164MB,没人看得动)。
+func mirrorStdoutToLogFileIfTracing() {
+    guard isTraceEnabled else { return }
+    let dir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/Glance", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("trace.log")
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+       let size = attrs[.size] as? Int, size > 5_000_000 {
+        try? FileManager.default.removeItem(at: url)
+    }
+    freopen(url.path, "a", stdout)
+    setvbuf(stdout, nil, _IOLBF, 0)
+    print("──────── 新一次启动 \(Date()) ────────")
+    FileHandle.standardError.write("Glance trace 日志 → \(url.path)\n".data(using: .utf8)!)
+}
+
 /// 事件级 / 帧级诊断的**总开关**(全 App 唯一来源)。两个入口:
 ///   ① 环境变量 `GLANCE_TRACE=1` —— 终端起 App 的常规姿势(见 `docs/debugging.md` §1),
 ///      也是 Xcode 里加 Run scheme 环境变量的写法;
