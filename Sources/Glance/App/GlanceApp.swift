@@ -32,6 +32,8 @@ struct GlanceApp: App {
             }
             Button("设置…") { showSettings() }
             Divider()
+            Button("检查更新…") { UpdateChecker.checkForUpdates() }
+            Divider()
             Button("退出 Glance") {
                 NSApplication.shared.terminate(nil)
             }
