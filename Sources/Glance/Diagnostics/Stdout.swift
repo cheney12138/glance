@@ -68,7 +68,11 @@ func mirrorStdoutToLogFileIfTracing() {
     }
     freopen(url.path, "a", stdout)
     setvbuf(stdout, nil, _IOLBF, 0)
-    print("──────── 新一次启动 \(Date()) ────────")
+    // 本地时间:上一版直接打 `Date()`,机器上打出来是 **09:47** 而实际是 **17:47** ——
+    // 读日志的人会怀疑自己看错了 ✗(日志是给人读的,时间的时区不能让人去换算)
+    let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "zh_CN"); fmt.dateFormat = "MM-dd HH:mm:ss"
+    print("──────── 新一次启动 \(fmt.string(from: Date())) \(TimeZone.current.identifier) ────────")
     FileHandle.standardError.write("Glance trace 日志 → \(url.path)\n".data(using: .utf8)!)
 }
 
