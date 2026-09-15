@@ -1,5 +1,6 @@
 import CoreGraphics
 import Carbon.HIToolbox
+import Foundation
 
 /// 原生切换器热键(system symbolic hotkey)的**知识 + 总开关** —— 本项目的"屏蔽 ⌘Tab"就在这里。
 ///
@@ -54,6 +55,7 @@ public enum NativeHotkeys {
         let (disable, enable) = plan(for: trigger, takeover: takeover)
         for key in disable { _ = cgsSet(key, false) }
         for key in enable { _ = cgsSet(key, true) }
+        if disable.isEmpty { clearTakeoverMarker() } else { markTakeoverActive() }
         print("[T13] 原生热键:关 \(disable.map(\.rawValue)) / 开 \(enable.map(\.rawValue))"
               + (disable.isEmpty ? "(未接管或触发键不重叠 —— 系统热键全部归还)" : ""))
     }
@@ -61,6 +63,47 @@ public enum NativeHotkeys {
     /// 全恢复。启动自愈、退出、崩溃兜底都走它
     public static func restoreAll() {
         for key in Key.allCases { _ = cgsSet(key, true) }
+        clearTakeoverMarker()
+    }
+
+    // MARK: - "脏退出"标记(2026-09-15 病例:改工程名期间 Xcode Stop 把 ⌘Tab 留死)
+    //
+    // 关掉的是**系统级**热键,状态存在 WindowServer 里、跨进程退出持久化;而 SIGKILL(Xcode 的 Stop 按钮、
+    // 强制退出)谁都拦不住 —— 那一次运行来不及走到恢复守卫,用户的 ⌘Tab 就一直死着,而且**看不出原因**。
+    //
+    // 无法阻止,但可以让它**可见**:接管期间落一个标记文件,恢复时删掉。下次启动时若标记还在,
+    // 说明上次是被强杀带走的 —— 打一行说明,并顺手自愈(restoreAll)。
+
+    /// 标记文件所在目录(可注入,便于单测)
+    public static var supportDirectory: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("Glance", isDirectory: true)
+    }()
+
+    public static func takeoverMarkerURL(in directory: URL? = nil) -> URL {
+        let dir = directory ?? supportDirectory
+        return dir.appendingPathComponent("native-takeover.active")
+    }
+
+    /// 接管生效时落标记(写失败不致命:它只影响下次启动的一句提示)
+    public static func markTakeoverActive() {
+        let url = takeoverMarkerURL()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try? Data("takeover".utf8).write(to: url, options: .atomic)
+    }
+
+    public static func clearTakeoverMarker() {
+        try? FileManager.default.removeItem(at: takeoverMarkerURL())
+    }
+
+    /// 读走标记:返回 true = 上次退出时原生热键正被接管(且没来得及还原)
+    public static func consumeTakeoverMarker() -> Bool {
+        let url = takeoverMarkerURL()
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        try? FileManager.default.removeItem(at: url)
+        return true
     }
 }
 

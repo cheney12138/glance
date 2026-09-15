@@ -392,3 +392,23 @@ traceCost("托盘改尺寸") { setFrameIfNeeded(previewPanel, frame) }
 同一轮顺带清掉的:三行开局账(`[T8]` + 面板出现 + `按键→上屏`)合并成 `[唤起]` 一行;
 `[尺寸] 托盘窗口 …`(那是"整局只 setFrame 一次"的验证账,已验证完)删除;
 `glassConstrainedX` 死代码删除(它那行"托盘玻璃超宽"的兜底已由内容矩形那套承担)。
+
+## 13. 「⌘Tab 失灵了」——先别猜残留进程(2026-09-15 病例)
+
+**现象**:按 ⌘Tab 什么也不发生;`pgrep -fl Glance` 是**空的**(App 根本没在跑)。
+
+**病根**:接管开关关掉的是**系统级**符号热键(`CGSSetSymbolicHotKeyEnabled`),这个状态存在
+WindowServer 里、**跨进程退出持久化**。App 被 SIGKILL 带走(Xcode 的 Stop 按钮、强制退出)时,
+四个兜底口(`willTerminate`/未捕获异常/四个信号)一个都跑不到 —— 而此刻 App 已经不在跑,
+**启动自愈也没机会执行**,于是 ⌘Tab 就一直死着。
+
+**救**(一条命令,三个热键全开回来):
+```bash
+swift Tools/NativeHotkeys.swift restore
+```
+状态没有 getter(私有 API 只给了 setter),所以"开没开"只能实测:按住 ⌘Tab 若干秒,
+看有没有「程序坞」的全屏窗口冒出来(`Tools/CaptureWindow.swift list` 能看到 layer=20 那块)。
+
+**以后别踩**:停 App 用 `pkill -TERM Glance`(走信号兜底 ✓),不要用 Xcode 的 Stop(SIGKILL ✗)。
+接管期间会落一个标记文件;下次启动若它还在,日志会打一行
+「上次退出没来得及归还原生热键(强杀)——本次启动已自愈」—— 这句话就是答案,不用再猜。

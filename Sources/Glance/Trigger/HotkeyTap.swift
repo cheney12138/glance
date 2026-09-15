@@ -92,7 +92,12 @@ final class HotkeyTapCenter {
 
     func start() {
         guard flagsTap == nil else { return }
-        // 启动自愈:上一次运行如果被 SIGKILL(谁也拦不住的那种),原生 ⌘Tab 会一直死着 —— 先全恢复
+        // 启动自愈:上一次运行如果被 SIGKILL(谁也拦不住的那种),原生 ⌘Tab 会一直死着 —— 先全恢复。
+        // 标记文件还在 = 上次确实是被强杀带走的(见 `NativeHotkeys` 的"脏退出标记"):明说一句,
+        // 否则"⌘Tab 死了"这件事在日志里完全不可见,只能靠猜。
+        if NativeHotkeys.consumeTakeoverMarker() {
+            print("[T13] 上次退出没来得及归还原生热键(强杀)——本次启动已自愈")
+        }
         NativeHotkeys.restoreAll()
         normalizeLegacyTakeoverState()
 

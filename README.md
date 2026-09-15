@@ -37,6 +37,12 @@ tccutil reset ScreenCapture com.cheney12138.macswitcher
 
 两条都跑完重启 App,会重新走一遍授权引导。
 
+## ⌘Tab 失灵了?(接管开关的副作用)
+接管系统切换器关掉的是**系统级**热键,状态跨进程退出持久化。App 被强杀(Xcode 的 Stop、强制退出)时
+来不及还原,⌘Tab 就会一直死着(此时 App 多半没在跑,`pgrep -fl Glance` 为空 —— **不是残留进程**)。
+一条命令救回来:`swift Tools/NativeHotkeys.swift restore`。细节与开发纪律见 `docs/debugging.md` §13。
+停 App 请用 `pkill -TERM Glance`,别用 Xcode 的 Stop(那是 SIGKILL,所有兜底都失效)。
+
 ## 二期决定(2026-09-13,从 AltTab/DockDoor 取所长)
 
 - ✅ 做:T10 钉住毕业 → T11 选中项现拍 → T12 面板内 Q/W/M 窗口操作

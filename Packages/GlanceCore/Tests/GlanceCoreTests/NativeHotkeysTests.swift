@@ -78,4 +78,32 @@ final class NativeHotkeysTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - "脏退出"标记(2026-09-15 病例:Xcode Stop 把 ⌘Tab 留死)
+
+    /// 标记必须能"落 → 读走 → 再读为空",而且目录可注入(否则测试会写到用户真实的 App Support 里)
+    func testTakeoverMarkerRoundTrip() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("glance-marker-test-\(UUID().uuidString)", isDirectory: true)
+        let saved = NativeHotkeys.supportDirectory
+        NativeHotkeys.supportDirectory = tmp
+        defer { NativeHotkeys.supportDirectory = saved; try? FileManager.default.removeItem(at: tmp) }
+
+        XCTAssertFalse(NativeHotkeys.consumeTakeoverMarker(), "没落过标记时必须是 false")
+
+        NativeHotkeys.markTakeoverActive()
+        XCTAssertTrue(NativeHotkeys.consumeTakeoverMarker(), "落过标记后必须读到 true")
+        XCTAssertFalse(NativeHotkeys.consumeTakeoverMarker(), "标记是**读走**(读一次就清),第二次必须 false")
+
+        NativeHotkeys.markTakeoverActive()
+        NativeHotkeys.clearTakeoverMarker()
+        XCTAssertFalse(NativeHotkeys.consumeTakeoverMarker(), "恢复后必须读不到 —— 否则每次启动都误报'上次被强杀'")
+    }
+
+    /// 标记路径的命名口径(改它等于改"下次启动能不能认出脏退出")
+    func testTakeoverMarkerPathNaming() {
+        let dir = URL(fileURLWithPath: "/tmp/x")
+        XCTAssertEqual(NativeHotkeys.takeoverMarkerURL(in: dir).lastPathComponent, "native-takeover.active")
+        XCTAssertEqual(NativeHotkeys.takeoverMarkerURL(in: dir).deletingLastPathComponent().path, "/tmp/x")
+    }
 }

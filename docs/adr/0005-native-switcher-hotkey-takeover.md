@@ -78,7 +78,16 @@ T13 的"接管系统切换器(⌘Tab)"一直是在**事件层**实现的:装一�
 **遗留简化**:三块 tap 仍挂在主 runLoop(参考实现把 tap 挪到了独立线程)。v1.13 之后这个差别的
 代价只剩"回调晚一点" —— 不再影响 ⌘Tab 归属(触发走 Carbon),所以先不搬;真要再压输入延迟再说。
 
+**2026-09-15 病例(改工程名期间 ⌘Tab 被留死)**:改名 + 重建时 Xcode 的 **Stop 按钮发 SIGKILL** ——
+四个兜底口一个都跑不到,系统热键留在关闭状态;而且此刻 App 已经不在跑,**没有任何人**会去恢复,
+用户看到的现象就是"⌘Tab 失灵了",还以为是残留进程(`pgrep -fl Glance` 是空的)。
+拦不住 SIGKILL,但可以**让它可见**:接管生效时落一个标记文件(`NativeHotkeys.markTakeoverActive`),
+任何恢复路径删掉它;下次启动若标记还在 → 打一行"上次是被强杀带走的"+ 自愈。
+**另外给用自己的手**:停 App 用 `pkill -TERM Glance`(走信号兜底 ✓)而不是 Xcode 的 Stop(✗)。
+
 **开发纪律(改触发层的人必读)**:
 1. 别删 `restoreAll()` 与四个兜底口 —— 删了就是把用户的 ⌘Tab 弄死;
+1b. **停 App 别按 Xcode 的 Stop**(SIGKILL,兜底全失效)→ `pkill -TERM Glance`;⌘Tab 已经死了就用
+    `swift Tools/NativeHotkeys.swift restore` 救(见 `docs/debugging.md` §13);
 2. 别在会话之外新增 destructive tap,也别把 `navTap` 改成常开;
 3. 验证按 `docs/debugging.md` 第 7 节做:"按住 ⌘Tab 看有没有「程序坞」窗口"是这件事唯一的实测口径。
