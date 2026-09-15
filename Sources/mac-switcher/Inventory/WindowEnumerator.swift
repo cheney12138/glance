@@ -22,6 +22,11 @@ struct AppGroup {
 ///   本屏窗   = 归属屏恰为语境屏(几何交占比最大)且占比 ≥20%
 ///   不可见窗 = 没 ordered-in 的一律不要(.optionOnScreenOnly 天然排除最小化/⌘H 隐藏)
 ///   排序     = MRU 证据(ADR-0003)
+/// 幽灵窗日志去重用的锁与上次内容(见 `WindowEnumerator.logGhostOnce`)。
+/// 文件级:枚举在后台线程跑,碰不到 actor 状态。
+private let ghostLogLock = NSLock()
+nonisolated(unsafe) private var lastGhostLogLine: String?
+
 @MainActor
 enum WindowEnumerator {
     private static let ownershipThreshold: CGFloat = 0.2
@@ -59,7 +64,7 @@ enum WindowEnumerator {
             let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
             if alpha <= 0.05 || bounds.width < 50 || bounds.height < 50 {
                 let ownerForLog = info[kCGWindowOwnerName as String] as? String ?? "?"
-                print("[幽灵窗滤除] \(ownerForLog) alpha=\(alpha) \(Int(bounds.width))x\(Int(bounds.height))")
+                Self.logGhostOnce("\(ownerForLog) alpha=\(alpha) \(Int(bounds.width))x\(Int(bounds.height))")
                 continue
             }
 
@@ -82,7 +87,7 @@ enum WindowEnumerator {
             let kept = group.filter { admission.admitted.contains($0.wid) }
             let dropped = group.filter { !admission.admitted.contains($0.wid) }
             if !dropped.isEmpty {
-                print("[幽灵窗滤除] \(group.first?.ownerName ?? "?"):AX 不认 \(dropped.count)/\(group.count) 扇 — "
+                Self.logGhostOnce("\(group.first?.ownerName ?? "?"):AX 不认 \(dropped.count)/\(group.count) 扇 — "
                       + dropped.map { "#\($0.wid)\"\($0.title)\"(\(admission.rejected[$0.wid] ?? "?"))" }
                                 .joined(separator: ", "))
             }
@@ -118,6 +123,19 @@ enum WindowEnumerator {
         }
 
         return Array(byPID.values)
+    }
+
+    /// 幽灵窗日志**同一条只记一次**(2026-09-15):它每局枚举都会重印,而内容几乎永远一样
+    /// (CatDesk 的空壳窗、Chrome 的查找条)—— 一天上千行,把真信号淹了。
+    /// 只在**内容变化**时打:新出现的幽灵窗仍然一眼可见,重复的不再刷屏。
+    /// 被 `nonisolated` 的枚举路径调用(枚举跑后台),所以状态放文件级全局 + 加锁 ——
+    /// 挂在 `@MainActor` 的 enum 上是编译不过的,这不是绕路,是它本来就跨线程。
+    nonisolated private static func logGhostOnce(_ line: String) {
+        ghostLogLock.lock()
+        defer { ghostLogLock.unlock() }
+        guard lastGhostLogLine != line else { return }
+        lastGhostLogLine = line
+        print("[幽灵窗滤除] \(line)")
     }
 
     /// MRU 证据排序(主线程状态,必须在主线程调用)

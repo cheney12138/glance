@@ -235,7 +235,8 @@ final class HotkeyTapCenter {
         let shouldEnable = state == .navigating
         if CGEvent.tapIsEnabled(tap: navTap) != shouldEnable {
             CGEvent.tapEnable(tap: navTap, enable: shouldEnable)
-            print("[T13] 导航吞键 tap:\(shouldEnable ? "开" : "关")")
+            // 每局开关各一条,是常态而非事件 —— 收进 trace(要看纪律是否守住时再开)
+            trace("[T13] 导航吞键 tap:\(shouldEnable ? "开" : "关")")
         }
     }
 
@@ -361,7 +362,16 @@ final class HotkeyTapCenter {
     /// 原样放行,只把状态说清楚,免得日志引发误判。
     fileprivate func handleTapDisabled(_ type: CGEventType) -> Bool {
         let byTimeout = type == .tapDisabledByTimeout
-        print("[T13] tap 被系统停用(\(byTimeout ? "超时" : "用户输入")) 导航中:\(state == .navigating) → 重开")
+        // 措辞要准:这里只重开**只读**两个 tap;navTap 的生死由会话状态管(见 `updateNavTap`)。
+        // 上一版写"→ 重开"会读成"吞键 tap 又回来了",把人和诊断都带偏(2026-09-15 我自己先中了一次)。
+        // 常态不打扰:**会话结束后我们自己关 navTap,系统会把这条"禁用"回显给我们**
+        // (实测每局必来一条,导航中:false)—— 它没有信息量,却占了日志里很大一块。
+        // 只有"会话进行中"被停用才值得说话:那才是 ADR-0005 说的"这一发可能漏给系统"。
+        if state == .navigating {
+            print("[T13] ⚠️ 导航中 tap 被系统停用(\(byTimeout ? "超时" : "用户输入")) → 只读 tap 重开(navTap 按会话开关)")
+        } else {
+            trace("[T13] tap 停用回显(常态,已忽略)")
+        }
         reEnableTapIfNeeded()
         return false
     }
@@ -399,7 +409,7 @@ final class HotkeyTapCenter {
 
     /// 开关缓存在 static let:`ProcessInfo.environment` 每次调用都要建字典,不能放在每颗事件的热路径上。
     /// (stdout 的行缓冲在 `Stdout.swift` 里设,那里比这里更早。)
-    private static let traceEnabled = ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil
+    private static let traceEnabled = isTraceEnabled
 
     private func trace(_ line: String) {
         guard Self.traceEnabled else { return }

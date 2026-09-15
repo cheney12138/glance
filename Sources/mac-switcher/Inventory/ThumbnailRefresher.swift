@@ -35,8 +35,8 @@ final class ThumbnailRefresher {
             object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.invalidateAll(reason: "显示器参数变化") }
         })
-        if ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil {
-            print("[保温] 已上线:App 激活 → 抓它的窗;显示器变化 → 整块缓存作废")
+        if isTraceEnabled {
+            glog("[保温] 已上线:App 激活 → 抓它的窗;显示器变化 → 整块缓存作废")
         }
     }
 
@@ -54,16 +54,17 @@ final class ThumbnailRefresher {
         Task.detached(priority: .utility) {
             let groups = WindowEnumerator.rawGroups(on: screen)
             guard let group = groups.first(where: { $0.pid == pid }), !group.windows.isEmpty else { return }
-            if ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil {
-                print("[保温] \(group.appName) 激活 → 拍它 \(group.windows.count) 窗")
+            if isTraceEnabled {
+                glog("[保温] \(group.appName) 激活 → 拍它 \(group.windows.count) 窗")
             }
-            await Snapshotter.shared.precapture(group.windows)
+            // 激活即重拍(force):刚切过去的那个 App 画面最可能刚变过(换了主题/文件/内容)
+            await Snapshotter.shared.precapture(group.windows, force: true)
         }
     }
 
     private func invalidateAll(reason: String) {
-        if ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil {
-            print("[保温] \(reason) → 缩略图缓存作废(下一局重拍)")
+        if isTraceEnabled {
+            glog("[保温] \(reason) → 缩略图缓存作废(下一局重拍)")
         }
         Snapshotter.shared.prune(keeping: [])
     }

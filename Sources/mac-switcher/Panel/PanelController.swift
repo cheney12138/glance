@@ -16,6 +16,15 @@ final class PanelController: ObservableObject {
     /// 那种情况下上膛反而要提前,见 showPanel。
     @Published private(set) var selectionArmed = false
     /// 托底的入场偏移(纵向,内容坐标系,渐近到 0)。只在"从底部升起"模式下非零
+    /// 本局托盘窗口开的**最大**内容尺寸(见 `previewSize()`)。
+    ///
+    /// 病例(2026-09-15 实测量到):`[工] 托盘改尺寸 主线程 23.3ms`,而外层 `键盘换选中` 26.3ms
+    /// —— 每按一次 Tab,托盘卡片数变 → 窗口尺寸变 → `setFrame` 同步窗口布局,吃掉 1–1.5 帧,
+    /// 入场上浮时正好被这 14–26ms 压住,读起来就是"上浮不流畅"。
+    /// 解法:窗口按**整局所有组里最大的那个布局**开一次,之后换选中只换内容不换窗框。
+    /// (内容在窗口里**底部对齐、水平居中**,所以小布局看起来与今天完全一样。)
+    private var trayMaxContentSize: NSSize = .zero
+
     /// 上一局结束时托底所在的格(视图复用,那就是它现在的实际位置)。nil = 这是第一次出现。
     /// 用来判断入场是"滑"还是"升" —— 见 `showPanel`。
     private var lastLandedIndex: Int?
@@ -99,9 +108,15 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        // **先抢优先级,再干活**:`.latencyCritical` 这条断言要从按键那一刻生效,不能等到 `showPanel`
+        // 才拿 —— "隔一段时间不用、再唤起就顿"最可能的原因就是这期间进程被挂起(App Nap)、
+        // 窗口后备存储被 WindowServer 回收,而**最贵的几帧恰好是刚回来的这几帧**。
+        // 之前它在 `showPanel` 里拿,枚举那一段连同回来的首帧是裸奔的。
+        beginActivity()
         // ADR-0001:触发即定场。语境屏快照只活在本轮导航态里
         guard let screen = CursorScreenAnchor.cursorScreen else {
             print("[T6] 取不到语境屏,面板不出现")
+            endActivity() // 早退也要还回去,否则这条"不许抽帧"的断言会一直挂着(白耗电)
             return
         }
         contextScreen = screen
@@ -179,18 +194,28 @@ final class PanelController: ObservableObject {
         // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
         let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
         let shownIDs = Set(shown.map(\.wid))
-        Snapshotter.shared.precapture(shown + allWindows.filter { !shownIDs.contains($0.wid) })
+        // 正在显示的那一组**强制重拍**(用户正看着它,要求此刻是准的);
+        // 其余组走缓存 —— 它们的图只用来保证"Tab 过去的第一帧有东西",不要求绝对新鲜
+        Snapshotter.shared.precapture(shown, force: true)
+        Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         print(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
             print("[T6] 本屏无窗,面板不出现(语境屏 = \(screen?.localizedName ?? "?"))")
+            endActivity() // 同上:早退要还
             return
         }
         print("[T6] 面板出现:语境屏 = \(screen?.localizedName ?? "?"),\(groups.count) 个 App")
         applySessionScaleCap(on: screen)
+        // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
+        // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
+        trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
+            let c = previewContentSize(for: g)
+            return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
+        }
         // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
         print("[T6] 动效:\(MotionPolicy.describe)")
-        showPanel()
+        showPanel(beganAt: beganAt, enumerateMs: ms)
     }
 
     /// 本会期托盘可用的**玻璃**空间(2026-09-14 换行那轮引入)。
@@ -227,7 +252,7 @@ final class PanelController: ObservableObject {
         PanelMetrics.sessionCap = .greatestFiniteMagnitude
         // 长条按**固定档**估高(它与本局 cap 无关):托盘的竖向空间 = 长条头顶那一半,
         // 这一步只决定"要几行",估值的误差远小于一行卡片的高度,不会翻盘
-        let stripH = PanelMetrics.rowPadY * 2 + PanelMetrics.icon
+        let stripH = PanelMetrics.rowPadY * 2 + PanelMetrics.icon // 与 contentSize() 同源
         let seam = PanelMetrics.seam // 同档读,别让它跟着上一局的 cap 变
         PanelMetrics.sessionCap = saved
         let availH = ((frame?.height ?? 900) - stripH) / 2 - margin - seam
@@ -258,6 +283,11 @@ final class PanelController: ObservableObject {
                      s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
                      cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : ""))
+        if trayMaxContentSize.width > 0 {
+            let w = previewSize()
+            print(String(format: "[尺寸] 托盘窗口 %.0f×%.0fpt(按整局最大 %d 窗,整局只 setFrame 一次)",
+                         w.width, w.height, worstN))
+        }
         if cap < 0.6 {
             print("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
         }
@@ -315,7 +345,7 @@ final class PanelController: ObservableObject {
         return (r, (n + r - 1) / r)
     }
 
-    private func showPanel() {
+    private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
         buildPanelIfNeeded()
         panelOpenPoint = NSEvent.mouseLocation
         gateBlockedLogged = false
@@ -325,7 +355,7 @@ final class PanelController: ObservableObject {
         // 退场演出期间关掉的事件耳,开新局要还回来
         panel.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
-        beginActivity()
+        // (优先级断言已在 `begin()` 拿到:这里不再重复拿,免得 end→begin 把优先级抖一下)
 
         // 入场分**两层**,不是二选一(2026-09-15 用户口径:"上浮是通用的,从 c 滑动到 a 是额外的动效"):
         //   ① **上浮 = 通用**:托底 / 选中的那一格 / 整块托盘从原位置下方浮上来 —— 每次都有,没有开关;
@@ -347,6 +377,10 @@ final class PanelController: ObservableObject {
         panel.alphaValue = 1
         setFrameIfNeeded(panel, target)
         panel.orderFrontRegardless()
+        // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
+        // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
+        glog(String(format: "[T6] 按键→上屏 %.0fms(其中枚举 %.0fms)",
+                    (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs))
         installOutsideClickMonitor()
         updatePreview()
 
@@ -531,10 +565,24 @@ final class PanelController: ObservableObject {
 
     func previewContentSize() -> NSSize { previewContentSize(for: currentGroup) }
 
+    /// 托盘**窗口**尺寸:本局最大布局 + 两侧呼吸区。
+    /// 用它(而不是当前组的内容)是为了让窗口在整局里**只 setFrame 一次**(病例见 `trayMaxContentSize`)。
     private func previewSize() -> NSSize {
-        let c = previewContentSize()
+        let c = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
         let pad = PanelMetrics.shadowPadPop * 2
         return NSSize(width: c.width + pad, height: c.height + pad)
+    }
+
+    /// 托盘**内容**(玻璃)在本屏坐标里的矩形。窗口可能比内容大,所以凡是判"托盘在哪"的地方
+    /// (指针重定位、面板外点击)都必须用这个,不能用窗口 frame。
+    func previewContentRect() -> NSRect? {
+        guard let p = previewPanel, p.isVisible else { return nil }
+        let c = previewContentSize()
+        guard c.width > 0, c.height > 0 else { return nil }
+        // 内容在窗口里:水平居中、**底部对齐**(与窗口等尺寸时 = 今天的布局,一个像素不差)
+        return NSRect(x: p.frame.midX - c.width / 2,
+                      y: p.frame.minY + PanelMetrics.shadowPadPop,
+                      width: c.width, height: c.height)
     }
 
     /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
@@ -559,10 +607,16 @@ final class PanelController: ObservableObject {
     private func previewFrame() -> NSRect? {
         guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
-        let x = glassConstrainedX(desired: panel.frame.midX - size.width / 2,
-                                  windowWidth: size.width,
-                                  pad: PanelMetrics.shadowPadPop,
-                                  area: area)
+        let contentW = previewContentSize().width
+        let inset = (size.width - contentW) / 2 // 内容在窗口里的左右留白
+        var x = panel.frame.midX - size.width / 2 // 内容居中 ⇒ 与长条同轴
+        let margin = PanelMetrics.screenMargin
+        if contentW <= area.width - margin * 2 {
+            x = min(max(x, area.minX + margin - inset), area.maxX - margin - contentW - inset)
+        } else if !trayOverflowLogged {
+            trayOverflowLogged = true
+            glog("[尺寸] 托盘玻璃 \(Int(contentW))pt > 可用 \(Int(area.width - margin * 2))pt,已居中(两端会被切)")
+        }
         // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip - 帧距,
         // 反解出帧距 = padPop + padStrip - seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
         let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
@@ -605,7 +659,12 @@ final class PanelController: ObservableObject {
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
         previewPanel.alphaValue = 1
         let before = previewPanel.frame
-        setFrameIfNeeded(previewPanel, frame)
+        // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
+        // (整块 tray 内容重排 + 后备存储重分配)。实机日志里 `[工] 键盘换选中 主线程 13–26ms`
+        // 基本都出在这里,这会直接吃掉 1–1.5 帧 —— 入场上浮时再按一下 Tab 就"顿"一下
+        traceCost("托盘改尺寸") {
+            setFrameIfNeeded(previewPanel, frame)
+        }
         if !previewPanel.isVisible { previewPanel.orderFrontRegardless() }
         // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
         if previewPanel.frame != before { resyncSelectionUnderPointer() }
@@ -624,12 +683,10 @@ final class PanelController: ObservableObject {
     /// 长条(图标)不走这条路:本局 App 数不变,长条宽度就是常量,图标不会在指针底下来回挪。
     private func resyncSelectionUnderPointer() {
         guard isVisible, pointerHasSpoken() else { return } // 指针没挪过窝就别抢选中(与 hover 同一道闸)
-        guard let tray = previewPanel, tray.isVisible else { return }
         guard let g = currentGroup, g.windows.count > 1 else { return }
         let p = NSEvent.mouseLocation
-        // 窗框 → 玻璃:shadowPadPop 是透明的呼吸区(视图与 previewSize 口径一致)
-        let glass = tray.frame.insetBy(dx: PanelMetrics.shadowPadPop, dy: PanelMetrics.shadowPadPop)
-        guard glass.contains(p) else { return }
+        // 窗框 ≠ 玻璃(窗口按整局最大布局开,内容底部居中)→ 必须用内容矩形
+        guard let glass = previewContentRect(), glass.contains(p) else { return }
         // 玻璃 → 内容:视图是 .padding(top: trayPadTop, horizontal: trayPadX, bottom: trayPadBottom),
         // 卡片那一横条因此从玻璃下沿 + trayPadBottom 起算
         let x = p.x - glass.minX - PanelMetrics.trayPadX
@@ -651,7 +708,7 @@ final class PanelController: ObservableObject {
             appIndex = (appIndex + delta + groups.count) % groups.count
             winIndex = 0
             // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
-            glog("[T6] 选中: [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+            glog("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
             refreshSnapshotForSelection()
             updatePreview()
         }
@@ -659,7 +716,7 @@ final class PanelController: ObservableObject {
 
     /// 主线程耗时记账(GLANCE_TRACE=1)。与 FrameProbe 分工:这里量的是"同步阻塞了多久",
     /// 那里量的是"帧间隔有没有崩" —— 两者对上就是结论
-    private static let traceOn = ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil
+    private static let traceOn = isTraceEnabled
 
     private func trace(_ line: String) {
         guard Self.traceOn else { return }
@@ -696,8 +753,9 @@ final class PanelController: ObservableObject {
         if let last = lastRefreshAt[g.pid], now - last < 0.5 { return }
         lastRefreshAt[g.pid] = now
         // 拍图全程在后台(见 Snapshotter 头注):这里只递一批目标,不发任务、不等结果
-        Snapshotter.shared.precapture(g.windows)
-        trace("[T11] 现拍(后台): \(g.appName) \(g.windows.count) 窗")
+        // **选中即重拍**(force):应用内部的画面变化系统不发事件,只有"被显示"这一刻能抓住它
+        Snapshotter.shared.precapture(g.windows, force: true)
+        // (这里不再另打一行账:与 Snapshotter 的 `[T5]` 重复,而 print 自己就吃主线程时间)
     }
 
     /// 面板出现那一刻的指针位。"谁后动听谁的"的仲裁缺陷修复:
@@ -736,6 +794,10 @@ final class PanelController: ObservableObject {
         // (实机现形:日志被系统 QUARANTINED 截流)
         guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex else { return }
         traceCost("指针换选中") {
+            // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
+            // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
+            glog("[T6] 选中(指针 hover): [\(i + 1)/\(groups.count)] \(groups[i].appName)"
+                  + "(共 \(groups[i].windows.count) 窗)")
             appIndex = i
             winIndex = 0
             refreshSnapshotForSelection()
@@ -956,7 +1018,8 @@ final class PanelController: ObservableObject {
         Snapshotter.shared.prune(keeping: live)
         let shown = groups.first?.windows ?? []
         let shownIDs = Set(shown.map(\.wid))
-        Snapshotter.shared.precapture(shown + groups.flatMap { $0.windows }.filter { !shownIDs.contains($0.wid) })
+        Snapshotter.shared.precapture(shown, force: true)
+        Snapshotter.shared.precapture(groups.flatMap { $0.windows }.filter { !shownIDs.contains($0.wid) })
         // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
         if let panel, let target = centerFrame(for: paddedSize()) {
             setFrameIfNeeded(panel, target)
@@ -1006,10 +1069,8 @@ final class PanelController: ObservableObject {
                 // **托盘是另一扇窗**(与长条同皮不同窗):不把它算进来,点托盘上任何地方
                 // (卡片、题头、红绿灯)都会被当成"面板外点击"把面板关掉 —— 实机现形:
                 // 2026-09-14 用户报"用鼠标点红绿灯的操作也不关闭面板"
-                let tray = self.previewPanel.flatMap { p -> NSRect? in
-                    guard p.isVisible else { return nil }
-                    return p.frame.insetBy(dx: PanelMetrics.shadowPadPop, dy: PanelMetrics.shadowPadPop)
-                }
+                // 同理:托盘可能比玻璃大(窗口按整局最大布局开),判"里外"只能用内容矩形
+                let tray = self.previewContentRect()
                 if !strip.contains(point), !(tray?.contains(point) ?? false) {
                     self.dismiss(reason: "面板外点击,放弃")
                 }

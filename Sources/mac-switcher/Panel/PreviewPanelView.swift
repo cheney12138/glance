@@ -50,6 +50,10 @@ struct PreviewPanelView: View {
         // 其余图标不动(2026-09-15 用户口径:"他们俩直接从原位置开始上浮")。
         // 退场仍不做动效(2026-09-14 砍的:用户实评"拖沓"),窗口由控制器直接 orderOut
         .offset(y: controller.contentEntryRise)
+        // 托盘窗口按**整局最大布局**开(见 PanelController.trayMaxContentSize):本组摆得小时,
+        // 玻璃要**贴着窗口底边**(= 与今天等尺寸时的位置完全一致),水平居中由默认对齐负责。
+        // 不这么摆的话内容会在更大的窗口里垂直居中 → 玻璃整体上浮一截,和长条之间的缝就变了
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .opacity(controller.isVisible ? 1 : 0)
     }
 

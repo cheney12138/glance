@@ -18,7 +18,7 @@ final class FrameProbe: NSObject {
     private var last: CFTimeInterval = 0
     private var label = ""
 
-    private var enabled: Bool { ProcessInfo.processInfo.environment["GLANCE_TRACE"] == "1" }
+    private var enabled: Bool { isTraceEnabled }
 
     func start(on view: NSView, label: String) {
         guard enabled, link == nil, #available(macOS 14.0, *) else { return }
@@ -41,9 +41,18 @@ final class FrameProbe: NSObject {
             sorted[min(Int(Double(sorted.count) * q), sorted.count - 1)] * 1000
         }
         let long = intervals.filter { $0 > longFrame }.count
-        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)",
+        // **长帧发生在什么时候**:只报"有几帧"没法判断它是不是落在入场那 0.2s 里。
+        // 偏移量从本轮第一帧算起,最多列 5 个(够看出是否聚集在开头)
+        var elapsed: TimeInterval = 0
+        var marks: [String] = []
+        for interval in intervals {
+            if interval > longFrame, marks.count < 5 { marks.append(String(format: "%.2fs", elapsed)) }
+            elapsed += interval
+        }
+        let where_ = marks.isEmpty ? "" : " @" + marks.joined(separator: ",")
+        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
-                     long, Double(long) / Double(sorted.count) * 100))
+                     long, Double(long) / Double(sorted.count) * 100, where_))
         intervals.removeAll()
     }
 

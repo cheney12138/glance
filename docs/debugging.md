@@ -9,6 +9,11 @@
    症状就是"时好时坏、像掉回系统切换器"。`pgrep -fl` 先数一遍,`Tools/InjectChord.swift` 每跑一次也会自动体检。
    ⚠️ Xcode 起的实例在调试器下 **`SIGTERM` 杀不掉**,要 `kill -9`。
 2. **日志从终端拿,不要只看 Xcode 控制台**:`GLANCE_TRACE=1 <app 二进制> > /tmp/log 2>&1 &`
+
+   **trace 怎么开(两个入口,同一个来源 `isTraceEnabled`)**:
+   · 环境变量:终端(上面这行)或 Xcode ▸ Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments ▸ Environment Variables 里加 `GLANCE_TRACE = 1`;
+   · **不想动 Xcode**:`defaults write com.cheney12138.macswitcher debug.trace -bool true`(改完**重开 App**;关掉用 `-bool false`)。
+   注意从终端起之前要先 **Stop Xcode 里那个实例** —— 单实例守卫会把后来者直接踢掉(见 `SingleInstanceGuard`)。
    —— 关键是能 `grep/awk` 统计("20 次连按丢了几次"就是这么数出来的)。
 3. **改前/改后用同一节奏对比**(相同轮数 + 相同间隔),否则测的是噪声。
 
@@ -319,3 +324,40 @@ defaults write com.cheney12138.macswitcher debug.pinPanelOnRelease -bool true
 
 **正向 / 反向都该对得上原生**:正向从"上一个 App"往后走 → 更早的 App → … → 绕完一圈才回到当前
 App;反向 ⇧Tab 从落点往回一格 = 当前 App。任何一条对不上,都是环序错了,不是落点错了。
+
+## 11. 归因方法:用括号,不要用推理(2026-09-15)
+
+病例:用户报「入场上浮不流畅 / 隔一段不用再唤起顿」。手上已有的量尺是 display link
+(`P50/P95/长帧`)—— 它只能回答**是否**顿,回答不了**谁**。第一轮我靠"候选假设 + 读数"推理,
+把 `[工] 键盘换选中 13–26ms` 猜成"托盘改尺寸",但拿不出数字;真正钉死它的是给那一行**加了个括号**:
+
+```swift
+traceCost("托盘改尺寸") { setFrameIfNeeded(previewPanel, frame) }
+// → [工] 托盘改尺寸 主线程 23.3ms      ← 外层 `键盘换选中` 26.3ms 的 89%
+```
+
+三条可复用的口径:
+
+1. **括号归因 > 推理归因**:怀疑哪一行就给它套 `traceCost`,数字出来再讨论;
+2. **两条量尺分工**:display link 回答"是否顿"(`[帧] … 长帧 N(%) @时刻`),
+   括号回答"谁"(「[工] 标签 主线程 Xms」)。只有前者,会做出"用户能感觉到但代码没错"的错误结论;
+3. **别把量尺本身算进去**:trace 全开时导航期每次按键要打三五行,输出端是 Xcode 控制台 ——
+   写一行可能几毫秒。`glog` 现在会一次性测出「前 50 行共多少 ms」,量 `[工]` 时把这部分减掉。
+
+### 窗口大于内容时的检查清单
+
+按 `ADR-0006` 把窗口开到"整局最大"之后,窗口 frame ≠ 内容矩形(`previewContentRect()` 才是)。
+任何判"里/外/上"的地方都必须改用内容矩形:
+
+- 指针 hover 落在哪张卡(`resyncSelectionUnderPointer`);
+- 面板外点击判"放弃";
+- 屏幕边缘收边。
+
+漏一处就是"点在托盘旁边的空白不关面板"这类慢性病 —— 不崩,但一直不对。
+
+### 应用**内部**的画面变化,系统不发事件
+
+换主题、切文件、编辑内容都不产生激活/窗口变化/AX 事件(2026-09-15 病例:用户把 IDE 换成浅色主题,
+唤起两次卡片仍是深色)。所以"事件驱动刷新"对这类变化**天然无效**,
+**"这一组被显示出来的那一刻强制重拍"这一条不许优化掉** —— 见 `Snapshotter.precapture(_:force:)`:
+正在显示的那一组永远 `force`,其余组走缓存(它们的图只负责"Tab 过去第一帧有东西")。

@@ -36,6 +36,9 @@ enum PanelMetrics {
 
     /// 基准值 → 实值。所有需要随「面板尺寸」缩放的量都过这一手
     private static func k(_ base: CGFloat) -> CGFloat { base * scale }
+    /// 给别的模块(如 `PanelMotion`)按基准值取一个跟着缩放走的量。
+    /// 暴露的是"缩放后的值",不是 `k` 本身 —— 外面不该关心基线与倍率的区别。
+    static func scaled(_ base: CGFloat) -> CGFloat { k(base) }
 
     // § 长条
     /// 图标边长基准 88(2026-09-14 用户实评"窗口太小":78 → 88,长条整体随比例放大)
@@ -54,7 +57,19 @@ enum PanelMetrics {
     static var iconGap: CGFloat { iconClearance + selectionOverflow }
     static var rowPadX: CGFloat { k(26) }
     static var rowPadY: CGFloat { k(22) }
-    static var iconLift: CGFloat { k(14) }
+
+    /// ★ 上浮幅度:14 → **8**(2026-09-15,用户实评"选中上浮离边框有点近了",并裁定
+    /// "**克制上浮的程度**,不要损失动效的灵动")。
+    ///
+    /// 为什么不是"加上边距":那一条我试过 —— 上边距要 +24pt 才够,而**没选中的时候**长条就白白
+    /// 厚了一圈(用户原话:"加上边距也太丑了,你要考虑没选中的时候啊")。**别为了一个瞬时状态
+    /// 去改常态的版式**。
+    ///
+    /// 幅度与"灵动"是两件事:灵动来自**弹簧曲线**(`PanelMotion.select`,damping .55 的回弹)
+    /// 和**放大倍率**(`iconScale` 1.14),不来自位移。所以砍幅度、**曲线一格不动**。
+    /// 现在的账(@1.2):上浮 9.6 + 放大外溢 7.4 = 视觉上移 17pt,距上沿 26.4 − 17 = **9.4pt**(原来 2.2)。
+    /// 还想再收就动这一条;要更"活"是动 `PanelMotion.select`,不是动这里。
+    static var iconLift: CGFloat { k(8) }
     /// 选中放大倍率是**比例**,不随尺寸变(变尺寸不该改变选中态的强烈程度)
     static let iconScale: CGFloat = 1.14
     static var puckHeight: CGFloat { icon + k(16) } // 图标 + 上下各 8

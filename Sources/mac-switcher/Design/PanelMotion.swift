@@ -53,7 +53,11 @@ enum MotionPolicy {
     /// 幅度史:1.4 × icon(≈123pt,整块从板子底下钻出来)→ 0.4 × icon(≈35pt)
     /// → **`iconLift`(≈17pt @1.2)**:与图标选中时的上浮同量级,读作"轻轻浮上来"而不是"弹出来"
     /// (用户实评:"有点过犹不及了,改成他们俩直接从原位置开始上浮")。
-    static var entryFloatDistance: CGFloat { PanelMetrics.iconLift }
+    ///
+    /// ⚠️ 它**故意不引用 `iconLift`**:两者曾经共用同一个值,于是"克制选中上浮"那一刀
+    /// 会连带把入场上浮也砍掉 43% —— 那是两个不同的动作(一个是入场,一个是选中态),
+    /// 手感要求也不同(本文件开头那条已经说过:入场比跟手快一档)。各自独立取数。
+    static var entryFloatDistance: CGFloat { PanelMetrics.scaled(14) }
 
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }

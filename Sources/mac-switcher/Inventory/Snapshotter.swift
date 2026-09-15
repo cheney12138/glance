@@ -16,6 +16,11 @@ final class Snapshotter: ObservableObject {
 
     /// cache 与面板同呼吸:新一轮枚举必须清场,否则展开层会显示"昨天的窗"(T5 实机现形 19/13)
     @Published private(set) var cache: [CGWindowID: NSImage] = [:]
+    /// 每张图**写入的时刻**(`precapture` 靠它判断"还新不新")
+    private var cacheAt: [CGWindowID: CFAbsoluteTime] = [:]
+    /// 预览图的保鲜期。超过就重拍 —— 与 `ThumbnailRefresher` 的"激活即重拍"互补:
+    /// 那一条管"正在用的 App",这一条兜"没被激活但已经放很久"的窗。
+    private static let cacheTTL: CFAbsoluteTime = 60
 
     /// 会期世代:`clear()` 一次 = 上一局的图全部作废。
     ///
@@ -34,6 +39,7 @@ final class Snapshotter: ObservableObject {
     func prune(keeping liveWindows: Set<CGWindowID>) {
         session &+= 1 // 上一局飞在半路的拍图到此为止(新局自己的会在下面重新发)
         cache = cache.filter { liveWindows.contains($0.key) }
+        cacheAt = cacheAt.filter { liveWindows.contains($0.key) }
         Task { await failedOnce.reset() } // 窗口列表变了,失败记录重来(权限也可能刚修好)
     }
 
@@ -48,13 +54,40 @@ final class Snapshotter: ObservableObject {
     /// `attempt` 是回填重试的轮次:没拍到的窗隔一会儿再试,上限 3 轮。
     /// 照 AltTab 的口径——**UI 先出来、缩略图异步补**,而不是"没拍到就永远空着":
     /// 实测"截图中…"绝大多数是**瞬时**失败(窗口刚创建、正在动画、SCK 忙),不是永久失败。
-    func precapture(_ windows: [WindowRecord], attempt: Int = 1) {
+    /// `force` = 无视缓存与 TTL,一律重拍。
+    ///
+    /// 用在**用户正在看的那一组**上(面板里选中的那个 App、激活的那个 App):
+    /// 应用**内部**的画面变化(换主题、切文件、编辑内容)系统**不发任何事件** ——
+    /// 没有激活、没有窗口变化、AX 也不动,所以"事件驱动刷新"对这类变化天然无效。
+    /// 唯一能抓住它的时机就是"这一组被显示出来"的这一刻。
+    /// 病例(2026-09-15):用户把 IDE 换成浅色主题,唤起两次卡片仍是深色
+    /// —— 上一版给缓存加了 60s TTL,把这条"显示即重拍"也一起跳过了。
+    func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false) {
         guard !windows.isEmpty else { return }
+        // **缓存命中就不重拍**(2026-09-15 修):以前这里把整批目标原样丢给 ScreenCaptureKit,
+        // 于是每次唤起都在后台重拍十几扇窗(每扇 26–52ms 的 GPU/WindowServer 活)——
+        // 与入场上浮抢资源,而且缓存本来就是为了"不用重拍"才存在的(T25 的本意)。
+        // 实机证据:`[T5] 预截回填 10/10 窗` 每局必现。
+        //
+        // 新鲜度怎么保证:① `ThumbnailRefresher` 在 App 激活时重拍它的窗(切过去就是新的);
+        // ② 这里再兜一道 TTL —— 超过 `cacheTTL` 的照样重拍。窗口尺寸/内容都是低频变化,
+        // 一分钟的预览图足够准,而"每次唤起十几发截屏"是实打实的代价。
+        let now = CFAbsoluteTimeGetCurrent()
+        let stale = force ? windows : windows.filter { w in
+            guard cache[w.wid] != nil else { return true }          // 没有 → 要拍
+            return now - (cacheAt[w.wid] ?? 0) > Self.cacheTTL       // 太老 → 重拍
+        }
+        guard !stale.isEmpty else {
+            // (全部命中不再打账:它曾是"缓存生效"的证据,但每次移动指针都来一行太吵;
+            //  缺图那一侧仍然无条件上报,见下面的 else)
+            return
+        }
+        let windows = stale
         let current = session
         Task.detached(priority: .userInitiated) { [weak self] in
             let (images, missing) = await Self.capture(windows, failedOnce: self?.failedOnce)
             guard let self else { return }
-            if ProcessInfo.processInfo.environment["GLANCE_TRACE"] != nil {
+            if isTraceEnabled {
                 print("[T5] 预截回填 \(images.count)/\(windows.count) 窗"
                       + (missing.isEmpty ? "" : "(缺 \(missing.count),第 \(attempt) 轮)"))
             } else if !missing.isEmpty {
@@ -67,7 +100,9 @@ final class Snapshotter: ObservableObject {
                 await MainActor.run {
                     // 只挡"上一局的图":本会期里飞在半路的批次一律允许回填
                     guard current == self.session else { return }
+                    let now = CFAbsoluteTimeGetCurrent()
                     self.cache.merge(images) { _, new in new }
+                    for id in images.keys { self.cacheAt[id] = now }
                 }
             }
             guard !missing.isEmpty, attempt < 3 else { return }

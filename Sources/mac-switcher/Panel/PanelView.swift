@@ -52,6 +52,8 @@ struct PanelView: View {
 
             iconStrip
                 .padding(.horizontal, PanelMetrics.rowPadX)
+                // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
+                // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)
                 .padding(.vertical, PanelMetrics.rowPadY)
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
