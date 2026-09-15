@@ -817,10 +817,10 @@ final class PanelController: ObservableObject {
             // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
             trace("[T6] 选中(指针 hover): [\(i + 1)/\(groups.count)] \(groups[i].appName)"
                   + "(共 \(groups[i].windows.count) 窗)")
-            appIndex = i
-            winIndex = 0
-            // 拆账(2026-09-15):`指针换选中` 中位 11.9ms × 84 次,是现在最大的主线程开销 ✗ ——
-            // 但只知道总数,不知道该修哪半。分成"拍图 / 托盘更新"两笔,下次日志直接点名。
+            // 拆账(2026-09-15):`指针换选中` 中位 12ms × 123 次,是现在最大的主线程开销 ✗。
+            // 第一轮只拆了"拍图 / 托盘更新",结果**两笔都没超过 2ms** —— 说明钱不在这两处 ✗,
+            // 于是把仅剩的候选(两个 @Published 写入,会同步惊动整棵观察者)也单独记一笔。
+            traceCost("  ↳写状态") { appIndex = i; winIndex = 0 }
             traceCost("  ↳拍图") { refreshSnapshotForSelection() }
             traceCost("  ↳托盘更新") { updatePreview() }
         }

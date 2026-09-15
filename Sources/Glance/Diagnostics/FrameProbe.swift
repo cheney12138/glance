@@ -11,8 +11,12 @@ import QuartzCore
 final class FrameProbe: NSObject {
     static let shared = FrameProbe()
 
-    /// 一帧 16.7ms;超过 1.5 帧算一次"长帧"
-    private let longFrame: Double = 1.5 / 60.0
+    /// 判定用的刷新率。**原来写死 60Hz(1.5/60 = 25ms)** ——
+    /// 2026-09-15 用户问"跟我外接显示器刷新率有关系吗",顺势发现:在 120Hz 屏(如 ProMotion 的 XDR)上,
+    /// 12–25ms 的卡顿会被这阈值**漏掉** ✗。改成按面板所在屏的实际刷新率判定:
+    /// 60Hz → 25ms 算长帧;120Hz → 12.5ms 就算。
+    private var fps: Double = 60
+    private var longFrame: Double { 1.5 / fps }
     private var link: CADisplayLink?
     private var intervals: [Double] = []
     private var last: CFTimeInterval = 0
@@ -23,6 +27,8 @@ final class FrameProbe: NSObject {
     func start(on view: NSView, label: String) {
         guard enabled, link == nil, #available(macOS 14.0, *) else { return }
         self.label = label
+        // 面板在哪块屏上,就按哪块屏的节拍判定(`maximumFramesPerSecond`,macOS 12+)
+        fps = Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
         last = 0
         intervals.removeAll(keepingCapacity: true)
         let l = view.displayLink(target: self, selector: #selector(tick(_:)))
@@ -50,9 +56,11 @@ final class FrameProbe: NSObject {
             elapsed += interval
         }
         let where_ = marks.isEmpty ? "" : " @" + marks.joined(separator: ",")
-        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)%@",
+        // 判定基准非 60Hz 时标出来 —— 否则读日志的人会拿 25ms 的口径去理解 120Hz 屏的数据
+        let judge = fps == 60 ? "" : String(format: " [按 %.0fHz 判定:>%.1fms]", fps, longFrame * 1000)
+        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)%@%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
-                     long, Double(long) / Double(sorted.count) * 100, where_))
+                     long, Double(long) / Double(sorted.count) * 100, where_, judge))
         intervals.removeAll()
     }
 
