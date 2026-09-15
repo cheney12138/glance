@@ -48,59 +48,35 @@ let right  = outerEdge(W-7, W/2, step: 2) { ($0, yMid) }
 let top    = outerEdge(6, H/2, step: 2) { (xMid, $0) }
 let bottom = outerEdge(H-7, H/2, step: 2) { (xMid, $0) }
 // 用**宽度**同时当高:玻璃方块是近似正方形,而底边扫到的是投影会偏大(拉高会把图形拉长)
-let side0 = right-left
-// 再往里收 1.6%:从外向内扫到的第一条边是**外层泛光**的起点,不收就会带出一圈背景光 ✗
-let inset0 = CGFloat(side0) * 0.016
-// —— 边缘洁净度扫描:沿四条边取样,量"还像不像背景",取最小的刚好切干净的内缩量 ——
-// (背景是渐变的暖米色,所以判据是"与**该边中点处的背景色**的距离",不是与单一背景色比)
-func rgb(_ x: Int, _ y: Int) -> (Double, Double, Double) {
-    let x = min(max(x,0),W-1), y = min(max(y,0),H-1)
-    let i = ((H-1-y)*W + x)*4
-    return (Double(buf[i])/255, Double(buf[i+1])/255, Double(buf[i+2])/255)
-}
-func dist(_ a:(Double,Double,Double), _ b:(Double,Double,Double)) -> Double {
-    abs(a.0-b.0)+abs(a.1-b.1)+abs(a.2-b.2)
-}
-/// 采样某条边"往里 probe 像素"处有多少比例的样本仍然像背景
-func dirtiness(_ inset: CGFloat) -> (top: Double, bottom: Double, left: Double, right: Double) {
-    let r = CGRect(x: CGFloat(left)+inset, y: CGFloat(top)+inset,
-                   width: CGFloat(side0)-inset*2, height: CGFloat(side0)-inset*2)
-    let n = 24, probe = 3.0
-    func frac(_ pts: [(Double, Double)]) -> Double {
-        var bad = 0.0
-        for (x, y) in pts {
-            let p = rgb(Int(x), Int(y))
-            // 该点正外侧 20px 处当作"本地背景"
-            let bx = Int(x + (x < r.midX ? -20 : 20)), by = Int(y + (y < r.midY ? -20 : 20))
-            if dist(p, rgb(bx, by)) < 0.045 { bad += 1 }
-        }
-        return bad / Double(pts.count)
-    }
-    return (frac((0..<n).map { (r.minX + r.width * Double($0) / Double(n-1), r.minY + probe) }),
-            frac((0..<n).map { (r.minX + r.width * Double($0) / Double(n-1), r.maxY - probe) }),
-            frac((0..<n).map { (r.minX + probe, r.minY + r.height * Double($0) / Double(n-1)) }),
-            frac((0..<n).map { (r.maxX - probe, r.minY + r.height * Double($0) / Double(n-1)) }))
-}
-print("内缩%   上     下     左     右")
-// 判据只用**上边**:它偏绿,与暖米色背景差得开,指标可信;
-// 另外三条边的玻璃本身近似背景色,这个指标会误报,所以不参与决策,只打印看趋势。
-var chosenPct = 2.0
-for pct in stride(from: 1.0, through: 3.0, by: 0.25) {
-    let ins = CGFloat(side0) * CGFloat(pct) / 100
-    let d = dirtiness(ins)
-    print(String(format: " %.2f%%  %.2f   %.2f   %.2f   %.2f", pct, d.top, d.bottom, d.left, d.right))
-    if d.top == 0 { chosenPct = pct + 0.25; break }
-}
-let chosenInset = CGFloat(side0) * CGFloat(chosenPct) / 100
-print(String(format: "-> 采用内缩 %.2f%% (%.0fpx)", chosenPct, Double(chosenInset)))
-let box = CGRect(x: CGFloat(left) + chosenInset, y: CGFloat(top) + chosenInset,
-                 width: CGFloat(side0) - chosenInset*2, height: CGFloat(side0) - chosenInset*2)
+// 外接方:取**较长的那条边**,四边以中心对齐。
+//
+// 2026-09-15 病例(满幅改版第一次翻车):原来 `side0 = right-left`(宽度当高)——
+// 宽度扫到 1457、高度扫到 1514(两轴"第一条边"的阈值落点不同),方框比玻璃**矮 57px**;
+// 满幅放大后玻璃顶边被切掉 ≈21px,图标上面是**平的一条** ✗。
+// 取 max → 方框是玻璃的外接方(四边各多出一点背景,由下面的内缩收掉)。
+let side0 = max(right - left, bottom - top)
+let cx = CGFloat(left + right) / 2, cy = CGFloat(top + bottom) / 2
+// 内缩:从外向内扫到的第一条边是**外层泛光**的起点,不收就会带出一圈背景光 ✗。
+//
+// 量法说明:82% 时代这里跑过一段"沿四边取样比背景色"的扫描(结论:顶边要收到 1.75% 才干净)。
+// 满幅之后那条口径不适用 —— 1.75% 会**啃掉玻璃自己的圆角边**(顶部出现平边 ✗),
+// 所以改成固定 0.8%:外接方只多出一点点背景,收掉泛光即可,玻璃本体一像素不动。
+let sideC = CGFloat(side0)          // Int/CGFloat 混算会让类型检查器超时,先转干净
+let inset0 = sideC * 0.008
+let boxOriginX = cx - sideC / 2 + inset0
+let boxOriginY = cy - sideC / 2 + inset0
+let box = CGRect(x: boxOriginX, y: boxOriginY,
+                 width: sideC - inset0 * 2, height: sideC - inset0 * 2)
 print("画布 \(W)x\(H) | 玻璃方块 bbox: \(left),\(top) \(right-left)x\(bottom-top)")
 
-// 目标:1024 画布,方块占 82%(Apple 网格),圆角 23.5% 的边长
+// 目标:1024 画布,**方块满幅**(2026-09-15 改)
+//
+// 原来按 Apple 老网格只占 82%,结果在 Dock / 登录项列表里**比别人的图标小一圈**
+// (用户实拍:DockDoor / Ghostty 都是满幅)。macOS 26 的图标画法就是满幅 —— 系统不给
+// macOS 应用图标加遮罩,PNG 里留多少透明边就小多少。圆角由我们自己的遮罩给,与方块同Radius。
 func make(_ px: Int) -> CGImage {
     let S = CGFloat(px)
-    let side = S * 0.82
+    let side = S * 1.0
     let target = CGRect(x: (S-side)/2, y: (S-side)/2, width: side, height: side)
     let ctx = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0,
                         space: CGColorSpaceCreateDeviceRGB(),
@@ -108,7 +84,7 @@ func make(_ px: Int) -> CGImage {
     ctx.interpolationQuality = .high
     ctx.saveGState()
     let mask = CGPath(roundedRect: target.insetBy(dx: side*0.004, dy: side*0.004),
-                      cornerWidth: side*0.315, cornerHeight: side*0.315, transform: nil)
+                      cornerWidth: side*0.29, cornerHeight: side*0.29, transform: nil)
     ctx.addPath(mask); ctx.clip()
     // 源图按 box → target 缩放后绘制
     ctx.translateBy(x: 0, y: S); ctx.scaleBy(x: 1, y: -1)   // 目标翻转(左上原点)

@@ -223,7 +223,7 @@ struct ShortcutPane: View {
                 }
             }
             SettingsGroup(label: "导航") {
-                SettingsRow(title: "` 循环窗口", desc: "仅在面板打开时生效。") {
+                SettingsRow(title: "循环窗口", key: "`", desc: "仅在面板打开时生效。") {
                     BeamSwitch(isOn: $graveCyclesWindows)
                 }
                 SettingsRow(title: "循环切换") { KeyChip(text: "Tab / ⇧ Tab") }

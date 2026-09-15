@@ -44,6 +44,12 @@ struct SettingsGroup<Content: View>: View {
 /// SwiftUI 里没有"我是最后一个子视图"的查询,与其搞一层序号推导,不如显式标注。
 struct SettingsRow<Trailing: View>: View {
     let title: String
+    /// 标题前挂一枚键位胶囊(如 ` 循环窗口)。
+    ///
+    /// 2026-09-15 病例:原来是裸字符「` 循环窗口」—— 用户实评"可能不知道 ` 是什么,
+    /// 还以为是手抖打多了字符"。裸反引号在正文里没有"这是个按键"的体量,
+    /// 包成胶囊后才和 `← →`、`Tab / ⇧Tab` 那些键位**同一种语言**。
+    var key: String? = nil
     /// 一句话说清"关掉会怎样",不解释实现。**别写 Markdown**:它是 `String`,
     /// `Text(_: some StringProtocol)` 不解析,`**加粗**` 会把星号原样印在纸上。
     var desc: String? = nil
@@ -54,9 +60,12 @@ struct SettingsRow<Trailing: View>: View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: SettingsMetrics.rowGap) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(SettingsFont.rowTitle)
-                        .foregroundStyle(SettingsTheme.ink)
+                    HStack(spacing: 7) {
+                        if let key { KeyChip(text: key) }
+                        Text(title)
+                            .font(SettingsFont.rowTitle)
+                            .foregroundStyle(SettingsTheme.ink)
+                    }
                     if let desc {
                         Text(desc)
                             .font(SettingsFont.rowDesc)
