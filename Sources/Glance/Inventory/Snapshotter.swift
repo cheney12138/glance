@@ -73,9 +73,15 @@ final class Snapshotter: ObservableObject {
         // ② 这里再兜一道 TTL —— 超过 `cacheTTL` 的照样重拍。窗口尺寸/内容都是低频变化,
         // 一分钟的预览图足够准,而"每次唤起十几发截屏"是实打实的代价。
         let now = CFAbsoluteTimeGetCurrent()
+        // 为什么这一批要拍?**分清两种原因**(2026-09-15):「要拍 10 窗」每局都出现,
+        // 但"整块作废"那条日志从没打过 ——
+        // 说明图不是被删的,而是"压根没存进去"或"过期了"。这两种原因对应完全不同的修法,
+        // 所以直接量出来,不再靠推理(本次会话已经因为推理翻过两次车)。
+        var missNoEntry = 0, missExpired = 0
         let stale = force ? windows : windows.filter { w in
-            guard cache[w.wid] != nil else { return true }          // 没有 → 要拍
-            return now - (cacheAt[w.wid] ?? 0) > Self.cacheTTL       // 太老 → 重拍
+            guard cache[w.wid] != nil else { missNoEntry += 1; return true }   // 没有 → 要拍
+            if now - (cacheAt[w.wid] ?? 0) > Self.cacheTTL { missExpired += 1; return true }  // 太老
+            return false
         }
         guard !stale.isEmpty else {
             // (全部命中不再打账:它曾是"缓存生效"的证据,但每次移动指针都来一行太吵;
@@ -90,7 +96,8 @@ final class Snapshotter: ObservableObject {
             if isTraceEnabled {
                 // 规模计数:掉帧若随"外接屏 App 多"来,这一行是第一个证人 ——
                 // 它会告诉我们**这一局实际拍了多少扇窗**(缓存命中后本该远小于窗口总数)
-                print("[T5] 预截 要拍 \(windows.count) 窗 → 回填 \(images.count) 窗"
+                let why = force ? "强制" : "无图 \(missNoEntry) / 过期 \(missExpired)"
+                print("[T5] 预截 要拍 \(windows.count) 窗(\(why))→ 回填 \(images.count) 窗"
                       + (missing.isEmpty ? "" : "(缺 \(missing.count),第 \(attempt) 轮)"))
             } else if !missing.isEmpty {
                 // 没拍到就**不打折地报**,不靠 GLANCE_TRACE:面板上空一个卡片就是用户看得见的毛病,
