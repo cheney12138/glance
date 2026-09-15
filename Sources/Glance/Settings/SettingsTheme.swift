@@ -106,7 +106,7 @@ enum SettingsTheme {
 enum SettingsMetrics {
     static let windowW: CGFloat = 600
     /// 内容高度。demo 是 600×480 的 mock 窗,但它的「通用」只有 4 行;本 App 多一行真设置
-    /// (图标呼吸感),照 480 排会当场把最后一行的说明切掉半行 —— 宁可窗高比 mock 高一条标题栏。
+    /// (App 间距),照 480 排会当场把最后一行的说明切掉半行 —— 宁可窗高比 mock 高一条标题栏。
     /// 实测:内容 480 → 窗口 **512**(480 + 系统标题栏那一条 32pt;隐藏标题栏后它仍然占位)。
     /// 窗底不铺纸会露白边,见 `SettingsWindowChrome`。
     static let contentH: CGFloat = 480

@@ -44,7 +44,7 @@ struct SettingsGroup<Content: View>: View {
 /// SwiftUI 里没有"我是最后一个子视图"的查询,与其搞一层序号推导,不如显式标注。
 struct SettingsRow<Trailing: View>: View {
     let title: String
-    /// 标题前挂一枚键位胶囊(如 ` 循环窗口)。
+    /// 标题前挂一枚键位胶囊(如 ` App 内切换窗口)。
     ///
     /// 2026-09-15 病例:原来是裸字符「` 循环窗口」—— 用户实评"可能不知道 ` 是什么,
     /// 还以为是手抖打多了字符"。裸反引号在正文里没有"这是个按键"的体量,

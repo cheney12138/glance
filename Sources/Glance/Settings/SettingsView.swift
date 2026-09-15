@@ -41,7 +41,8 @@ struct SettingsView: View {
     @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
     @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
-    /// 图标呼吸感:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
+    /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
+    /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
@@ -109,8 +110,8 @@ struct SettingsView: View {
                         .init(id: AppearancePreference.dark, label: "深色"),
                     ], value: $appearance)
                 }
-                SettingsRow(title: "图标呼吸感",
-                            desc: "选中图标与相邻图标之间的间距。",
+                SettingsRow(title: "App 间距",
+                            desc: "选中图标与两侧图标的距离。",
                             hairline: false) {
                     HStack(spacing: 8) {
                         Slider(value: clearanceBinding, in: 4...28)
@@ -196,7 +197,7 @@ struct ShortcutPane: View {
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
     @AppStorage("switch.advanceOnOpen") private var advanceOnOpen = true
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
-    /// ` 循环窗口(默认关:它是系统级快捷键,只能用户显式开)
+    /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
     @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
 
     var body: some View {
@@ -223,10 +224,10 @@ struct ShortcutPane: View {
                 }
             }
             SettingsGroup(label: "导航") {
-                SettingsRow(title: "循环窗口", key: "`", desc: "仅在面板打开时生效。") {
+                SettingsRow(title: "App 内切换窗口", key: "`", desc: "在同一个 App 的窗口之间移动。") {
                     BeamSwitch(isOn: $graveCyclesWindows)
                 }
-                SettingsRow(title: "循环切换") { KeyChip(text: "Tab / ⇧ Tab") }
+                SettingsRow(title: "切换 App") { KeyChip(text: "Tab / ⇧ Tab") }
                 SettingsRow(title: "切换窗口", desc: "仅有单个窗口时不响应。") {
                     KeyChip(text: "← →")
                 }
