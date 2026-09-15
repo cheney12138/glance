@@ -243,7 +243,12 @@ enum PanelColors {
     /// 在纯白底上它们与背景同色隐形 —— 面板退化成"浮着的图标 + 一团阴影",
     /// 用户实评:"边框看起来有点模糊"。macOS 自己就是这么做的(浅底色窗口的边是暗发丝)。
     /// 对应实验台 **V2 灰色族收边**(只改浅色族)。深色同理反着来:亮线收边。
+    /// ⚠️ 2026-09-15:原来的 `glassBorder`(墨 12% / 白 34%)是**画上去的 1px 线**,
+    /// 实测与 macOS 原生 ⌘Tab 的柔边不同口径,已由 `glassLip` 取代(见 `PanelGlass.GlassEdge`)。
+    /// 留一行记录:改回硬线只需把它接回 `strokeBorder`。
     static let glassBorder = dynamic(ink(0.12), white(0.34))
+    /// 玻璃边的"受光唇":软边,几乎只在上缘显出来。数值取自原生剖面的量值(1–1.5px 级)
+    static let glassLip = dynamic(white(0.10), white(0.16))
     /// 顶缘内阴影(demo `inset 0 1px 0 var(--glass-inner-shadow)`):浅色 .06 近乎无;
     /// 深色这道暗线把玻璃"压厚",整块板子才不会读成发光塑料(黑 .25 保留)
     static let glassInner = dynamic(NSColor.black.withAlphaComponent(0.06),

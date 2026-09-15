@@ -31,11 +31,7 @@ struct PreviewPanelView: View {
                            endPoint: UnitPoint(x: 0.5, y: 0.015))
                 .allowsHitTesting(false)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
-                .strokeBorder(PanelColors.glassBorder, lineWidth: PanelMetrics.hairline)
-                .allowsHitTesting(false)
-        )
+        .glassEdge(cornerRadius: PanelMetrics.rTray)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):两块玻璃同一配方
         .overlay(
             RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)

@@ -67,6 +67,42 @@ struct GlassBackground: NSViewRepresentable {
 /// 阴影呼吸区(96/80)让窗口比玻璃大出一整圈透明边——那圈边不能吃掉点击与 hover,
 /// 否则托盘压住长条的呼吸区、以及"面板外点击 = 放弃"都会误判。
 /// hitTest 在内容矩形外一律放行,事件穿到下一个窗口/桌面
+/// 玻璃边 = **一条软的受光唇**,不是一条画上去的线。
+///
+/// 2026-09-15 病例(用户实拍对比 macOS 原生 ⌘Tab):「原生这个玻璃边框做的很自然,能复刻一下吗」。
+/// 把两张截图按同一口径量了一遍(横穿左边缘取亮度剖面,2× 截图):
+///
+/// | | 边缘剖面 |
+/// |---|---|
+/// | **原生** | 背景 0.980 → **2–3px 柔和过渡**(0.902 / 0.894)→ 内部 0.898 |
+/// | **我们(改前)** | 背景 0.337 → 0.329(**一条暗阶** = 画上去的 1px 线)→ 0.582(硬台阶)→ 内部 0.491 |
+///
+/// 结论有点反直觉:**原生那道边之所以自然,是因为它根本没有"边"** —— 只有玻璃自身的柔边
+/// 加一圈软投影;定义形状的是**填充与背景的对比**,不是一条线。我们画了线,所以看着像贴上去的。
+///
+/// 改法:删掉 `strokeBorder(glassBorder, 1px)`,换成**内阴影**(平台自己的机制,渲染口径与系统一致),
+/// 参数照原生的量值取:**1–1.5pt**、几乎只在上缘显出来 —— 白 10%(浅色)/ 白 16%(深色),
+/// 半径 1.5、y 偏移 0.5。想要更"有边"就把 alpha 提上去,想更无形就归零。
+struct GlassEdge: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content.overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(PanelColors.glassLip, lineWidth: 1.5)
+                .blur(radius: 1.0)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+extension View {
+    /// 给长条/托盘上"原生那道柔边"。见 `GlassEdge` 的两张剖面表。
+    func glassEdge(cornerRadius: CGFloat) -> some View {
+        modifier(GlassEdge(cornerRadius: cornerRadius))
+    }
+}
+
 final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     /// 透明呼吸区宽度,与对应视图的 `.padding(shadowPad…)` 同值
     var pad: CGFloat = 0

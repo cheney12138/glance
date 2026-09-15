@@ -59,12 +59,8 @@ struct PanelView: View {
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
-        // 外轮廓:1px 亮边一圈(浅 .85 / 深 .45)。装饰层必须让路,否则吃掉图标的 hover/点击
-        .overlay(
-            RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous)
-                .strokeBorder(PanelColors.glassBorder, lineWidth: PanelMetrics.hairline)
-                .allowsHitTesting(false)
-        )
+        // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
+        .glassEdge(cornerRadius: PanelMetrics.rPanel)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
         .overlay(
             RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous)
