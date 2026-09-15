@@ -73,7 +73,7 @@ swift Tools/check-architecture.swift            # module boundary check
 | Permission | Used for | Without it |
 |---|---|---|
 | **Accessibility** | Reading the window list and focusing the selected window | Glance cannot switch at all |
-| **Screen Recording** | Capturing window previews | No previews; cards fall back to icons |
+| **Screen Recording** | Capturing window previews | No window previews |
 
 Grant both in **System Settings ▸ Privacy & Security**. If the state gets confused (for example
 after re-signing), reset and restart the app:
@@ -92,7 +92,7 @@ then:
 |---|---|
 | <kbd>Tab</kbd> / <kbd>⇧</kbd><kbd>Tab</kbd> | Next / previous app |
 | <kbd>←</kbd> / <kbd>→</kbd> | Next / previous window of the selected app |
-| <kbd>`</kbd> | Cycle windows of the selected app (optional, off by default) |
+| <kbd>&#96;</kbd> | Cycle windows of the selected app (optional, off by default) |
 | <kbd>↩</kbd> | Open the selected window |
 | <kbd>Esc</kbd> | Dismiss without switching |
 | <kbd>Q</kbd> / <kbd>W</kbd> / <kbd>M</kbd> | Quit app / close window / minimize window |
