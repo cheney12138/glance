@@ -47,6 +47,12 @@ final class FrameProbe: NSObject {
             sorted[min(Int(Double(sorted.count) * q), sorted.count - 1)] * 1000
         }
         let long = intervals.filter { $0 > longFrame }.count
+        // **抖动**(2026-09-15 加):`长帧` 只回答"有没有打到一帧",分不清两种完全不同的观感 ——
+        //   · 稳定 16.7ms(在高刷屏上"没打到 8.3ms",但节奏均匀 → 看着顺 ✓)
+        //   · 忽 8.3 忽 16.7(judder → 肉眼明显抖 ✗)
+        // 用户看到的"抖"永远是后者,所以补一个"偏离中位的幅度"(P90),单位 ms。
+        let medv = sorted[sorted.count / 2]
+        let jitter = intervals.map { abs($0 - medv) }.sorted()[min(Int(Double(intervals.count) * 0.9), intervals.count - 1)] * 1000
         // **长帧发生在什么时候**:只报"有几帧"没法判断它是不是落在入场那 0.2s 里。
         // 偏移量从本轮第一帧算起,最多列 5 个(够看出是否聚集在开头)
         var elapsed: TimeInterval = 0
@@ -61,6 +67,7 @@ final class FrameProbe: NSObject {
         print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)%@%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
                      long, Double(long) / Double(sorted.count) * 100, where_, judge))
+        if jitter > 1.5 { print(String(format: "[帧]   ↳节奏抖动 ±%.1fms(P90,中位 %.1fms)—— 均匀的慢看不出,忽快忽慢才是肉眼里的卡", jitter, medv * 1000)) }
         intervals.removeAll()
     }
 
