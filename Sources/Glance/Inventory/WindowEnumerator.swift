@@ -25,7 +25,7 @@ struct AppGroup {
 /// 幽灵窗日志去重用的锁与上次内容(见 `WindowEnumerator.logGhostOnce`)。
 /// 文件级:枚举在后台线程跑,碰不到 actor 状态。
 private let ghostLogLock = NSLock()
-nonisolated(unsafe) private var lastGhostLogLine: String?
+nonisolated(unsafe) private var seenGhostLines: Set<String> = []
 
 @MainActor
 enum WindowEnumerator {
@@ -133,8 +133,11 @@ enum WindowEnumerator {
     nonisolated private static func logGhostOnce(_ line: String) {
         ghostLogLock.lock()
         defer { ghostLogLock.unlock() }
-        guard lastGhostLogLine != line else { return }
-        lastGhostLogLine = line
+        // ⚠️ 原来只跟"上一条"比 —— 而两条幽灵窗日志是**交替**出现的
+        // (CatDesk 的空壳窗 / Chrome 的查找条),于是每局都把两条重印一遍 ✗
+        // (2026-09-15 实测:一份日志里同两条各出现 7 次)。改成"见过的就不再印"。
+        guard !seenGhostLines.contains(line) else { return }
+        seenGhostLines.insert(line)
         print("[幽灵窗滤除] \(line)")
     }
 
