@@ -26,6 +26,8 @@ enum SessionMarks {
     /// 本局第一张缩略图送达的时刻(相对 t0),trace 模式下单独记一行 ——
     /// "首图什么时候到"是"外接屏窗口多就掉帧"这条线索的直接证人(见 `noteFirstThumb`)
     private static var firstThumbAt: Double?
+    /// 本局的开局时刻(不随 finish 清零 —— 首图常在本局结算之后才到)
+    private static var lastSessionStart: CFAbsoluteTime = 0
 
     static func begin(_ label: String) {
         self.label = label
@@ -33,6 +35,7 @@ enum SessionMarks {
         last = t0
         steps.removeAll(keepingCapacity: true)
         firstThumbAt = nil
+        lastSessionStart = t0
     }
 
     static func step(_ name: String) {
@@ -44,7 +47,10 @@ enum SessionMarks {
 
     /// 本局第一张缩略图上屏的时刻。只在 trace 下记(平时不占日志额度)
     static func noteFirstThumb(_ count: Int) {
-        guard t0 > 0, firstThumbAt == nil else { return }
+        // ⚠️ 不能要求 `t0 > 0`:finish() 会把 t0 清零,而缩略图通常在首帧**之后**才回填 ——
+        // 于是这个记号一局都打不出来(2026-09-15 病例:整份日志里只出现过一次)。
+        // 用 firstThumbAt 自己当"本局是否已记过"的闸。
+        guard firstThumbAt == nil, lastSessionStart > 0 else { return }
         firstThumbAt = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         if isTraceEnabled {
             glog(String(format: "[打卡] 首图上屏 +%.0fms(本批 %d 张)", firstThumbAt!, count))
@@ -54,7 +60,7 @@ enum SessionMarks {
     static func finish() {
         guard t0 > 0 else { return }
         let total = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        defer { t0 = 0 }
+        defer { t0 = 0 }   // lastSessionStart 保留:首图打卡要继续用它
         if isTraceEnabled {
             let axis = steps.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: " · ")
             glog(String(format: "[打卡] %@ 共 %.1fms | %@", label, total, axis))

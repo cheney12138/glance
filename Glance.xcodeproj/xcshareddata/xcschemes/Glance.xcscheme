@@ -55,7 +55,7 @@
          <EnvironmentVariable
             key = "GLANCE_TRACE"
             value = "1"
-            isEnabled = "NO">
+            isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
    </LaunchAction>

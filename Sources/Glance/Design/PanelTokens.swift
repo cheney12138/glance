@@ -392,6 +392,9 @@ enum PanelElevation {
         }
     }
 
+    /// 逐元素投影的**实验总闸**(只影响 icon/thumb/puck,不影响 strip/tray 那两块玻璃)
+    static let elementShadowsOff = UserDefaults.standard.bool(forKey: "debug.noElementShadows")
+
     case strip, tray, puck, icon, thumb, thumbActive
 
     var shadow: Layer {
@@ -437,7 +440,19 @@ enum PanelElevation {
 
 extension View {
     func elevation(_ level: PanelElevation) -> some View {
-        shadow(color: level.shadow.color, radius: level.shadow.radius, y: level.shadow.y)
+        // **实验开关**(2026-09-15):关掉所有逐元素投影。
+        //
+        // 为什么怀疑它:日志里 `[工] 键盘换选中` 17–38ms、`[打卡] 开窗` 20–37ms,两者都随
+        // **格子数**增长(6 App ≈20ms vs 11 App ≈32ms);而 SwiftUI 的 `.shadow(...)` 是给
+        // **整棵子树**做一次离屏光栅化 —— 每个图标一次、每张卡片一次,正是这种"随元素数线性长"的形状。
+        // (日志已经排除了"是打日志的锅":`[工] 日志开销:单行 0.07ms`。)
+        //
+        // 用法(免编译):
+        //   defaults write com.cheney12138.macswitcher debug.noElementShadows -bool true   # 关
+        //   defaults delete com.cheney12138.macswitcher debug.noElementShadows             # 开回来
+        // 然后对比 `[工] 键盘换选中` 与 `[打卡] 开窗` 两行 —— 掉多少就是它的罪。
+        if PanelElevation.elementShadowsOff { return AnyView(self) }
+        return AnyView(shadow(color: level.shadow.color, radius: level.shadow.radius, y: level.shadow.y))
     }
 }
 
