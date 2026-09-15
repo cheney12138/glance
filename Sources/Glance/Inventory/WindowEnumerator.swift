@@ -98,6 +98,16 @@ enum WindowEnumerator {
         let records = axFiltered.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
+            // **系统权限弹窗过滤**(2026-09-15 用户报:"要权限的时候那个系统弹窗也被识别到,没有 app 图标,
+            // 是一个齿轮状空白")。这类窗口(辅助功能/屏幕录制提示)由**后台进程**渲染:它们没有 Dock 图标,
+            // 判据就是 `activationPolicy == .prohibited` —— 用它而不是 bundle id 名单:
+            // 名单会随系统版本漂(不同的 macOS 用 tccd / UserNotificationCenter / CoreServicesUIAgent …),
+            // 而"有没有常规激活策略"是系统自己维护的事实 ✓。
+            // 注意**不要**顺手动 `.accessory`(菜单栏型 App)—— 它们可以有正当的窗口(例如我们自己的设置窗,若将来放出来)。
+            if NSRunningApplication(processIdentifier: r.pid)?.activationPolicy == .prohibited {
+                Self.logGhostOnce("\(r.ownerName):无 Dock 图标的后台进程(activationPolicy=prohibited)—— 不入面板")
+                continue
+            }
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,
                                             bundleID: NSRunningApplication(processIdentifier: r.pid)?.bundleIdentifier,
                                             windows: [])].windows.append(r)
