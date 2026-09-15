@@ -153,6 +153,29 @@ A signal lets Glance restore the shortcut on the way out; `SIGKILL` does not.
 **The panel does not appear.** Check both permissions above, then reset them with the
 `tccutil` commands and restart the app.
 
+## Updating
+
+Glance does not check for updates yet; updating is manual:
+
+1. Quit Glance (menu bar icon ▸ **Quit**, or `pkill -TERM Glance`).
+2. Open the new DMG and drag `Glance.app` into **Applications**, replacing the old copy.
+3. Launch it.
+
+**Your settings and permissions survive.** The bundle identifier and the signing identity do
+not change between builds, so macOS keeps the Accessibility and Screen Recording grants and
+Glance keeps its preferences.
+
+**Keep only one copy.** Two builds of Glance in different folders (say `/Applications` and an
+Xcode build) are the *same app* to macOS — only one can run, and the second one exits at
+startup with a message naming the instance that is already running.
+
+If macOS refuses to open a downloaded copy — *"cannot be opened because the developer cannot be
+verified"* — the browser quarantined it. Right-click the app ▸ **Open**, or:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Glance.app
+```
+
 ## Project layout
 
 ```

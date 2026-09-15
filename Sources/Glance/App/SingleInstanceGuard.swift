@@ -21,9 +21,15 @@ enum SingleInstanceGuard {
         guard let other = others.first else { return }
 
         let pid = other.processIdentifier
+        // **路径必须打出来**(2026-09-15):装过 DMG 之后再从 Xcode ⌘R,新实例会静默退出 ——
+        // 用户只看到「Run 了但没反应」。写明是 /Applications 那份还是 DerivedData 那份,
+        // 一眼就知道该退谁(两份 bundle id 相同,所以互相视为同一个 App)。
+        let path = other.bundleURL?.path ?? "(路径未知)"
         print("""
         ────────────────────────────────────────────────
-        [Glance] 已经有一个实例在跑(pid \(pid)),本次启动退出。
+        [Glance] 已经有一个实例在跑(pid \(pid)):
+          \(path)
+        本次启动退出。
           两个 Glance 会抢同一组 ⌘Tab:先装触发层的那个收键,后到的那个照样画自己的面板 ——
           屏幕上会出现"两块面板叠在一起"的怪象(底色互相透、Esc 要按两次才关)。
           要换新构建:先退出旧实例(⌘Q,或 kill \(pid)),或在 Xcode 里 Stop 再 Run。
