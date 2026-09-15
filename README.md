@@ -200,8 +200,21 @@ Glance keeps its preferences.
 Xcode build) are the *same app* to macOS — only one can run, and the second one exits at
 startup with a message naming the instance that is already running.
 
-If macOS refuses to open a downloaded copy — *"cannot be opened because the developer cannot be
-verified"* — the browser quarantined it. Right-click the app ▸ **Open**, or:
+If macOS refuses to open a downloaded copy — *"cannot be opened because Apple cannot check it for
+malicious software"* — the browser quarantined it, and the build is signed but not notarized
+(notarization needs a paid Apple Developer account). Two ways through:
+
+- **Recommended:** remove the quarantine flag, then open the app normally:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Glance.app
+```
+- Or approve it in the UI: **System Settings ▸ Privacy & Security**, scroll to the note about
+  "Glance" being blocked, and click **Open Anyway**.
+
+
+Note for macOS 15 and later: **right-click ▸ Open no longer bypasses this** — that trick worked
+up to macOS 14.
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Glance.app
