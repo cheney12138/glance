@@ -51,7 +51,9 @@ enum SessionMarks {
         // 于是这个记号一局都打不出来(2026-09-15 病例:整份日志里只出现过一次)。
         // 用 firstThumbAt 自己当"本局是否已记过"的闸。
         guard firstThumbAt == nil, lastSessionStart > 0 else { return }
-        firstThumbAt = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        // ⚠️ 用 lastSessionStart 而不是 t0:finish() 之后 t0 = 0,
+        // 于是这里会算成"距 2001 年的毫秒数"(上一份日志里那个 +811154268827ms 就是这个 bug)
+        firstThumbAt = (CFAbsoluteTimeGetCurrent() - lastSessionStart) * 1000
         if isTraceEnabled {
             glog(String(format: "[打卡] 首图上屏 +%.0fms(本批 %d 张)", firstThumbAt!, count))
         }
