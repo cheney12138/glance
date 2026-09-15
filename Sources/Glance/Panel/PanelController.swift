@@ -738,21 +738,37 @@ final class PanelController: ObservableObject {
     /// 为什么平时也要开:以前它是 trace 灰度的,于是**只有我在调的时候才有账**,用户平时卡了没记录;
     /// 更要命的是"关掉 trace 之后到底还卡不卡"这件事**测不出来**(量尺跟着一起关了)。
     /// 代价:每次调用两次取表(约几十纳秒),不超阈值不打印。
-    private func traceCost(_ label: String, _ body: () -> Void) {
+    /// 计时括号。**认父子关系**(2026-09-15 修):子账由父账自己汇总在一行里打出来。
+    ///
+    /// 为什么必须这样:上一版靠"日志里谁挨着谁"来配对父子 —— 而同一个标签(`指针换选中`)
+    /// 在**三条路径**里都用了,于是解析时把 Tab 的子账配到了 hover 的外账上,得出"外层 12ms、
+    /// 三笔子账加起来 0.2ms"这种自相矛盾的结论 ✗。现在子账挂在父账身上,顺序无关。
+    private final class CostNode {
+        let label: String
         let t0 = CFAbsoluteTimeGetCurrent()
-        body()
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        // 子账(名字以 "↳" 开头)在 trace 下**无条件打**:2026-09-15 拆 `指针换选中`(外层 12ms),
-        // 三笔子账一笔都没露面 —— 因为各自都 <2ms 门槛。可"外层 12ms、三笔加起来不到 2ms"
-        // 本身就是最有价值的线索 ✗,不该被门槛藏起来。
-        let isSub = label.hasPrefix("  ↳")
-        if isSub {
-            guard isTraceEnabled else { return }
-        } else {
-            guard ms > (Self.traceOn ? 2.0 : 16.0) else { return }
-        }
-        glog(String(format: "[工] %@ 主线程 %.1fms", label, ms))
+        var children: [(String, Double)] = []
+        init(_ label: String) { self.label = label }
     }
+    nonisolated(unsafe) private static var costStack: [CostNode] = []   // 只在主线程用
+
+    private func traceCost(_ label: String, _ body: () -> Void) {
+        let node = CostNode(label)
+        Self.costStack.append(node)
+        body()
+        let ms = (CFAbsoluteTimeGetCurrent() - node.t0) * 1000
+        Self.costStack.removeLast()
+        if let parent = Self.costStack.indices.last {
+            Self.costStack[parent].children.append((label.trimmingCharacters(in: .whitespaces), ms))
+        }
+        let isSub = label.hasPrefix("  ↳")
+        if isSub { guard isTraceEnabled, !node.children.isEmpty || ms > 2 else { return } }
+        else { guard ms > (Self.traceOn ? 2.0 : 16.0) else { return } }
+        // 子账**并进父账同一行** —— 一次选中只占一行日志,而不是四行
+        let kids = node.children.isEmpty ? ""
+            : "(" + node.children.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: " · ") + ")"
+        glog(String(format: "[工] %@ 主线程 %.1fms%@", label.trimmingCharacters(in: .whitespaces), ms, kids))
+    }
+
 
     private func moveWindow(_ delta: Int) {
         // 权责冻结(用户拍板):App 移动归 Tab 与指针,←→ 只管展开层的窗;
