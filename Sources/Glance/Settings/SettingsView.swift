@@ -163,8 +163,7 @@ struct SettingsView: View {
         Group {
             SettingsGroup(label: "版本信息") {
                 SettingsRow(title: "名称") { RowValue("Glance") }
-                SettingsRow(title: "版本") { RowValue(bundle("CFBundleShortVersionString")) }
-                SettingsRow(title: "构建", hairline: false) { RowValue(bundle("CFBundleVersion")) }
+                SettingsRow(title: "版本", hairline: false) { RowValue(bundle("CFBundleShortVersionString")) }
             }
             SettingsGroup(label: "权限") {
                 SettingsRow(title: "辅助功能", desc: "用于读取与聚焦窗口。缺失时切换器无法工作。") {

@@ -24,6 +24,12 @@ enum SettingsTheme {
     static let ink2 = dynamic(srgb(0x16, 0x17, 0x1C, 0.56), srgb(0xEE, 0xF0, 0xF4, 0.55))
     /// 行发丝 `--hairline`:墨 9% / 白 9%
     static let hairline = dynamic(srgb(0x16, 0x17, 0x1C, 0.09), white(alpha: 0.09))
+    /// 组标题胶囊的边框:比行发丝重一档(墨 15% / 白 17%)。
+    ///
+    /// 2026-09-15:组标题原来是一颗 4pt 小圆点 + 11pt 灰字 —— 实测层级是**反的**:
+    /// 组标题(11pt 灰)比它管着的行标题(13pt 墨)还轻,"版本信息"没有主标题的感觉。
+    /// 现在组标题 13pt 半粗 + 上墨色 + 这圈发丝边框,行的字号同时提半档 —— 层级正过来。
+    static let labelBorder = dynamic(srgb(0x16, 0x17, 0x1C, 0.15), white(alpha: 0.17))
     /// 分段控件底槽 `--tab-rail`
     static let tabRail = dynamic(srgb(0x16, 0x17, 0x1C, 0.05), white(alpha: 0.05))
     /// 玻璃舌头 `--glass`(demo 的 `.tab-puck`)
@@ -121,9 +127,17 @@ enum SettingsMetrics {
     static let contentPadTop: CGFloat = 2
     static let contentPadBottom: CGFloat = 26
     /// 组间距(demo `.group{margin-bottom:20}`)
-    static let groupGap: CGFloat = 20
+    static let groupGap: CGFloat = 26
+    /// 组标题胶囊的内边距 / 圆角 / 与下一条行的间距
+    static let labelPadX: CGFloat = 9
+    static let labelPadY: CGFloat = 4
+    static let labelRadius: CGFloat = 8
+    static let labelGap: CGFloat = 10
     /// 行:上下 13、行内左右间距 16
-    static let rowPadY: CGFloat = 13
+    /// 行内边距。2026-09-15:13 → 12 —— 组间距 20 → 26 会多出约 70pt,而这一页(8 组 21 行)
+    /// 本来就要滚 2.5 屏;收 1pt/行(21 行 ≈ −42pt)把账抵回来,层级交给**组间距**表达,
+    /// 而不是靠"每行都松"。
+    static let rowPadY: CGFloat = 12
     static let rowGap: CGFloat = 16
     /// 说明文案的最大宽度(demo `.row-desc{max-width:400px}`):让长说明先折行,不等尾巴
     static let descMaxW: CGFloat = 400
@@ -138,10 +152,11 @@ enum SettingsMetrics {
 /// 字阶(demo 的 13 / 12.5 / 11.5 / 11 四档,全部 SF Pro)
 enum SettingsFont {
     static let rowTitle = Font.system(size: 13)
-    static let rowDesc = Font.system(size: 11.5)
-    static let rowValue = Font.system(size: 12.5)
+    static let rowDesc = Font.system(size: 12)
+    static let rowValue = Font.system(size: 13)
     static let tab = Font.system(size: 12.5, weight: .medium)
-    static let groupLabel = Font.system(size: 11)
+    /// 组标题是这一页的**主标题**,必须比它管着的行标题更大更重(原来 11pt/灰 = 反的)
+    static let groupLabel = Font.system(size: 13, weight: .semibold)
     static let key = Font.system(size: 11.5, weight: .medium, design: .monospaced)
 }
 

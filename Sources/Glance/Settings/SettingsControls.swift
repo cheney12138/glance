@@ -17,15 +17,18 @@ struct SettingsGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let label {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(SettingsTheme.ink2)
-                        .frame(width: 4, height: 4)
-                    Text(label)
-                        .font(SettingsFont.groupLabel)
-                        .foregroundStyle(SettingsTheme.ink2)
-                }
-                .padding(.bottom, 7)
+                // 组标题 = 这一页的主标题(2026-09-15):13pt 半粗 + 上墨色 + 一圈发丝边框胶囊。
+                // 原来那颗 4pt 小圆点 + 11pt 灰字比行标题还轻,层级是反的。
+                Text(label)
+                    .font(SettingsFont.groupLabel)
+                    .foregroundStyle(SettingsTheme.ink)
+                    .padding(.horizontal, SettingsMetrics.labelPadX)
+                    .padding(.vertical, SettingsMetrics.labelPadY)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SettingsMetrics.labelRadius, style: .continuous)
+                            .strokeBorder(SettingsTheme.labelBorder, lineWidth: SettingsMetrics.hairline)
+                    )
+                    .padding(.bottom, SettingsMetrics.labelGap)
             }
             content
         }
@@ -88,6 +91,7 @@ struct RowValue: View {
     var body: some View {
         Text(text)
             .font(SettingsFont.rowValue)
+            .monospacedDigit()   // 版本号这类数字右对齐时不跳字
             .foregroundStyle(SettingsTheme.ink2)
     }
 }
