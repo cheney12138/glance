@@ -5,7 +5,7 @@ import XCTest
 /// 2026-09-15 定稿:逐窗一粒点在 13 扇时铺满格子、20 扇溢出 1.56 倍,且同色点只能默数 ——
 /// 换成 5 进制记号 + 收窄兜底。这里把口径钉住。
 final class WindowTallyTests: XCTestCase {
-    private let m = WindowTally.Metrics(dot: 4.8, dashWidth: 7.7, gap: 3.6, minDot: 3.0, minGap: 2.0)
+    private let m = WindowTally.Metrics(dot: 4.8, dashWidth: 12.0, gap: 3.6, minDot: 3.0, minGap: 2.0)
     private let cell: CGFloat = 105.6   // PanelMetrics.icon @1.2
 
     // MARK: - 记号序列
@@ -54,9 +54,10 @@ final class WindowTallyTests: XCTestCase {
 
     // MARK: - 自适应收窄(兜底)
 
-    /// 现实窗数(≤40)不该触发收窄 —— 收窄是兜底,不是主力
+    /// 现实窗数不该触发收窄 —— 收窄是兜底,不是主力。
+    /// 临界值随 token 走:横 12.0pt 时 **35 扇**正好铺满一格(7 横 = 105.6pt),第 36 扇才开始收窄
     func testRealisticCountsDoNotShrink() {
-        for n in [1, 4, 6, 12, 20, 25, 30, 40] {
+        for n in [1, 4, 6, 12, 20, 25, 30, 35] {
             XCTAssertEqual(WindowTally.layout(windows: n, available: cell, metrics: m).sizes.scale, 1,
                            "\(n) 扇不该收窄")
         }

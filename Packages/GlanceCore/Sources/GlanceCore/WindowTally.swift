@@ -87,7 +87,7 @@ public enum WindowTally {
         while marks.count > 1, rowWidth(marks, metrics: metrics, scale: scale) > available {
             marks.removeLast()
         }
-        // 只剩 1 个记号还放不下就只能那样了 —— 现实中到不了(N=100 也才 24 个记号)
+        // 只剩 1 个记号还放不下就只能那样了 —— 现实中到不了(横 12pt 时 35 扇正好铺满一格)(N=100 也才 24 个记号)
         let sizes = Sizes(dot: metrics.dot * scale, dashWidth: metrics.dashWidth * scale,
                           gap: metrics.gap * scale, scale: scale)
         return (marks, sizes)

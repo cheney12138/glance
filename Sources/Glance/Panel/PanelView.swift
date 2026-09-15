@@ -243,12 +243,11 @@ private struct IconCell: View {
                             .fill(PanelColors.dot)
                             .frame(width: tally.sizes.dot, height: tally.sizes.dot)
                     case .dash:
-                        // 横要"压得住"五个点:同色、但更矮(≈0.42 高)。高度不参与宽度裁量,
-                        // 所以它留在视图层 —— 这是唯一需要看图调的旋钮
+                        // 横要"压得住"五个点:与圆点同族、但明显更重(理由与对照图见 PanelMetrics.dashHeight)
                         Capsule()
                             .fill(PanelColors.dot)
                             .frame(width: tally.sizes.dashWidth,
-                                   height: max(1.6, tally.sizes.dot * 0.42))
+                                   height: PanelMetrics.dashHeight * tally.sizes.scale)
                     }
                 }
             }

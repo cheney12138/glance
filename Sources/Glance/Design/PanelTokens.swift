@@ -87,9 +87,16 @@ enum PanelMetrics {
     /// 为什么保留 24→25 的进位跳变、以及极端窗数下从尾部摘记号的兜底),这里只给设计 token ——
     /// 调外观只改这几个数。
     static var tally: WindowTally.Metrics {
-        WindowTally.Metrics(dot: dot, dashWidth: dot * 1.6, gap: dotGap,
+        WindowTally.Metrics(dot: dot, dashWidth: dot * 2.5, gap: dotGap,
                             minDot: max(k(2.5), 2.5), minGap: k(1.7))
     }
+    /// 短横高度。**不参与宽度裁量**(只影响观感),所以留在设计 token 里单独当旋钮。
+    ///
+    /// 2026-09-15 病例(用户实拍):原值 1.6×宽 / 0.42×高 → 面积 7.7×2.0 ≈ 15pt²,
+    /// 而圆点 π·2.4² ≈ 18pt² —— **代表 5 的记号比代表 1 的还轻** ✗,层级是反的。
+    /// 改 2.5× / 0.6× → 12.0×2.9 ≈ 35pt²(圆点的 1.9 倍):同一族、但明显更重。
+    /// 对照图与另两档候选见 `design/窗数记号实验台.html`(python3 design/tally-lab.py 可重出)。
+    static var dashHeight: CGFloat { dot * 0.6 }
     static var dotBottom: CGFloat { k(7) }
     /// 窗数点在选中态要**跟着图标一起抬**多少。
     ///

@@ -1,0 +1,33 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;background:#F6F5F3;font:13px -apple-system,"PingFang SC",sans-serif;color:#3A3A3C}
+  h1{font-size:15px;font-weight:600;margin:20px 24px 4px}
+  p.note{margin:0 24px 14px;color:#8A8A8E;font-size:12px;line-height:1.5}
+  .row{display:flex;align-items:center;gap:16px;margin:0 24px 10px}
+  .lab{width:250px;flex:none;font-variant-numeric:tabular-nums}
+  .sub{display:block;color:#9A9A9E;font-size:11px}
+  .cell{width:422px;height:34px;flex:none;background:#FFFFFF;border-radius:9px;
+        box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;justify-content:center;gap:14.4px}
+  .dot{width:19.2px;height:19.2px;border-radius:50%;background:#6E6E73;flex:none}
+  .dash{border-radius:999px;background:#6E6E73;flex:none}
+</style></head><body>
+<h1>窗数记号:短横该多大</h1>
+<p class="note">圆点 = 1 扇、短横 = 5 扇。白条 = 一格(105.6pt ×4 放大);颜色/形状/间距都是当前实现。<br>
+判据:短横要"与圆点同体量",但因为长,应当看起来**比圆点大** —— 看 6 扇那一行(横+点)最直观。</p>
+<div class="row">
+      <div class="lab">今天(改前)<span class="sub">6 扇 · 横 7.7×2.0pt · 面积 15(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:30.7px;height:8.1px"></i><i class="dot"></i></div></div><div class="row">
+      <div class="lab">今天(改前)<span class="sub">20 扇 · 横 7.7×2.0pt · 面积 15(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:30.7px;height:8.1px"></i><i class="dash" style="width:30.7px;height:8.1px"></i><i class="dash" style="width:30.7px;height:8.1px"></i><i class="dash" style="width:30.7px;height:8.1px"></i></div></div><div class="row">
+      <div class="lab">A  2.0× / 0.50×<span class="sub">6 扇 · 横 9.6×2.4pt · 面积 23(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:38.4px;height:9.6px"></i><i class="dot"></i></div></div><div class="row">
+      <div class="lab">A  2.0× / 0.50×<span class="sub">20 扇 · 横 9.6×2.4pt · 面积 23(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:38.4px;height:9.6px"></i><i class="dash" style="width:38.4px;height:9.6px"></i><i class="dash" style="width:38.4px;height:9.6px"></i><i class="dash" style="width:38.4px;height:9.6px"></i></div></div><div class="row">
+      <div class="lab">B  2.5× / 0.60×  ← 采用<span class="sub">6 扇 · 横 12.0×2.9pt · 面积 35(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:48.0px;height:11.5px"></i><i class="dot"></i></div></div><div class="row">
+      <div class="lab">B  2.5× / 0.60×  ← 采用<span class="sub">20 扇 · 横 12.0×2.9pt · 面积 35(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:48.0px;height:11.5px"></i><i class="dash" style="width:48.0px;height:11.5px"></i><i class="dash" style="width:48.0px;height:11.5px"></i><i class="dash" style="width:48.0px;height:11.5px"></i></div></div><div class="row">
+      <div class="lab">C  3.0× / 0.70×<span class="sub">6 扇 · 横 14.4×3.4pt · 面积 48(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:57.6px;height:13.4px"></i><i class="dot"></i></div></div><div class="row">
+      <div class="lab">C  3.0× / 0.70×<span class="sub">20 扇 · 横 14.4×3.4pt · 面积 48(圆点 18)</span></div>
+      <div class="cell"><i class="dash" style="width:57.6px;height:13.4px"></i><i class="dash" style="width:57.6px;height:13.4px"></i><i class="dash" style="width:57.6px;height:13.4px"></i><i class="dash" style="width:57.6px;height:13.4px"></i></div></div>
+</body></html>
