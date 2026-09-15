@@ -216,10 +216,6 @@ xattr -dr com.apple.quarantine /Applications/Glance.app
 Note for macOS 15 and later: **right-click ▸ Open no longer bypasses this** — that trick worked
 up to macOS 14.
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Glance.app
-```
-
 ### Releasing (maintainers)
 
 ```bash
