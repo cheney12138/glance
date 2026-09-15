@@ -2,17 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Sparkle 的三个自定义键。其余键仍由 Xcode 从 INFOPLIST_KEY_* 构建设置生成
-	     (GENERATE_INFOPLIST_FILE = YES 与本文件是**合并**关系,不是二选一)。 -->
-	<!-- appcast 挂在 GitHub Release 的资产上:每次发版把 appcast.xml 一起上传,
-	     这个 URL 永远指向最新那一版,不需要 gh-pages 或服务器。 -->
-	<key>SUFeedURL</key>
-	<string>https://github.com/cheney12138/Glance/releases/latest/download/appcast.xml</string>
-	<!-- EdDSA 公钥(私钥在开发机的登录钥匙串,账号 glance)。没有它 Sparkle 拒绝任何更新。 -->
-	<key>SUPublicEDKey</key>
-	<string>VAb4hFJen1ix0MilzJD6YDxaTCmt7X8613+q67yfE8=</string>
-	<!-- 开箱即自动检查(默认每 24h 一次)。设 true 是为了跳过 Sparkle 首次启动那个询问框。 -->
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/cheney12138/Glance/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>VAb4hFJen1ix0MilzJD6YDxaTCmt7X8613+q67yfE8=</string>
 </dict>
 </plist>

@@ -176,6 +176,22 @@ verified"* — the browser quarantined it. Right-click the app ▸ **Open**, or:
 xattr -dr com.apple.quarantine /Applications/Glance.app
 ```
 
+### Releasing (maintainers)
+
+```bash
+bash Tools/release.sh 0.2.0     # 构建 universal DMG → EdDSA 签名 → 写出 appcast.xml
+```
+
+Then create the GitHub release tagged `v0.2.0` with **both** assets attached:
+`Glance-0.2.0.dmg` and `appcast.xml`. The app's feed URL points at
+`releases/latest/download/appcast.xml`, so the appcast must be attached to the newest release —
+without it, update checking breaks.
+
+Updates are authenticated with Sparkle's EdDSA key: the private key lives in the maintainer's
+login keychain (account `glance`), the public key in `Info.plist`. **No Apple Developer account
+is required.** Only the very first install needs the quarantine workaround above, because a
+browser still tags the DMG it downloads.
+
 ## Project layout
 
 ```

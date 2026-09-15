@@ -412,3 +412,28 @@ swift Tools/NativeHotkeys.swift restore
 **以后别踩**:停 App 用 `pkill -TERM Glance`(走信号兜底 ✓),不要用 Xcode 的 Stop(SIGKILL ✗)。
 接管期间会落一个标记文件;下次启动若它还在,日志会打一行
 「上次退出没来得及归还原生热键(强杀)——本次启动已自愈」—— 这句话就是答案,不用再猜。
+
+## 14. 更新永远"没有新版本"(2026-09-15 病例:appcast 里没有签名)
+
+**现象**:接了 Sparkle 之后手动点「检查更新…」,永远说已是最新 —— 而 Release 页面明明有新包。
+
+**病根**:`generate_appcast` **静默**生成了一份**没有 `sparkle:edSignature`** 的 appcast
+(退出码 0、没有任何警告)。缺签名的 item 会被 Sparkle 直接忽略,于是"看起来发布成功、
+实际上永远不生效"—— 沿着 appcast 一路查都看不出问题。
+
+排查顺序(别从 app 端猜):
+```bash
+grep edSignature ~/Desktop/appcast.xml          # 一眼:有没有签上
+$TOOLS/bin/sign_update <dmg> --ed-key-file k    # 密钥本身能不能签(能签 → 问题在 generate_appcast)
+$TOOLS/bin/sign_update --verify <dmg> "<签名>"   # 签出来的东西公钥认不认(最终证明)
+```
+
+**改法**:发版脚本不再用 `generate_appcast` —— 它自己决定"签不签"这件事太黑箱 ✗。
+改成显式两步:`sign_update` 出签名(它的输出里自带 `edSignature` 与 `length`)+ 脚本自己写
+appcast 的其余字段(版本/构建号/最低系统版本/URL 全部由命令量出来)。
+
+**顺带两个坑**:① `sign_update` 的输出**已经含 `length`**,自己再加一个就是重复属性 = 非法 XML;
+② 脚本里别用 `$(xcodebuild ...)/Glance.app` 这种写法去拼路径 —— 命令一旦失败,`$()` 退化成空串,
+路径就成了 `/Glance.app/...`,而 `PlistBuddy` 会**真的在根目录创建**这个空壳再报"文件不存在"
+(我踩了两次,根目录留了两个空壳)。
+
