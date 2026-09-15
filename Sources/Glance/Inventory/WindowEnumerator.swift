@@ -104,8 +104,13 @@ enum WindowEnumerator {
             // 名单会随系统版本漂(不同的 macOS 用 tccd / UserNotificationCenter / CoreServicesUIAgent …),
             // 而"有没有常规激活策略"是系统自己维护的事实 ✓。
             // 注意**不要**顺手动 `.accessory`(菜单栏型 App)—— 它们可以有正当的窗口(例如我们自己的设置窗,若将来放出来)。
-            if NSRunningApplication(processIdentifier: r.pid)?.activationPolicy == .prohibited {
-                Self.logGhostOnce("\(r.ownerName):无 Dock 图标的后台进程(activationPolicy=prohibited)—— 不入面板")
+            let app = NSRunningApplication(processIdentifier: r.pid)
+            let bundleID = app?.bundleIdentifier ?? ""
+            if app?.activationPolicy == .prohibited || Self.promptHostBundleIDs.contains(bundleID) {
+                let why = app?.activationPolicy == .prohibited
+                    ? "无 Dock 图标的后台进程(activationPolicy=prohibited)"
+                    : "系统提示框宿主(点名)"
+                Self.logGhostOnce("\(r.ownerName)[\(bundleID)]:\(why) —— 不入面板")
                 continue
             }
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,
@@ -134,6 +139,25 @@ enum WindowEnumerator {
 
         return Array(byPID.values)
     }
+
+    /// **已知的系统提示框宿主**。
+    ///
+    /// 病例(2026-09-15):用户报"要权限时那个系统弹窗也被识别到,没有 app 图标,是一个齿轮状空白"。
+    /// 先在主路按 `activationPolicy == .prohibited`(无 Dock 图标)过滤 —— **没挡住** ✗:
+    /// 从日志的 `[T6] 落点顺序` 里抓到它的名字是 `universalAccessAuthWarn`(辅助功能警告窗的宿主),
+    /// 而这类提示框宿主的激活策略是 `.regular`(实测当前所有 layer0 窗口的归属,清一色 regular)。
+    ///
+    /// 所以规则是"通用规则 + 点名":通用规则(激活策略)管"没有 Dock 图标的后台进程",
+    /// 这里点名管"有 Dock 图标身份、但本质是系统提示框"的那几个。
+    /// **这份名单为什么可以存在**:它只收系统提示框宿主(极小),而且名单外的任何闯入者
+    /// 会**直接出现在 `[T6] 落点顺序` 那一行里**(App 名一目了然)—— 维护成本几乎为零。
+    nonisolated static let promptHostBundleIDs: Set<String> = [
+        "com.apple.universalAccessAuthWarn",   // 辅助功能警告(本次实测抓到)
+        "com.apple.UserNotificationCenter",    // 通用通知 / 权限提示
+        "com.apple.CoreServicesUIAgent",       // "xxx 想打开…" 之类
+        "com.apple.tccd",                      // TCC 本体(某些系统版本直接由它出窗)
+        "com.apple.ScreenCaptureApprovalUI",   // 录屏许可确认
+    ]
 
     /// 幽灵窗日志**同一条只记一次**(2026-09-15):它每局枚举都会重印,而内容几乎永远一样
     /// (CatDesk 的空壳窗、Chrome 的查找条)—— 一天上千行,把真信号淹了。
