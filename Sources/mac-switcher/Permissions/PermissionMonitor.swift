@@ -9,7 +9,7 @@ final class PermissionMonitor: ObservableObject {
     @Published private(set) var screenCaptureGranted = false
 
     var allGranted: Bool { accessibilityGranted && screenCaptureGranted }
-    var statusLine: String { allGranted ? "权限 ✅ 全部就绪" : "权限 ⚠️ 需要授权" }
+    var statusLine: String { allGranted ? "权限已就绪" : "需要授权" }
 
     private var pollTimer: Timer?
 

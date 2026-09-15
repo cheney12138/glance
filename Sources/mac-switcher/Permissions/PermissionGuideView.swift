@@ -29,7 +29,7 @@ struct PermissionGuideView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } else {
-                Text("在系统设置里勾选后,这里会自动变绿,不用重启。")
+                Text("在系统设置中完成授权后,此处会自动更新,无需重启。")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

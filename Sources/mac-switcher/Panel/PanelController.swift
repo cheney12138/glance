@@ -16,6 +16,10 @@ final class PanelController: ObservableObject {
     /// 那种情况下上膛反而要提前,见 showPanel。
     @Published private(set) var selectionArmed = false
     /// 托底的入场偏移(纵向,内容坐标系,渐近到 0)。只在"从底部升起"模式下非零
+    /// 上一局结束时托底所在的格(视图复用,那就是它现在的实际位置)。nil = 这是第一次出现。
+    /// 用来判断入场是"滑"还是"升" —— 见 `showPanel`。
+    private var lastLandedIndex: Int?
+
     /// 入场升起偏移。作用对象 = **托底 + 选中的那一格图标**(其余图标不动):
     /// 只挂托底会读成"两个动作各走各的";整行一起升又太重("全部图标一起弹出来")。
     /// 这一档正是"正常 Tab 切换"的范围 —— 切换时动的永远只有托底与新选中的那个图标
@@ -150,15 +154,17 @@ final class PanelController: ObservableObject {
         //   · 反向 ⇧Tab → 直接到队尾 = 当前 App(原生也是这样:从第 2 格往回一格就是第 1 格)
         // 交换只能改两格的相对位置,旋转改的是整条环 —— 这是两种完全不同的操作。
         let advanceOnOpen = UserDefaults.standard.object(forKey: "switch.advanceOnOpen") as? Bool ?? true
-        if advanceOnOpen, groups.count > 1 {
-            // 旋的是**整条环**(纯核规则,带用例);反向不旋 —— 原生 ⇧⌘Tab 直接落在最久没用的那个
-            if !reverse { groups = LandingRule.rotatedForAdvance(groups) }
-        }
-        appIndex = advanceOnOpen
-            ? LandingRule.landingIndex(count: groups.count, reverse: reverse)
-            : 0
-        // 落点这行**每次都打**:上面这套(开关 × 正反向 × 环序)组合下来有 4 种走法,
-        // 只靠"高亮在第几格"根本分不清是哪一种 —— 下次再说"开关没生效",看这一行就够。
+        // ★ 2026-09-15 三修:前两版都在"重排顺序"上找答案,都是错的(见 LandingRule 文档里的三段历史)。
+        // 正解是什么都不做 —— MRU 原序天然就是原生的第一眼版式:
+        //   第一格 = 当前 App(它在,但没被选中),第二格 = 上一个 App(高亮落这里 = 唤起即切换),
+        //   往后走到最久没用的,绕回第一格时当前 App 才出现(普通取模自动给出这条环)。
+        // 所以这里只算**下标**,不再 `swapAt`(v1)也不再左旋(v2)。
+        // 托底**上一次画在哪一格**:视图是复用的,它就停在上局结束时的落点 ——
+        // 入场动效要靠它判断"这一局托底到底会不会滑"(见 showPanel 的两条路)
+        lastLandedIndex = appIndex
+        appIndex = advanceOnOpen ? LandingRule.landingIndex(count: groups.count, reverse: reverse) : 0
+        // 落点这行**每次都打**:开关 × 正反向 × 环序有四种走法,只看"高亮在第几格"分不清是哪一种 ——
+        // 下次再说"开关没生效",看这一行就够(第一格是不是当前 App、落点是不是上一个 App 一目了然)
         if groups.indices.contains(appIndex) {
             print("[T6] 落点:唤起即切换=\(advanceOnOpen ? "开" : "关") · \(reverse ? "反向" : "正向")"
                   + " · 选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)"
@@ -321,23 +327,21 @@ final class PanelController: ObservableObject {
         previewPanel?.ignoresMouseEvents = false
         beginActivity()
 
-        // 入场(两种模式的区别只在**起点**,都会滑):
-        //   · 从底部升起(默认):先把**托底与选中格**按到面板下缘之外(被圆角裁掉),
-        //     再上膛 + 一起升上来 —— 距离恒定且短,两者同一次 withAnimation、同一根弹簧;
-        //   · 承接上一局:第一帧就上膛,弹簧自己会从"上一局那个格子"滑到新选中
-        //     (窗口复用,上一局的偏移还在视图里 —— 那份残影在这里是故意的)。
+        // 入场分**两层**,不是二选一(2026-09-15 用户口径:"上浮是通用的,从 c 滑动到 a 是额外的动效"):
+        //   ① **上浮 = 通用**:托底 / 选中的那一格 / 整块托盘从原位置下方浮上来 —— 每次都有,没有开关;
+        //   ② **滑过来 = 额外**:托底额外从"上一局停的那一格"横滑到本局落点(设置里可开)。
+        //      两局同格时它没得滑,自然只剩上浮。
+        // 所以这里不再"二选一":上浮的起点照摆,再单独决定托底要不要**上膛**(上膛 = 位移走弹簧)。
         //
         // 顺序要紧:起点必须在 `orderFrontRegardless()` **之前**写好。
-        // 写在后面的话第一帧会先在选中格把托底画出来,再瞬移到板外去 —— 屏幕上一道闪,
-        // 本意(升起)反而变成了两跳。
-        let risesFromBottom = MotionPolicy.entryRisesFromBottom
-        if risesFromBottom {
-            selectionArmed = false
-            contentEntryRise = MotionPolicy.entryRiseDistance
-        } else {
-            contentEntryRise = 0
-            selectionArmed = true
-        }
+        // 写在后面的话第一帧会先在选中格把托底画出来,再瞬移到板外去 —— 屏幕上一道闪。
+        let willSlide = MotionPolicy.slideFromLastApp
+            && lastLandedIndex != nil && lastLandedIndex != appIndex
+        selectionArmed = willSlide                          // 要滑才上膛,否则第一帧定死
+        contentEntryRise = MotionPolicy.entryFloatDistance   // 上浮:两种情形都有
+        print("[T6] 入场:上浮" + (willSlide
+            ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
+            : ""))
 
         // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
         panel.alphaValue = 1
@@ -346,13 +350,11 @@ final class PanelController: ObservableObject {
         installOutsideClickMonitor()
         updatePreview()
 
-        // 起点已就位,等第一帧提交完再上膛、再升上来(动效仍是同一根弹簧,只换了方向)
-        if risesFromBottom {
-            DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
-                guard let self, self.isVisible else { return }
-                self.selectionArmed = true
-                withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.contentEntryRise = 0 }
-            }
+        // 起点已就位:首帧提交后把上浮归零 —— "通用"那一层,任何时候都发生
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
+            guard let self, self.isVisible else { return }
+            self.selectionArmed = true // 之后会话内的选中变化照常走弹簧
+            withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.contentEntryRise = 0 }
         }
         // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
         if let hostingView { FrameProbe.shared.start(on: hostingView, label: "面板\(groups.count)App") }

@@ -11,6 +11,13 @@ import GlanceCore
 /// 3. 开关自绘成 demo 的 34×20 小号(demo 的"光束点亮"意象 = 关闭玻璃灰 / 打开强调蓝)。
 ///
 /// 内容边界不变(Q8 冻结:通用 / 快捷键 / 关于,三节打住)。
+/// 文案纪律(2026-09-15 用户口径:「描述太冗余,一点都不高级简洁;有的也不准确;不好解释的就别写。保持克制」):
+///   1. **一行说不清就不写** —— 标题 + 控件已经说清的,不再复述(只有 RowValue 的行尤其不该有说明);
+///   2. **不出现内部名词**:pid、重枚举、动态色、发丝、一行代码…… 用户不读这些;
+///   3. **键帽跟着配置走**,不硬写(触发键可以从 ⌥Tab 改成 ⌘Tab,"松开 ⌥" 就会变成假话);
+///   4. 准确性优先于简短,但**两难时选删**:不好解释的行为,宁可不写(写半句比不写更糟);
+///   5. **语域是产品文档,不是对话**:陈述句、书面语,不用口语与表情符号;只写这个开关做什么,
+///      不写动机、不写设计史、不写开发者感受(2026-09-15 用户实评:「毕竟是一个产品,功能描述要严谨严肃一点」)。
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var permissions: PermissionMonitor
@@ -38,7 +45,10 @@ struct SettingsView: View {
     @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
-    @AppStorage("panel.puckRiseFromBottom") private var puckRiseFromBottom = true
+    /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
+    @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
+    /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
+    @AppStorage("panel.sheen") private var sheen = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -92,7 +102,7 @@ struct SettingsView: View {
     private var generalPane: some View {
         Group {
             SettingsGroup(label: "外观") {
-                SettingsRow(title: "颜色外观", desc: "面板与设置窗同步生效。") {
+                SettingsRow(title: "颜色外观", desc: "面板与设置窗口同步生效。") {
                     BeamSegmented(options: [
                         .init(id: AppearancePreference.auto, label: "自动"),
                         .init(id: AppearancePreference.light, label: "浅色"),
@@ -100,7 +110,7 @@ struct SettingsView: View {
                     ], value: $appearance)
                 }
                 SettingsRow(title: "图标呼吸感",
-                            desc: "选中图标放大后与邻居的净空,间隙由它推算。",
+                            desc: "选中图标与相邻图标之间的间距。",
                             hairline: false) {
                     HStack(spacing: 8) {
                         Slider(value: clearanceBinding, in: 4...28)
@@ -118,11 +128,11 @@ struct SettingsView: View {
             .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
 
             SettingsGroup(label: "启动与行为") {
-                SettingsRow(title: "登录时启动", desc: "关闭则需手动打开。") {
+                SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
-                SettingsRow(title: "松手保持面板",
-                            desc: "关闭 = 松手即确认(原生节奏)。",
+                SettingsRow(title: "保持面板打开",
+                            desc: "关闭后松开按键即确认,面板随之关闭。",
                             hairline: false) {
                     BeamSwitch(isOn: $pinPanel)
                 }
@@ -132,14 +142,16 @@ struct SettingsView: View {
                 SettingsRow(title: "系统减弱动态效果") {
                     RowValue(systemReduced ? "已开启" : "未开启")
                 }
-                SettingsRow(title: "强制完整动效",
-                            desc: "系统开启减弱时仍播弹簧;关闭则位移类降为淡入淡出。") {
+                SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
                 }
-                SettingsRow(title: "托底从底部升起",
-                            desc: "关闭则托底从上一格滑过来。",
+                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
+                    BeamSwitch(isOn: $sheen)
+                }
+                SettingsRow(title: "承接上次选中位置",
+                            desc: "关闭后选中标记不再滑动,仅上浮。",
                             hairline: false) {
-                    BeamSwitch(isOn: $puckRiseFromBottom)
+                    BeamSwitch(isOn: $slideFromLastApp)
                 }
             }
         }
@@ -155,10 +167,10 @@ struct SettingsView: View {
                 SettingsRow(title: "构建", hairline: false) { RowValue(bundle("CFBundleVersion")) }
             }
             SettingsGroup(label: "权限") {
-                SettingsRow(title: "辅助功能", desc: "读取与聚焦窗口。缺失则切换器不工作。") {
+                SettingsRow(title: "辅助功能", desc: "用于读取与聚焦窗口。缺失时切换器无法工作。") {
                     PermissionBadge(granted: permissions.accessibilityGranted)
                 }
-                SettingsRow(title: "屏幕录制", desc: "抓取窗口缩略图。", hairline: false) {
+                SettingsRow(title: "屏幕录制", desc: "用于生成窗口预览。", hairline: false) {
                     PermissionBadge(granted: permissions.screenCaptureGranted)
                 }
             }
@@ -192,15 +204,14 @@ struct ShortcutPane: View {
         Group {
             SettingsGroup(label: "触发") {
                 SettingsRow(title: "接管系统 ⌘Tab",
-                            desc: "关闭则用 ⌥Tab,系统热键一行不动。退出时还原。") {
+                            desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
                     BeamSwitch(isOn: takeoverBinding)
                 }
-                SettingsRow(title: "唤起即切换",
-                            desc: "唤起时已选中上一个 App;关闭则只定位到当前 App。") {
+                SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
                     BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
-                            desc: "点一下后按下新组合,修饰键只收 ⌥ / ⌘ / ⌃。",
+                            desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃。",
                             hairline: false) {
                     Button {
                         recording ? stopRecording() : startRecording()
@@ -213,24 +224,22 @@ struct ShortcutPane: View {
                 }
             }
             SettingsGroup(label: "导航") {
-                SettingsRow(title: "` 循环窗口",
-                            desc: "仅在面板打开时生效,不会触发系统的 ⌘`。") {
+                SettingsRow(title: "` 循环窗口", desc: "仅在面板打开时生效。") {
                     BeamSwitch(isOn: $graveCyclesWindows)
                 }
                 SettingsRow(title: "循环切换") { KeyChip(text: "Tab / ⇧ Tab") }
-                SettingsRow(title: "切换窗口", desc: "只有一扇窗时不响应,也不会跨到邻 App。") {
+                SettingsRow(title: "切换窗口", desc: "仅有单个窗口时不响应。") {
                     KeyChip(text: "← →")
                 }
-                SettingsRow(title: "确认 / 放弃", desc: "松开 ⌥ 聚焦选中窗,Esc 放弃。",
-                            hairline: false) {
-                    KeyChip(text: "松开 ⌥ / Esc")
+                SettingsRow(title: "确认 / 放弃", hairline: false) {
+                    KeyChip(text: "松开 " + config.modifierSymbol + " / Esc")
                 }
             }
             SettingsGroup(label: "窗口操作") {
-                SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "执行后面板保留。") {
+                SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "操作完成后面板保持打开。") {
                     KeyChip(text: "Q / W / M")
                 }
-                SettingsRow(title: "全屏 / 隐藏 App", desc: "隐藏的 App 图标保留,只是没有可预览的窗。",
+                SettingsRow(title: "全屏 / 隐藏 App", desc: "隐藏后应用仍在列表中,但不再显示窗口预览。",
                             hairline: false) {
                     KeyChip(text: "F / H")
                 }

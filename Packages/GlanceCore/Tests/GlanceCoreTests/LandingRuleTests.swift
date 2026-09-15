@@ -1,69 +1,69 @@
 import Testing
 import GlanceCore
 
-/// 唤起落点的环序(见 `LandingRule` 的文档)。
-/// 这组用例存在的理由:**这条规则被写错过一次** —— 第一版用 `swapAt(0,1)` 让高亮落到了第一格,
-/// 却把当前 App 放到了第二格,于是"按一下 Tab 又回到自己"。观感对了、环序错了,
-/// 用户只会报一句"开关没生效"。所以这里钉的是**走一圈的整条路径**,不是落点那一格。
+/// 唤起落点(见 `LandingRule` 的文档)。这条规则写错过两次,所以用例钉的是**两个面**:
+/// 「第一眼版式」(第一格是当前 App、高亮在第二格)与「整条环怎么走」(当前 App 最后才到)。
+/// 只钉其中一个面的测试,前两版都能通过 —— 那正是它们上线的理由。
 @Suite("唤起落点的环序")
 struct LandingRuleTests {
-    /// MRU 序:当前 App 在最前,越往后越久没用
-    private let mru = ["当前", "上一个", "更早1", "更早2", "最久没用"]
+    /// MRU 原序:当前 App 在最前,越往后越久没用
+    private let ring = ["当前", "上一个", "更早1", "更早2", "最久没用"]
 
-    @Test("开关开:左旋一格 —— 当前 App 沉到队尾,队首是上一个 App")
-    func rotatesInsteadOfSwapping() {
-        let rotated = LandingRule.rotatedForAdvance(mru)
-        #expect(rotated == ["上一个", "更早1", "更早2", "最久没用", "当前"])
-        // 反例护城河:交换两格会让"当前"停在第二格 —— 那正是上一版的错
-        var swapped = mru
+    @Test("第一眼:高亮落在第二格 = 上一个 App(第一格是当前 App,原生如此)")
+    func landsOnSecondCell() {
+        let i = LandingRule.landingIndex(count: ring.count, reverse: false)
+        #expect(i == 1)
+        #expect(ring[i] == "上一个")
+        #expect(ring[0] == "当前") // 当前 App 仍在第一格 —— 版式不动
+    }
+
+    @Test("护城河 v1:交换两格会让第二格变成当前 App —— 一按 Tab 又回到自己")
+    func swapIsStillWrong() {
+        var swapped = ring
         swapped.swapAt(0, 1)
         #expect(swapped[1] == "当前")
-        #expect(rotated[1] != "当前")
+        #expect(ring[1] != "当前")
     }
 
-    @Test("开关开:正向 Tab 的下一站不是当前 App(原生环序)")
-    func nextStopIsNotCurrentApp() {
-        let rotated = LandingRule.rotatedForAdvance(mru)
-        let start = LandingRule.landingIndex(count: rotated.count, reverse: false)
-        #expect(rotated[start] == "上一个")          // 落点 = 上一个 App
-        let next = (start + 1) % rotated.count
-        #expect(rotated[next] == "更早1")            // 下一站是更早的那个,不是"当前"
+    @Test("护城河 v2:左旋一格会让第二格越过上一个 App,且第一格不再是当前 App")
+    func rotationIsStillWrong() {
+        var rotated = ring
+        rotated.append(rotated.removeFirst())
+        #expect(rotated[0] == "上一个")   // 第一格被换成了上一个 App —— 与原生第一眼不符
+        #expect(rotated[1] == "更早1")    // 落点(第二格)跨过了上一个 App
     }
 
-    @Test("开关开:反向 ⇧Tab 从落点往回一格 = 当前 App(原生也是这样)")
-    func previousStopIsCurrentApp() {
-        let rotated = LandingRule.rotatedForAdvance(mru)
-        let start = LandingRule.landingIndex(count: rotated.count, reverse: false)
-        let back = (start - 1 + rotated.count) % rotated.count
-        #expect(rotated[back] == "当前")
-    }
-
-    @Test("开关开:走满一圈,每个 App 各出现一次,当前 App 最后才到")
-    func fullCycleVisitsEveryAppOnce() {
-        let rotated = LandingRule.rotatedForAdvance(mru)
+    @Test("环序:从落点走满一圈,当前 App 最后才到")
+    func fullCyclePutsCurrentLast() {
         var seen: [String] = []
-        var i = LandingRule.landingIndex(count: rotated.count, reverse: false)
-        for _ in 0..<rotated.count {
-            seen.append(rotated[i])
-            i = (i + 1) % rotated.count
+        var i = LandingRule.landingIndex(count: ring.count, reverse: false)
+        for _ in 0..<ring.count {
+            seen.append(ring[i])
+            i = (i + 1) % ring.count
         }
-        #expect(seen == rotated)
+        #expect(seen == ["上一个", "更早1", "更早2", "最久没用", "当前"])
         #expect(seen.last == "当前")
-        #expect(Set(seen) == Set(mru))
+        #expect(Set(seen) == Set(ring))
     }
 
-    @Test("反向唤起:落到队尾,且不左旋(原生 ⇧⌘Tab 落在最久没用的那个)")
+    @Test("环序:从落点往回一格 = 当前 App(原生也是这样)")
+    func previousStopIsCurrent() {
+        let start = LandingRule.landingIndex(count: ring.count, reverse: false)
+        let back = (start - 1 + ring.count) % ring.count
+        #expect(ring[back] == "当前")
+    }
+
+    @Test("反向唤起 ⇧⌘Tab:落到末格(最久没用的那个)")
     func reverseLandsOnLast() {
-        #expect(LandingRule.landingIndex(count: 5, reverse: true) == 4)
-        #expect(LandingRule.rotatedForAdvance(mru).last == "当前") // 旋过之后队尾才是"当前"
-        #expect(mru.last == "最久没用")                            // 不旋的话队尾是最久没用的
+        let i = LandingRule.landingIndex(count: ring.count, reverse: true)
+        #expect(i == ring.count - 1)
+        #expect(ring[i] == "最久没用")
     }
 
-    @Test("退化:0/1 个元素不旋,落点恒为 0")
+    @Test("退化:0/1 个 App 时落点恒为 0(没有可换的对象)")
     func degenerateCases() {
-        #expect(LandingRule.rotatedForAdvance([] as [String]) == [])
-        #expect(LandingRule.rotatedForAdvance(["只有一个"]) == ["只有一个"])
         #expect(LandingRule.landingIndex(count: 0, reverse: false) == 0)
         #expect(LandingRule.landingIndex(count: 1, reverse: true) == 0)
+        #expect(LandingRule.landingIndex(count: 2, reverse: false) == 1)
     }
 }

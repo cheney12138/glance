@@ -45,8 +45,11 @@ struct PreviewPanelView: View {
         )
         .elevation(.tray)
         .padding(PanelMetrics.shadowPadPop) // 必须与 PanelController.previewSize 口径一致
-        // 入场与退场都不做动效(与长条同一裁决;退场是 2026-09-14 砍的:用户实评"拖沓")。
-        // 窗口本身由控制器 orderOut,这里不再需要自己的 shown 状态
+        // **入场上浮**:整块托盘(玻璃 + 卡片)从"原位置再低一小截"浮到该在的位置。
+        // 与长条里**选中格 + 托底**用的是同一个值、同一次 withAnimation —— 所以这两边永远同步上浮,
+        // 其余图标不动(2026-09-15 用户口径:"他们俩直接从原位置开始上浮")。
+        // 退场仍不做动效(2026-09-14 砍的:用户实评"拖沓"),窗口由控制器直接 orderOut
+        .offset(y: controller.contentEntryRise)
         .opacity(controller.isVisible ? 1 : 0)
     }
 

@@ -22,6 +22,8 @@ import AppKit
 ///    `NSViewRepresentable`)重算一遍,`updateNSView` 被按在地上摩擦。sheen 改由自带
 ///    `CAGradientLayer` 的 `SheenNSView` 自己听本窗 `.mouseMoved`,只挪一个 layer 的 position。
 struct PanelView: View {
+    /// 指针光晕开关(设置 → 通用 →「指针光晕」)
+    @AppStorage("panel.sheen") private var sheen = true
     @ObservedObject var controller: PanelController
 
     var body: some View {
@@ -38,10 +40,15 @@ struct PanelView: View {
             // 读成了一个圆角"槽"(用户原话:"把后面 app 的浮起容器的槽给照出来了"),
             // 比原来的毛病重。结论:光斑落在 App 上也行(很浅,.14/.20 不影响观感),
             // 不准为了躲它去切硬边 —— 渐变上任何硬边界都是新的形状,不是遮罩。
-            SheenOverlay(
-                active: controller.isVisible,
-                pointer: { [weak controller] in controller?.pointerInContent() }
-            )
+            // 指针光晕(跟手柔光)—— 2026-09-15 做成**配置项**(用户口径:"有人不一定喜欢这个光效")。
+            // 用 `if` 而不是"传 active:false":关掉时这层视图连同它的 TimelineView 一起不存在,
+            // 不是"画一个看不见的东西",是真的没有开销。@AppStorage ⇒ 设置里一改立刻生效(不用重开面板)。
+            if sheen {
+                SheenOverlay(
+                    active: controller.isVisible,
+                    pointer: { [weak controller] in controller?.pointerInContent() }
+                )
+            }
 
             iconStrip
                 .padding(.horizontal, PanelMetrics.rowPadX)
@@ -89,8 +96,8 @@ struct PanelView: View {
                 // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
                 // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
                 // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
-                //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的"。
-                // 裁切由外层玻璃圆角负责:超出下沿的部分被裁掉,像从板子下沿钻出来
+                //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的";
+                // ③ 幅度 = `entryFloatDistance`(选中图标自己的上浮量):读作"轻轻浮上来",不是"钻出来"
                 .offset(y: i == controller.appIndex ? controller.contentEntryRise : 0)
                 .contentShape(Rectangle())
                 .onHover { inside in if inside { controller.hoverApp(i) } }
@@ -178,6 +185,12 @@ private struct IconCell: View {
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
     let motion: Animation?
 
+    /// **光效总闸**(设置 → 通用 →「光效」):指针那团游走的柔光 + 这里的静态反光是同一件事的两半,
+    /// 一起开、一起关(用户口径:"app 上的静态反光也关闭,一齐开启,或者关闭")。
+    /// 关掉时图标回到**本来的样子**(不额外提亮、也不压暗),选中态靠放大 + 上浮 + 托底交代 ——
+    /// 那三样是"形",不是"光",不受这个开关影响。
+    @AppStorage("panel.sheen") private var glow = true
+
     var body: some View {
         let art = IconProvider.art(for: group.pid)
         Image(nsImage: art.image)
@@ -185,8 +198,8 @@ private struct IconCell: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            .saturation(selected ? 1.15 : 0.92)
-            .brightness(selected ? 0.05 : -0.04)
+            .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
+            .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
             // 倍率 = 选中放大 × 图标透明边距补偿。**补偿是必须的**:macOS 图标的画面只占画布
             // 87.5%(Finder/Safari/Xcode/Terminal 实测 .875,Chrome .867,Obsidian .83),
             // 直接铺进 78pt 格子,画面就只有 68pt —— 比 demo 里铺满格子的色块小一圈,

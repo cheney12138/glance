@@ -20,8 +20,18 @@ enum CaptureSessionProbe {
         if let cache = cached, now - cache.at < cacheTTL { return cache.verdict }
         let fresh = CaptureSessionRule.verdict(evidence(), extraBundleIDs: extraBundleIDs)
         cached = (at: now, verdict: fresh)
+        // **裁决变化时才打一行**(不是每一次按键):2026-09-15 的 `CGEData` 病例里,
+        // 裁决从"无截图会话"永久翻成"截图会话",所有导航键静默放行 —— 只有变化点那一行日志
+        // 能让这类"永久误报"一眼现形;按按键频率打会刷屏,反而没人看
+        if lastLoggedReason != fresh.reason {
+            lastLoggedReason = fresh.reason
+            glog("[T32] 截图裁决 → \(fresh.isCapture ? "认作截图会话" : "无截图会话"): \(fresh.reason)")
+        }
         return fresh
     }
+
+    /// 上一次打过的理由(只在变化时打)
+    private static var lastLoggedReason: String?
 
     /// 微缓存。**不是定时器**:没有轮询、没有后台线程,只是"算过就记一下,下次离得近就直接用"
     private static var cached: (at: CFAbsoluteTime, verdict: CaptureSessionRule.Verdict)?
@@ -41,11 +51,18 @@ enum CaptureSessionProbe {
         let front = NSWorkspace.shared.frontmostApplication
         // 窗口清单只取一次,两条判据(系统 UI 在不在 / 有没有铺满屏的覆盖窗)共用
         let windows = onScreenWindows()
+        let overlays = screenWideOverlays(in: windows)
         return CaptureSessionEvidence(
             frontmostBundleID: front?.bundleIdentifier,
             frontmostName: front?.localizedName,
+            frontmostPID: front?.processIdentifier,
             systemCaptureUIRunning: systemCaptureUIRunning(windows: windows),
-            screenWideOverlay: screenWideOverlayPresent(in: windows)
+            screenWideOverlays: overlays.map { pid in
+                CaptureSessionEvidence.ScreenWideOverlay(
+                    ownerPID: pid,
+                    ownerBundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+                )
+            }
         )
     }
 
@@ -80,11 +97,15 @@ enum CaptureSessionProbe {
     /// 覆盖占比:取景框是整屏的(留几像素误差给不同工具的绘制方式)
     private static let overlayCoverage: CGFloat = 0.92
 
-    private static func screenWideOverlayPresent(in windows: [[String: Any]]) -> Bool {
+    /// 铺满屏的高层窗**是谁的**。归因这一层是 2026-09-15 的病例逼出来的(`CGEData`):
+    /// 只回答"有没有"会把常驻的屏幕管理类覆盖窗认成取景框,裁决永久成立 → 整套导航键失效。
+    private static func screenWideOverlays(in windows: [[String: Any]]) -> [pid_t] {
         let myPID = Int(ProcessInfo.processInfo.processIdentifier)
         let displays = activeDisplayBounds()
+        var found: [pid_t] = []
         for window in windows {
-            if let pid = window[kCGWindowOwnerPID as String] as? Int, pid == myPID { continue }
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int else { continue }
+            if ownerPID == myPID { continue }
             let layer = window[kCGWindowLayer as String] as? Int ?? 0
             guard layer >= overlayLayerFloor else { continue }
             // 全透明窗不算(有些工具会留一个不可见的空壳窗)
@@ -92,9 +113,13 @@ enum CaptureSessionProbe {
             guard alpha >= 0.05 else { continue }
             guard let raw = window[kCGWindowBounds as String] as? [String: Any],
                   let frame = CGRect(dictionaryRepresentation: raw as CFDictionary) else { continue }
-            if displays.contains(where: { covers(frame, $0) }) { return true }
+            if displays.contains(where: { covers(frame, $0) }) {
+                // 同一进程可能有好几块(实测 DLP 每块屏一块)—— 按 pid 去重,裁决侧只看属主
+                let pid = pid_t(ownerPID)
+                if !found.contains(pid) { found.append(pid) }
+            }
         }
-        return false
+        return found
     }
 
     /// 活动屏的 Quartz 全局坐标(`kCGWindowBounds` 与 `CGDisplayBounds` 同一套:原点在主屏左上)。

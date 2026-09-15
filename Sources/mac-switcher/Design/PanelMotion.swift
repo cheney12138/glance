@@ -31,30 +31,29 @@ enum MotionPolicy {
 
     static var systemReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
-    /// 入场的**起点**(整块内容:图标 + 托底;用户实评 2026-09-14):
+    /// **从上一个 App 滑过来** —— 额外的一层入场动效,默认**关**。
     ///
-    /// 开 = 从**面板下缘升起** —— 无论新选中在第几格,整块内容都被按到选中格下方,
-    /// 距离恒定且短(而且开场那一帧它整块落在面板下缘之外,被圆角裁掉,升起是干净的);
-    /// 关 = 从**上一局选中的那个格子**滑过来 —— a→b 之后 b 排到第一、a 落在第 6 位时,
-    /// 整条要横跨从右滑到左,"视觉上很累"。
+    /// 入场分两层,不是二选一(用户口径:"上浮是通用的,从 c 滑动到 a 这个是额外的动效")：
+    ///   · **上浮(通用)**:托底 / 选中的那一格 / 整块托盘从原位置下方轻轻浮上来。永远都有,没有开关,
+    ///     幅度 = `entryFloatDistance`;
+    ///   · **滑过来(额外)**:托底**额外**从"上一局停的那一格"横滑到本局落点 —— 窗口是复用的,
+    ///     上一局画出来的那份残影就是它的起点。两局落点相同时它没得滑,自然只剩上浮。
     ///
-    /// 曾经试过"从长条左缘滑入",实评效果不好(横向的插入感很硬),改成纵向升起 ——
-    /// **动效本身没动**,只换了起点方向。两种都会滑,所以这是一个二选一,不是动效开关。
-    static var entryRisesFromBottom: Bool {
-        UserDefaults.standard.object(forKey: "panel.puckRiseFromBottom") as? Bool ?? true
+    /// 默认关:落点差得远时要横穿整条(上一局停第六格、本局落第二格),视觉上很累;
+    /// 而且它只存在于**面板刚出现的那一帧**,晚一点看就没了。
+    ///
+    /// key 换过:`panel.puckRiseFromBottom` 是上一版"上浮/滑 二选一"的开关,语义已经反了,
+    /// 特意**不迁移** —— 搬过来会让面板突然开始滑动。旧 key 就此作废。
+    static var slideFromLastApp: Bool {
+        UserDefaults.standard.object(forKey: "panel.slideFromLastApp") as? Bool ?? false
     }
 
-    /// "从底部升起"的距离。
+    /// **通用的上浮幅度** —— 入场每次都有这一层(见 `slideFromLastApp` 的两层说明)。
     ///
-    /// 曾经是 **1.4 × icon**(= 123pt),取的是"让内容在开场那一帧**完全**落到面板下缘之外"的
-    /// 最小充分值 —— 数学上没错,但它比面板内容高(132pt)还接近,观感就是**整块东西从板子最底下
-    /// 整个钻出来**,用户实评"弹起的幅度有点太大了"。
-    ///
-    /// 2026-09-14 改成 **0.4 × icon**(≈ 35pt):足够读出"从下面升上来"这件事,又不至于变成一次
-    /// 大位移。代价要认下来:**开场第一帧内容不再完全藏住**,会在面板下半部露出一点 ——
-    /// "幅度小"与"完全藏住"在几何上互斥(藏住 = 至少下移 rowPadY + icon + 托底下溢),
-    /// 这一次选幅度。想回到藏住的老行为,把系数调回 1.4 即可。
-    static var entryRiseDistance: CGFloat { PanelMetrics.icon * 0.4 }
+    /// 幅度史:1.4 × icon(≈123pt,整块从板子底下钻出来)→ 0.4 × icon(≈35pt)
+    /// → **`iconLift`(≈17pt @1.2)**:与图标选中时的上浮同量级,读作"轻轻浮上来"而不是"弹出来"
+    /// (用户实评:"有点过犹不及了,改成他们俩直接从原位置开始上浮")。
+    static var entryFloatDistance: CGFloat { PanelMetrics.iconLift }
 
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }
@@ -79,10 +78,13 @@ enum PanelMotion {
     static let select = Animation.spring(response: 0.32, dampingFraction: 0.55)
     /// puck 滑移(demo .puck 的 .38s):阻尼比图标大一点,托底不抖
     static let slide = Animation.spring(response: 0.38, dampingFraction: 0.62)
-    /// 托底**入场**(从面板下缘升起)。比 `slide` 快一档:升幅有 1.4×图标那么长,
-    /// 用同一根弹簧会显得"慢慢飘上来" —— 用户实评"上滑的速度稍微快一点"。
-    /// 会话内的横滑仍用 `slide`(两个动作的手感本来就该不同:一个是入场,一个是跟手)
-    static let entrance = Animation.spring(response: 0.28, dampingFraction: 0.62)
+    /// **入场动效**(上浮 / 承接上一格;唯一的使用点是 `PanelController` 把 `contentEntryRise` 归零那一发)。
+    /// 比 `slide` 快一档 —— 它是"入场",不是"跟手",不该让人等。会话内的横滑仍用 `slide`。
+    ///
+    /// 速度史:0.38(与 slide 同) → 0.28("上滑的速度稍微快一点") →
+    /// **0.20**(2026-09-15,幅度收成 17pt 之后,"这个上浮有点慢了")。
+    /// 再要动就一次动一个数:`response` 越小越快、`dampingFraction` 越小回弹越明显。
+    static let entrance = Animation.spring(response: 0.20, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 }

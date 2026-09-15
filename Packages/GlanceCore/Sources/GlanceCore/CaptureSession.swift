@@ -21,17 +21,44 @@ public struct CaptureSessionEvidence: Equatable, Sendable {
     public var frontmostName: String?
     /// 系统截图 UI 在跑:⇧⌘4 / ⇧⌘5 的取景框与拍完的浮窗缩略图都由它画
     public var systemCaptureUIRunning: Bool
-    /// 屏幕上是否有一块**铺满整屏的高层窗口**,且不是我们自己的 —— 取景框的通用特征
-    public var screenWideOverlay: Bool
+    /// 前台 App 的 pid(用来判"这块铺满屏的窗是不是它自己的")
+    public var frontmostPID: pid_t?
+    /// 屏幕上**所有**铺满整屏的高层窗的属主(取景框的通用特征)。
+    ///
+    /// ★ 2026-09-15 病例:这一条**必须带属主**,不能只是一个 Bool,而且必须是**复数**。
+    /// 用户的机器上装了公司 DLP(`cn.cirrusgate.dlp.CGEData`),它常驻两块
+    /// **屏蔽级(2147483628)铺满屏**的窗 —— 于是"屏上有铺满的高层窗"**恒为真**,
+    /// 截图裁决**永久成立**,所有导航键(Tab/←→/Esc/Q/W/M/F/H/`)在会话期被整套放行,
+    /// 用户看到的是"`` ` `` 的功能失效了",实际是**全部导航键都失效**。
+    ///
+    /// 复数是同一个病例的第二层:那块常驻窗**一直在**,所以真在截图时屏上至少有**两块** ——
+    /// "取第一个来认"会把真取景框漏掉(等于截图中又不再让权)。裁决必须能**从一堆里挑出
+    /// 能归因的那一块**。
+    public struct ScreenWideOverlay: Equatable, Sendable {
+        public var ownerPID: pid_t
+        /// 属主 bundle id(取不到就是 nil,比如非 App 的进程)
+        public var ownerBundleID: String?
+        public init(ownerPID: pid_t, ownerBundleID: String? = nil) {
+            self.ownerPID = ownerPID
+            self.ownerBundleID = ownerBundleID
+        }
+        public var describe: String { ownerBundleID ?? "未知进程 #\(ownerPID)" }
+    }
+    public var screenWideOverlays: [ScreenWideOverlay] = []
+
+    /// 有没有铺满屏的高层窗(派生量,保留给"只想问有没有"的调用方)
+    public var screenWideOverlay: Bool { !screenWideOverlays.isEmpty }
 
     public init(frontmostBundleID: String? = nil,
                 frontmostName: String? = nil,
+                frontmostPID: pid_t? = nil,
                 systemCaptureUIRunning: Bool = false,
-                screenWideOverlay: Bool = false) {
+                screenWideOverlays: [ScreenWideOverlay] = []) {
         self.frontmostBundleID = frontmostBundleID
         self.frontmostName = frontmostName
+        self.frontmostPID = frontmostPID
         self.systemCaptureUIRunning = systemCaptureUIRunning
-        self.screenWideOverlay = screenWideOverlay
+        self.screenWideOverlays = screenWideOverlays
     }
 }
 
@@ -97,8 +124,29 @@ public enum CaptureSessionRule {
                 return Verdict(isCapture: true, reason: "前台是截图 App(\(bundleID))")
             }
         }
-        if evidence.screenWideOverlay {
-            return Verdict(isCapture: true, reason: "屏幕被一块高层覆盖窗铺满(取景框)")
+        // ★ 通用判据 = **铺满屏 + 归因**。只问"屏上有没有铺满的高层窗"是不够的(见 CGEData 病例):
+        // 那种窗在装了 DLP / 屏幕管理类软件的机器上**常驻**,一问就真,裁决会永久成立。
+        // 取景框一定归**截图这件事**:要么是系统 UI / 已知截图 App 的窗,要么是**前台 App 自己的**窗
+        // (微信/QQ 的截图模式就是这种:同进程同 bundle,只有"前台它自己"这一条能把它与聊天模式分开)。
+        // 三者都不是 → **不认**(宁可漏一次让权,也不能把整套导航键永久放行)。
+        if !evidence.screenWideOverlays.isEmpty {
+            // ① 截图 App / 系统 UI 的取景框(它们不一定会抢前台)
+            if let known = evidence.screenWideOverlays.first(where: { overlay in
+                guard let id = overlay.ownerBundleID else { return false }
+                return systemUIBundleIDs.contains(id) || knownBundleIDs.contains(id)
+                    || extraBundleIDs.contains(id)
+            }) {
+                return Verdict(isCapture: true, reason: "截图 App(\(known.describe))的取景框铺满屏")
+            }
+            // ② 前台 App **自己**的窗铺满整屏(微信/QQ 的截图模式:同进程同 bundle,只此一条能认)
+            if let front = evidence.frontmostPID,
+               evidence.screenWideOverlays.contains(where: { $0.ownerPID == front }) {
+                return Verdict(isCapture: true, reason: "前台 App 自己的窗铺满整屏(取景框)")
+            }
+            // ③ 都不是 → **不认**。宁可漏一次让权,也不能把整套导航键永久放行(DLP 病例)
+            let who = evidence.screenWideOverlays.map(\.describe).joined(separator: "、")
+            return Verdict(isCapture: false,
+                           reason: "屏上有铺满的高层窗,但都不属于前台/截图 App:「\(who)」—— 不认")
         }
         if let name = evidence.frontmostName {
             let lowered = name.lowercased()
