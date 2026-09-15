@@ -76,8 +76,11 @@ let cx = CGFloat(left) + CGFloat(side0) / 2, cy = CGFloat(top) + CGFloat(side0) 
 // 与"满幅、和 DockDoor/Ghostty 一样大"这个目标无冲突。
 // (82% 时代的那段"沿四边比背景色"扫描的结论恰好也是 1.75%,两次独立测量互相印证。)
 let sideC = CGFloat(side0)          // Int/CGFloat 混算会让类型检查器超时,先转干净
-// 第四个参数:裁切内缩比例(默认 0.018)。可扫参 —— 见 design/icon/README.md「坑六」
-let insetRatio = CommandLine.arguments.count > 4 ? (Double(CommandLine.arguments[4]) ?? 0.018) : 0.018
+// 第四个参数:裁切内缩比例(默认 0.022)。可扫参 —— 见 design/icon/README.md「坑六」
+//
+// ⚠️ 这个值**不能只看缩略图定** ✗:0.030 在 112px 缩略图上看着更"干净",但在 1024 下一看,
+// 左上角出现灰斑与硬斜边(遮罩切过渲染自己的角落阴影)。0.022 是"边缘余辉收掉、角落仍然干净"的折中。
+let insetRatio = CommandLine.arguments.count > 4 ? (Double(CommandLine.arguments[4]) ?? 0.022) : 0.022
 let inset0 = sideC * CGFloat(insetRatio)
 let boxOriginX = cx - sideC / 2 + inset0
 let boxOriginY = cy - sideC / 2 + inset0
