@@ -716,8 +716,8 @@ final class PanelController: ObservableObject {
             winIndex = 0
             // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
             trace("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
-            refreshSnapshotForSelection()
-            updatePreview()
+            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+            traceCost("  ↳托盘更新") { updatePreview() }
         }
     }
 
@@ -755,8 +755,8 @@ final class PanelController: ObservableObject {
         // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
         traceCost("窗口选中") {
             winIndex = (winIndex + delta + n) % n
-            refreshSnapshotForSelection()
-            updatePreview()
+            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+            traceCost("  ↳托盘更新") { updatePreview() }
         }
         trace("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
     }
@@ -819,8 +819,10 @@ final class PanelController: ObservableObject {
                   + "(共 \(groups[i].windows.count) 窗)")
             appIndex = i
             winIndex = 0
-            refreshSnapshotForSelection()
-            updatePreview()
+            // 拆账(2026-09-15):`指针换选中` 中位 11.9ms × 84 次,是现在最大的主线程开销 ✗ ——
+            // 但只知道总数,不知道该修哪半。分成"拍图 / 托盘更新"两笔,下次日志直接点名。
+            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+            traceCost("  ↳托盘更新") { updatePreview() }
         }
     }
 
