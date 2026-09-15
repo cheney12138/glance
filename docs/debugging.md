@@ -513,3 +513,26 @@ defaults delete com.cheney12138.macswitcher debug.noElementShadows             #
    (教训的另一半:任何"两份日志对比得出"的结论,都必须先列清**两份之间改了什么** ——
    本次真正的变量是 T53–T55 的投影返工,而不是我以为的那个开关。)
 
+## 17. 日志放哪 & 怎么让助手自己读(2026-09-15)
+
+**病**:Glance 从终端直接起时,stdout 绑在**那个 tty** 上(`lsof -p <pid> -a -d 1` 能看到
+`/dev/ttys011` 这种)—— 别人读不到,只能人肉复制粘贴,而一次测试动辄上千行 ✗。
+
+**改**:`bash Tools/trace-run.sh` —— 起之前先按规矩收掉旧实例(TERM → 不行才 KILL + 手动还原热键),
+然后把 `GLANCE_TRACE=1` 的输出固定写到:
+
+```
+~/Library/Logs/Glance/trace.log
+```
+
+以后"我测完了" → 助手直接读这个文件 ✓。**只关心某几行**时可以自己先看一眼:
+```bash
+grep -E "\[打卡\]|\[帧\]|键盘换选中|窗口选中" ~/Library/Logs/Glance/trace.log | tail -40
+```
+
+**顺手记一条构建规矩**:Debug 构建**不要**加 `-destination 'generic/platform=macOS'` ✗ ——
+那个目的地会把 SPM 的动态框架放到别处,应用启动时 `dyld` 找不到 `Sparkle.framework` 直接崩
+(2026-09-15 的 `Glance-2026-09-15-162601.ips` 就是这一条,`termination` 里写着
+"Library missing / Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle")。
+发版脚本用 generic 是对的(要 universal),但那只走 Release。
+

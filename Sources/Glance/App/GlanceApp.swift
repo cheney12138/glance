@@ -9,11 +9,6 @@ struct GlanceApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
         _ = stdoutIsLineBuffered
-        // 实验开关**必须自己报状态**:2026-09-15 用户给了两份日志,而"逐元素投影到底关没关"
-        // 只能靠推论 —— 这种"读了半天不知道条件是什么"的日志,等于白测。
-        if PanelElevation.elementShadowsOff {
-            print("[调试] 逐元素投影已关闭(debug.noElementShadows)—— 诊断用,顶位会飘")
-        }
         // 外观要在任何窗/面板画出来之前摆好(面板取的全是按外观解析的动态色)
         AppearancePreference.apply()
         // AX 超时也在此刻定死:它是进程级设置,晚一步就有一次无上限的跨进程等待

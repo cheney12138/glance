@@ -392,9 +392,6 @@ enum PanelElevation {
         }
     }
 
-    /// 逐元素投影的**实验总闸**(只影响 icon/thumb/puck,不影响 strip/tray 那两块玻璃)
-    static let elementShadowsOff = UserDefaults.standard.bool(forKey: "debug.noElementShadows")
-
     case strip, tray, puck, icon, thumb, thumbActive
 
     var shadow: Layer {
@@ -439,20 +436,20 @@ enum PanelElevation {
 }
 
 extension View {
-    func elevation(_ level: PanelElevation) -> some View {
-        // **实验开关**(2026-09-15):关掉所有逐元素投影。
-        //
-        // 为什么怀疑它:日志里 `[工] 键盘换选中` 17–38ms、`[打卡] 开窗` 20–37ms,两者都随
-        // **格子数**增长(6 App ≈20ms vs 11 App ≈32ms);而 SwiftUI 的 `.shadow(...)` 是给
-        // **整棵子树**做一次离屏光栅化 —— 每个图标一次、每张卡片一次,正是这种"随元素数线性长"的形状。
-        // (日志已经排除了"是打日志的锅":`[工] 日志开销:单行 0.07ms`。)
-        //
-        // 用法(免编译):
-        //   defaults write com.cheney12138.macswitcher debug.noElementShadows -bool true   # 关
-        //   defaults delete com.cheney12138.macswitcher debug.noElementShadows             # 开回来
-        // 然后对比 `[工] 键盘换选中` 与 `[打卡] 开窗` 两行 —— 掉多少就是它的罪。
-        if PanelElevation.elementShadowsOff { return AnyView(self) }
-        return AnyView(shadow(color: level.shadow.color, radius: level.shadow.radius, y: level.shadow.y))
+    /// 投影。`active == false` 时**参数归零**(而不是拿掉这个修饰符)——
+    ///
+    /// 2026-09-15 定稿(用户口径:**帧率优先**):SwiftUI 的 `.shadow(...)` 会给整棵子树做一次
+    /// 离屏光栅化,11 个图标就是 11 次 ✗。实测(同一台机器、同一块屏、只改这一处):
+    /// `[打卡] … 开窗`(首帧渲染)从典型 **18–30ms** 降到 **10–13ms**,从"超过一帧"进到"一帧以内" ✓。
+    /// 现在只让**选中的那一颗**带投影(1 次而不是 N 次)。
+    ///
+    /// 为什么用"参数归零"而不是 `if`:**修饰符链必须保持同一条**。图标格子的选中态每次 Tab 都在变,
+    /// 用条件包裹会改变视图身份,把选中弹簧的动画打断 ✗;改数值不会。
+    func elevation(_ level: PanelElevation, active: Bool = true) -> some View {
+        let s = level.shadow
+        return shadow(color: active ? s.color : .clear,
+                      radius: active ? s.radius : 0,
+                      y: active ? s.y : 0)
     }
 }
 

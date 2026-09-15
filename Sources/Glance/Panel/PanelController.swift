@@ -751,7 +751,13 @@ final class PanelController: ObservableObject {
         // 组内 ≤1 窗时 ←→ 无语义,静默吞掉
         let n = expandedCount
         guard n > 1 else { return }
-        winIndex = (winIndex + delta + n) % n
+        // 补记账(2026-09-15):日志里出现过一局 `长帧 4(6%)`,全部落在连按 ←→ 的那 3 秒里 ——
+        // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
+        traceCost("窗口选中") {
+            winIndex = (winIndex + delta + n) % n
+            refreshSnapshotForSelection()
+            updatePreview()
+        }
         trace("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
     }
 

@@ -210,7 +210,7 @@ private struct IconCell: View {
             .scaleEffect((selected ? PanelMetrics.iconScale : 1) * art.fill)
             .offset(y: selected ? -PanelMetrics.iconLift : 0)
             // 不变量:阴影跟图片 alpha 走,不裁圆角、不套矩形 box-shadow
-            .elevation(.icon)
+            .elevation(.icon, active: selected)   // 帧率优先:只有选中那颗有投影
             .overlay(alignment: .bottom) { windowDots }
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
             .contentShape(Rectangle())
