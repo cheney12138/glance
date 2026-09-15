@@ -24,21 +24,25 @@ struct PreviewPanelView: View {
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
         .background(GlassBackground(cornerRadius: PanelMetrics.rTray))
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous))
-        // 顶缘受光边:与长条同一道(深色靠它交代厚度;浅色透明)
-        .overlay(
-            LinearGradient(colors: [PanelColors.glassTopEdge, .clear],
-                           startPoint: .top,
-                           endPoint: UnitPoint(x: 0.5, y: 0.015))
-                .allowsHitTesting(false)
-        )
+        // 顶缘受光边:与长条同一道(深色靠它交代厚度;浅色透明)—— 同样挂总闸
+        .overlay {
+            if PanelEdgeStyle.drawsEdge {
+                LinearGradient(colors: [PanelColors.glassTopEdge, .clear],
+                               startPoint: .top,
+                               endPoint: UnitPoint(x: 0.5, y: 0.015))
+                    .allowsHitTesting(false)
+            }
+        }
         .glassEdge(cornerRadius: PanelMetrics.rTray)
-        // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):两块玻璃同一配方
-        .overlay(
-            RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
-                .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
-                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-                .allowsHitTesting(false)
-        )
+        // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):两块玻璃同一配方 —— 同样挂总闸
+        .overlay {
+            if PanelEdgeStyle.drawsEdge {
+                RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous)
+                    .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
+                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+                    .allowsHitTesting(false)
+            }
+        }
         .elevation(.tray)
         .padding(PanelMetrics.shadowPadPop) // 必须与 PanelController.previewSize 口径一致
         // **入场上浮**:整块托盘(玻璃 + 卡片)从"原位置再低一小截"浮到该在的位置。

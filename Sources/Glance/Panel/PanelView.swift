@@ -62,12 +62,15 @@ struct PanelView: View {
         // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
         .glassEdge(cornerRadius: PanelMetrics.rPanel)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
-        .overlay(
-            RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous)
-                .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
-                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-                .allowsHitTesting(false)
-        )
+        // (挂 `PanelEdgeStyle.drawsEdge`:用户要"完全去掉"时,这两道也要一起消失)
+        .overlay {
+            if PanelEdgeStyle.drawsEdge {
+                RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous)
+                    .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
+                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+                    .allowsHitTesting(false)
+            }
+        }
         // 入场与退场**都不做动效**(v1.12 砍入场,2026-09-14 砍退场):
         // ⌘Tab 是效率动作,面板要"已经在",关闭要"已经没了"——两头都不该让用户等动画。
         // 窗口由控制器直接 orderOut,这里的 opacity 只是兜住"显示中"这个状态
