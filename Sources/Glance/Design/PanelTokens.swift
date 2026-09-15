@@ -72,7 +72,13 @@ enum PanelMetrics {
     static var iconLift: CGFloat { k(8) }
     /// 选中放大倍率是**比例**,不随尺寸变(变尺寸不该改变选中态的强烈程度)
     static let iconScale: CGFloat = 1.14
-    static var puckHeight: CGFloat { icon + k(16) } // 图标 + 上下各 8
+    /// 托底高度 = 图标 + 上下各 11。
+    ///
+    /// 2026-09-15 用户口径:「优化一下托底,我觉得有点小了,高度稍微的加长一点点」——
+    /// `k(16)`(上下各 8)→ **`k(22)`**(上下各 11):base 104 → 110、@1.2 实得 124.8 → **132pt**(+7.2)。
+    /// 只动高度、宽度一格未碰(宽度 = `icon`,由格子决定)。
+    /// 安全线:长条内容高 = `rowPadY*2 + icon` = 158.4pt @1.2,托底 132pt 仍在里面(上下各余 13.2)。
+    static var puckHeight: CGFloat { icon + k(22) }
     // § 指针跟随高光(demo `radial-gradient(220px circle …, transparent 60%)`)
     static var sheenExtent: CGFloat { k(220) } // 结束形状**半径**(不是直径!)
     static let sheenStop: CGFloat = 0.6 // 透明落在 60% → 可见半径 132
