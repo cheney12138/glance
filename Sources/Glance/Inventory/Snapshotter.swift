@@ -36,8 +36,16 @@ final class Snapshotter: ObservableObject {
     /// AltTab 的做法也是这个:缩略图缓存保活 + 后台刷新,UI 永远先出图。
     ///
     /// 所以开局只做**剪枝**,不清场:留着的图仍能立即上屏,新图回来再覆盖。
+    /// 曾经成功拍到过的 window id(只增不减;`prune` 不动它)。见 `precapture` 的 missLost 分账。
+    private var everCaptured: Set<CGWindowID> = []
+
     func prune(keeping liveWindows: Set<CGWindowID>) {
-        session &+= 1 // 上一局飞在半路的拍图到此为止(新局自己的会在下面重新发)
+        // ⚠️ 2026-09-15:原来这里**无条件** `session &+= 1` —— 而这个函数在每次列表刷新时都会被调用,
+        // 于是"开局发出去的预拍"经常在飞回来的路上被判成"上一局",整批丢掉 ✗。
+        // 日志证据:每局都要重拍十几扇窗,而且**永远是「无图」、零个「过期」** ——
+        // 图不是过期,是压根没留下来。现在只有**真的有窗口消失**才作废在途批次。
+        let removed = cache.keys.contains { !liveWindows.contains($0) }
+        if removed { session &+= 1 }
         cache = cache.filter { liveWindows.contains($0.key) }
         cacheAt = cacheAt.filter { liveWindows.contains($0.key) }
         Task { await failedOnce.reset() } // 窗口列表变了,失败记录重来(权限也可能刚修好)
@@ -77,9 +85,13 @@ final class Snapshotter: ObservableObject {
         // 但"整块作废"那条日志从没打过 ——
         // 说明图不是被删的,而是"压根没存进去"或"过期了"。这两种原因对应完全不同的修法,
         // 所以直接量出来,不再靠推理(本次会话已经因为推理翻过两次车)。
-        var missNoEntry = 0, missExpired = 0
+        var missNoEntry = 0, missExpired = 0, missLost = 0
         let stale = force ? windows : windows.filter { w in
-            guard cache[w.wid] != nil else { missNoEntry += 1; return true }   // 没有 → 要拍
+            guard cache[w.wid] != nil else {
+                missNoEntry += 1
+                if everCaptured.contains(w.wid) { missLost += 1 }   // 拍到过却没留下来 = 真丢了
+                return true
+            }
             if now - (cacheAt[w.wid] ?? 0) > Self.cacheTTL { missExpired += 1; return true }  // 太老
             return false
         }
@@ -96,7 +108,8 @@ final class Snapshotter: ObservableObject {
             if isTraceEnabled {
                 // 规模计数:掉帧若随"外接屏 App 多"来,这一行是第一个证人 ——
                 // 它会告诉我们**这一局实际拍了多少扇窗**(缓存命中后本该远小于窗口总数)
-                let why = force ? "强制" : "无图 \(missNoEntry) / 过期 \(missExpired)"
+                let why = force ? "强制"
+                    : "无图 \(missNoEntry)\(missLost > 0 ? "(其中 \(missLost) 曾拍到过)" : "") / 过期 \(missExpired)"
                 print("[T5] 预截 要拍 \(windows.count) 窗(\(why))→ 回填 \(images.count) 窗"
                       + (missing.isEmpty ? "" : "(缺 \(missing.count),第 \(attempt) 轮)"))
             } else if !missing.isEmpty {
@@ -111,6 +124,9 @@ final class Snapshotter: ObservableObject {
                     guard current == self.session else { return }
                     let now = CFAbsoluteTimeGetCurrent()
                     self.cache.merge(images) { _, new in new }
+                    // "曾经拍到过"的账:prune 时不清,用来区分下面两种"无图"——
+                    //   从来没拍到过(SCK 不给 / 键不匹配)vs 拍到过但没留下来(丢了)
+                    self.everCaptured.formUnion(images.keys)
                     // 首图上屏时刻(相对按键):trace 下单独一行。窗口多 → 这一批图多 →
                     // 主线程合并 + SwiftUI 重绘的代价全在这一刻,正是"体感掉帧"的嫌疑人
                     SessionMarks.noteFirstThumb(images.count)
