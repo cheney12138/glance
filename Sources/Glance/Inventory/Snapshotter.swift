@@ -45,7 +45,13 @@ final class Snapshotter: ObservableObject {
         // 日志证据:每局都要重拍十几扇窗,而且**永远是「无图」、零个「过期」** ——
         // 图不是过期,是压根没留下来。现在只有**真的有窗口消失**才作废在途批次。
         let removed = cache.keys.contains { !liveWindows.contains($0) }
-        if removed { session &+= 1 }
+        if removed {
+            session &+= 1
+            // 出声(2026-09-15):日志显示 miss 绝大多数是"曾拍到过"(= 拍到又被丢)✗,
+            // 而作废在途批次的入口就是这个计数器。它每次加一都打一行,好和"无图"对齐时间;
+            // 只在 trace 下打,平时不占日志预算。
+            if isTraceEnabled { glog("[保温] 在途批次作废(窗口集合变了,session → \(session))") }
+        }
         cache = cache.filter { liveWindows.contains($0.key) }
         cacheAt = cacheAt.filter { liveWindows.contains($0.key) }
         Task { await failedOnce.reset() } // 窗口列表变了,失败记录重来(权限也可能刚修好)

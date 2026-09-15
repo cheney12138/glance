@@ -742,7 +742,15 @@ final class PanelController: ObservableObject {
         let t0 = CFAbsoluteTimeGetCurrent()
         body()
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        guard ms > (Self.traceOn ? 2.0 : 16.0) else { return }
+        // 子账(名字以 "↳" 开头)在 trace 下**无条件打**:2026-09-15 拆 `指针换选中`(外层 12ms),
+        // 三笔子账一笔都没露面 —— 因为各自都 <2ms 门槛。可"外层 12ms、三笔加起来不到 2ms"
+        // 本身就是最有价值的线索 ✗,不该被门槛藏起来。
+        let isSub = label.hasPrefix("  ↳")
+        if isSub {
+            guard isTraceEnabled else { return }
+        } else {
+            guard ms > (Self.traceOn ? 2.0 : 16.0) else { return }
+        }
         glog(String(format: "[工] %@ 主线程 %.1fms", label, ms))
     }
 
