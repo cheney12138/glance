@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 //   ④ 出一整套尺寸 + 预览对照(浅底/深底)
 
 let src = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "chosen.png"
-let outDir = "/tmp/koala/icon"
+let outDir = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "/tmp/glance-icon"
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
 let isrc = CGImageSourceCreateWithURL(URL(fileURLWithPath: src) as CFURL, nil)!
@@ -54,15 +54,27 @@ let bottom = outerEdge(H-7, H/2, step: 2) { (xMid, $0) }
 // 宽度扫到 1457、高度扫到 1514(两轴"第一条边"的阈值落点不同),方框比玻璃**矮 57px**;
 // 满幅放大后玻璃顶边被切掉 ≈21px,图标上面是**平的一条** ✗。
 // 取 max → 方框是玻璃的外接方(四边各多出一点背景,由下面的内缩收掉)。
-let side0 = max(right - left, bottom - top)
-let cx = CGFloat(left + right) / 2, cy = CGFloat(top + bottom) / 2
+//
+// 2026-09-15 病例(第二次翻车,用户报"app 图标的边没清理干净"):上面那条 max 修好了"顶边被切",
+// 但**引入了米色边框** ✗。实测四条边的米色带(源图底色 #F1EDE2 的残留):
+//     左 1.76% ✗   右 1.76% ✗   上 0.00% ✓   下 1.17% ✗
+// 原因:max 取的是高度,而**底边扫到的是投影**(注释里自己写过)⇒ 方框被撑大;
+// 又因为外接方是**居中**放的 ⇒ 多出来的尺寸左右各溢出 ~1.8% ⇒ 玻璃外面带一圈米色底。
+// 顶边干净恰恰证明了这条:**上边扫到的才是玻璃自己的边** ✓。
+// 所以不信 max,回到"宽度当边长 + 以左上为锚":水平中线不扫到投影(可信),上边也实测干净(可信)。
+let side0 = right - left
+let cx = CGFloat(left) + CGFloat(side0) / 2, cy = CGFloat(top) + CGFloat(side0) / 2
 // 内缩:从外向内扫到的第一条边是**外层泛光**的起点,不收就会带出一圈背景光 ✗。
 //
-// 量法说明:82% 时代这里跑过一段"沿四边取样比背景色"的扫描(结论:顶边要收到 1.75% 才干净)。
-// 满幅之后那条口径不适用 —— 1.75% 会**啃掉玻璃自己的圆角边**(顶部出现平边 ✗),
-// 所以改成固定 0.8%:外接方只多出一点点背景,收掉泛光即可,玻璃本体一像素不动。
+// 内缩量是**量出来的**,不是调出来的:四条扫描线都会先扫到玻璃**外面那层柔光**,
+// 所以 bbox 比玻璃本体大约一圈柔光。遮罩自己还有 0.4% 的内缩(见下面 mask 的 insetBy),
+// 能吸收掉左/右两侧的误差(实测已干净 ✓),但下边的误差更大(实测 1.17% ✗),
+// 因为方框以左上为锚 ⇒ 误差全挤到最后一条边上。
+// 取 1.8%:足够盖住柔光(实测该量级下四边全干净),而 512 上只啃掉玻璃 9px,
+// 与"满幅、和 DockDoor/Ghostty 一样大"这个目标无冲突。
+// (82% 时代的那段"沿四边比背景色"扫描的结论恰好也是 1.75%,两次独立测量互相印证。)
 let sideC = CGFloat(side0)          // Int/CGFloat 混算会让类型检查器超时,先转干净
-let inset0 = sideC * 0.008
+let inset0 = sideC * 0.018
 let boxOriginX = cx - sideC / 2 + inset0
 let boxOriginY = cy - sideC / 2 + inset0
 let box = CGRect(x: boxOriginX, y: boxOriginY,
@@ -115,4 +127,4 @@ for (bgName, bg) in [("light", CGColor(srgbRed: 0.97, green: 0.97, blue: 0.96, a
     let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "/tmp/koala/icon/preview-\(bgName).png") as CFURL, UTType.png.identifier as CFString, 1, nil)!
     CGImageDestinationAddImage(d, ctx.makeImage()!, nil); CGImageDestinationFinalize(d)
 }
-print("导出完成 → /tmp/koala/icon/")
+print("导出完成 → \(outDir)/")
