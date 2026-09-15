@@ -1,51 +1,189 @@
-# Glance
+<div align="center">
+  <img src="docs/assets/icon.png" width="112" alt="Glance">
+  <h1>Glance</h1>
+  <p><b>A window-level app switcher for macOS.</b><br>
+  Only the display your pointer is on. Only the window you pick.</p>
+</div>
 
-macOS 窗口级 App 切换器(产品名与工程名均为 Glance;bundle id 仍是 `com.cheney12138.macswitcher`——它是授权与偏好的锚,故意不改):
-鼠标在哪块屏,就只看哪块屏的窗;选中哪扇窗,就只拉起哪扇窗。
-术语见 `CONTEXT.md`,样式契约见 `design/brand-spec.md`(交互语义)与 `design/v4/design-system.md`
-(面板视觉)、`design/settings-spec.md`(设置窗),决策见 `docs/adr/`。
+---
 
-任务索引(T 号、状态、证据):`docs/tasks.md`。
+## Overview
 
-结构约定(模块怎么分、谁能引用谁、kernel 与 plumbing):`docs/architecture.md`,
-校验器 `Tools/check-architecture.swift`;纯核在 `Packages/GlanceCore`(`swift test` 可跑)。
+Glance replaces the app-level model of <kbd>⌘</kbd><kbd>Tab</kbd> with windows.
 
-两套排查工具与手册:输入管线(事件 tap/合成按键)与视觉验证 —— `docs/debugging.md` + `Tools/`。
+Hold the trigger and a strip of running apps appears on the display where your pointer is.
+The windows of the selected app are laid out in a tray below it, as live previews. Picking a
+window raises **that window** — the app does not simply come forward with whichever window it
+would have preferred.
 
-⚠️ **⌘Tab 接管用私有 SkyLight API 关系统 symbolic hotkey**(见 `docs/adr/0005`):这是**系统级**状态,
-且跨进程退出持久化。动触发层时**必须保留** `NativeSwitcherHotkeys` 的四个兜底恢复口与启动自愈,
-否则用户的 ⌘Tab 会被弄死;手动保险 = `Tools/NativeHotkeys.swift restore`。
+Everything stays on the machine and stays quiet. Previews are captured when windows change,
+never on a timer. The panel dismisses instantly on every exit path. Glance contains no
+networking code.
 
-## 开发
+## Highlights
 
-- Xcode 26+,macOS 14+ 部署目标。Personal Team 签名即可,不需要付费开发者账号。
-- 调试循环:改代码 → `⌘R` → 双屏实测。日志在 `⇧⌘Y` 控制台。
+- **Window level, not app level.** Every card is a real window; confirming focuses it directly.
+- **Single-display scope.** Only the windows of the display under your pointer — with several
+  monitors, the switcher never mixes them.
+- **Live previews, event-driven.** Previews refresh when the window inventory changes or an app
+  becomes active. No polling, no idle timers.
+- **Stale entries are filtered out.** The inventory is cross-checked, so ghost windows
+  (a closed browser window the system still reports) never show up as empty cards.
+- **Window actions without leaving the switcher.** Quit, close, minimize, fullscreen and hide
+  are handled in place — the panel stays open, and the order of the strip does not jump around.
+- **Hold to navigate, release to confirm.** Or turn on *Keep the panel open* to click and act
+  at leisure.
+- **Yields to screenshot tools.** While a screen-capture session is active, navigation keys
+  belong to the capture tool, not to Glance.
+- **Optional <kbd>⌘</kbd><kbd>Tab</kbd> takeover.** Off by default; the trigger is
+  <kbd>⌥</kbd><kbd>Tab</kbd> unless you ask for more.
+- **Quiet by design.** No bounce, no ripple, no confirmation flourish. Motion follows the
+  system *Reduce Motion* setting, with an explicit override if you want the full animation.
 
-### 签名先决(一次性,否则每次 ⌘R 都要重新授权)
+## Requirements
 
-TCC 授权锚在签名证书上。若 Team 为空,Xcode 会静默退到 ad hoc 裸签(cdhash 每次
-编译都变 → 每次重新要权限)。先登录账号选上 Personal Team:
+- macOS 14 or later.
+- Building from source: Xcode 26 or later. A free Apple ID (Personal Team) is enough —
+  no paid developer account.
 
-1. Xcode → `⌘,` → Accounts → `+` → 登录免费 Apple ID(证书自动生成到钥匙串)
-2. 项目 → Glance target → Signing & Capabilities → Team → 选 Personal Team
+## Build and run
 
-## 权限重置(状态乱了时用)
 ```bash
-tccutil reset Accessibility com.cheney12138.macswitcher
-tccutil reset ScreenCapture com.cheney12138.macswitcher
+git clone https://github.com/cheney12138/Glance.git
+cd Glance
+open Glance.xcodeproj          # then ⌘R
 ```
 
-两条都跑完重启 App,会重新走一遍授权引导。
+**Sign once, or macOS re-asks for permissions after every build.** Permissions are anchored to
+the signing certificate; with no team, Xcode falls back to ad-hoc signing, whose hash changes
+on each build.
 
-## ⌘Tab 失灵了?(接管开关的副作用)
-接管系统切换器关掉的是**系统级**热键,状态跨进程退出持久化。App 被强杀(Xcode 的 Stop、强制退出)时
-来不及还原,⌘Tab 就会一直死着(此时 App 多半没在跑,`pgrep -fl Glance` 为空 —— **不是残留进程**)。
-一条命令救回来:`swift Tools/NativeHotkeys.swift restore`。细节与开发纪律见 `docs/debugging.md` §13。
-停 App 请用 `pkill -TERM Glance`,别用 Xcode 的 Stop(那是 SIGKILL,所有兜底都失效)。
+1. Xcode ▸ Settings ▸ Accounts ▸ `+` ▸ sign in with a free Apple ID.
+2. Project ▸ **Glance** target ▸ Signing & Capabilities ▸ Team ▸ select your Personal Team.
 
-## 二期决定(2026-09-13,从 AltTab/DockDoor 取所长)
+Checks:
 
-- ✅ 做:T10 钉住毕业 → T11 选中项现拍 → T12 面板内 Q/W/M 窗口操作
-- ❌ 撤:同 App 窗互跳(macOS 原生 `⌘\`` 已覆盖,不重复造)
-- 👀 观望:应用黑名单、Dock 悬停预览(被咬计数积累,≥2 再立项)
-- ✅ 补做:T13 ⌘Tab 篡位(用户答案曾被误读为"维持现状",实意=批准接管;tap HID 抢先,零系统副作用,App 退出原生即复活)
+```bash
+swift test --package-path Packages/GlanceCore   # pure-core unit tests
+swift Tools/check-architecture.swift            # module boundary check
+```
+
+## Permissions
+
+| Permission | Used for | Without it |
+|---|---|---|
+| **Accessibility** | Reading the window list and focusing the selected window | Glance cannot switch at all |
+| **Screen Recording** | Capturing window previews | No previews; cards fall back to icons |
+
+Grant both in **System Settings ▸ Privacy & Security**. If the state gets confused (for example
+after re-signing), reset and restart the app:
+
+```bash
+tccutil reset Accessibility com.cheney12138.macswitcher
+tccutil reset ScreenCapture  com.cheney12138.macswitcher
+```
+
+## Using Glance
+
+The trigger defaults to <kbd>⌥</kbd><kbd>Tab</kbd> and is configurable in Settings. Hold it,
+then:
+
+| Keys | Action |
+|---|---|
+| <kbd>Tab</kbd> / <kbd>⇧</kbd><kbd>Tab</kbd> | Next / previous app |
+| <kbd>←</kbd> / <kbd>→</kbd> | Next / previous window of the selected app |
+| <kbd>`</kbd> | Cycle windows of the selected app (optional, off by default) |
+| <kbd>↩</kbd> | Open the selected window |
+| <kbd>Esc</kbd> | Dismiss without switching |
+| <kbd>Q</kbd> / <kbd>W</kbd> / <kbd>M</kbd> | Quit app / close window / minimize window |
+| <kbd>F</kbd> / <kbd>H</kbd> | Toggle fullscreen / hide app |
+| Release the trigger | Open the selected window |
+
+Mouse works throughout: move the pointer onto a card to select it, click to open it, click
+outside the panel to dismiss.
+
+## Preferences
+
+| Group | Setting | Effect |
+|---|---|---|
+| Appearance | **Color appearance** | System / light / dark, applied to the panel and the settings window |
+| | **Icon spacing** | Distance between the selected icon and its neighbours |
+| Startup & behavior | **Launch at login** | Start Glance automatically |
+| | **Keep the panel open** | Off: releasing the trigger confirms and closes |
+| Motion | **Reduce Motion** | Read-out of the system setting |
+| | **Always animate** | Ignore *Reduce Motion* and play the full animation |
+| | **Sheen** | Pointer-following highlight and per-icon shading |
+| | **Pick up the last selection** | Off: the marker only rises, without sliding from the previous app |
+| Trigger | **Take over ⌘Tab** | Opt-in; see *Troubleshooting* |
+| | **Advance on open** | Off: the selection stays on the current app |
+| | **Trigger** | The key combination that opens the panel |
+| Navigation | **Cycle windows with `` ` ``** | Only while the panel is open |
+| | **Cycle apps** / **Switch windows** / **Confirm · cancel** | Key reference |
+| Window actions | **Quit · close · minimize** / **Fullscreen · hide** | Key reference |
+
+## Privacy
+
+- **No network.** Glance contains no networking code and sends nothing anywhere.
+- **Window titles and previews stay in memory** for the duration of a session.
+- **Preferences** live in the app's `UserDefaults` (appearance, trigger, switches, window frames).
+- **One additional file** is written: a small marker in
+  `~/Library/Application Support/Glance`, so Glance can restore the system
+  <kbd>⌘</kbd><kbd>Tab</kbd> shortcut after an unclean exit (see below). It is removed as soon as
+  the shortcut is restored.
+
+## Troubleshooting
+
+**<kbd>⌘</kbd><kbd>Tab</kbd> does nothing.** This can only happen if you enabled *Take over
+⌘Tab*. Taking over disables a **system-level** shortcut, and that state persists after the app
+exits. If the app is killed without a chance to restore it — Xcode's Stop button, Force Quit —
+the system shortcut stays disabled, and once Glance is not running nothing is left to put it
+back. Give it back to macOS with:
+
+```bash
+swift Tools/NativeHotkeys.swift restore
+```
+
+Glance notices this situation on the next launch: it restores the shortcut and logs
+`[T13] 上次退出没来得及归还原生热键(强杀)——本次启动已自愈`
+("the previous exit did not restore the native hotkeys (killed) — self-healed on this launch").
+
+**When developing, stop the app with `pkill -TERM Glance`** rather than Xcode's Stop button.
+A signal lets Glance restore the shortcut on the way out; `SIGKILL` does not.
+
+**The panel does not appear.** Check both permissions above, then reset them with the
+`tccutil` commands and restart the app.
+
+## Project layout
+
+```
+Sources/Glance/          App target — panel, trigger layer, inventory, settings
+  Panel/                 Panel windows, layout, controller
+  Trigger/               Event taps, hotkeys, session rules
+  Inventory/             Window enumeration, thumbnails
+  Settings/              Settings window
+  Design/                Design tokens (metrics, colors, motion)
+Packages/GlanceCore/     Pure core: rule engines, no AppKit, unit-tested
+Tools/                   Developer utilities (hotkey restore, capture, key injection, checks)
+design/                  Visual contracts and experiments
+docs/                    Architecture, ADRs, debugging handbook, task index
+```
+
+## Documentation
+
+The working documentation is written in Chinese:
+
+| Document | Contents |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Module boundaries and the pure-core rule |
+| [`docs/adr/`](docs/adr/) | Decision records |
+| [`docs/debugging.md`](docs/debugging.md) | Measurement recipes and known failure modes |
+| [`docs/tasks.md`](docs/tasks.md) | Task index with evidence for each change |
+| [`design/`](design/) | Visual contracts, tokens and experiment pages |
+
+## Known limits
+
+- No in-panel search.
+- No per-app exception list yet.
+- Previews require Screen Recording.
+- Scope is deliberately limited to the display the pointer is on.
+- <kbd>⌘</kbd><kbd>`</kbd> (cycle windows of the frontmost app) is intentionally left to macOS.
