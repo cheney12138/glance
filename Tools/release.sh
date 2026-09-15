@@ -28,14 +28,22 @@ if [ ! -x "$TOOLS/bin/generate_appcast" ]; then
 fi
 
 echo "== 1/4 写版本号 + 构建号(时间戳)"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Sources/Glance/Info.plist 2>/dev/null || true
+# ⚠️ 2026-09-15 病例:这里原来写的是
+#     PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Sources/Glance/Info.plist || true
+#   —— 那份局部 Info.plist 里**只有 Sparkle 的三个 SU* 键**,没有版本键 ✗;
+#   PlistBuddy 报错被 `|| true` **吞掉** ✗ ⇒ 版本号从未写进去 ⇒ 工程里写死的
+#   MARKETING_VERSION = 0.1.0 永远是它 ⇒ 包永远叫 Glance-0.1.0.dmg
+#   ⇒ release.sh 按 $VERSION 去找包必然 "no such file" ✗。第一次发版成功纯属巧合。
+# 现在:两个版本号都写**工程设置**(pbxproj 才是权威来源),并在打包后**断言**,
+# 让"包名对不上"这类错误当场炸,而不是等用户点「检查更新…」才发现。
 BUILD=$(date +%Y%m%d%H%M)
-# 短版本号在 Info.plist(局部),构建号在工程设置里(CURRENT_PROJECT_VERSION → CFBundleVersion)
+sed -i '' "s/MARKETING_VERSION = [0-9.]*;/MARKETING_VERSION = $VERSION;/g" "$PROJECT/project.pbxproj"
 sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*;/CURRENT_PROJECT_VERSION = $BUILD;/g" "$PROJECT/project.pbxproj"
+grep -q "MARKETING_VERSION = $VERSION;" "$PROJECT/project.pbxproj" || { echo "✗ 版本号没写进工程设置,中止"; exit 1; }
 echo "   版本 $VERSION / 构建 $BUILD"
 
 echo "== 2/4 构建 DMG"
-bash Tools/make-dmg.sh "$HOME/Desktop" | tail -2
+bash Tools/make-dmg.sh "$HOME/Desktop" "$VERSION" | tail -3
 
 echo "== 3/4 EdDSA 签名 + 生成 appcast"
 # ⚠️ 这里**不用** Sparkle 的 generate_appcast(2026-09-15 病例):

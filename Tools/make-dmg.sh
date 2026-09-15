@@ -29,6 +29,13 @@ APP="$BUILT_DIR/$PRODUCT"
 [ -d "$APP" ] || { echo "找不到产物:$APP"; exit 1; }
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
+# 期望版本(可作第 2 个参数传入):对不上就**当场报错**,不要产出一个名字骗人的包
+EXPECT="${2:-}"
+if [ -n "$EXPECT" ] && [ "$VERSION" != "$EXPECT" ]; then
+  echo "✗ 产物版本($VERSION)与期望($EXPECT)不一致 —— 打包中止" >&2
+  echo "  (最常见原因:版本号没写进工程设置;release.sh 会先写 MARKETING_VERSION)" >&2
+  exit 1
+fi
 DMG="$OUT_DIR/Glance-$VERSION.dmg"
 echo "== 2/4 产物 ${APP}（版本 ${VERSION}）"
 
