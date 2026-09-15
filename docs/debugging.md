@@ -548,3 +548,40 @@ grep -E "\[打卡\]|\[帧\]|键盘换选中|窗口选中" ~/Library/Logs/Glance/
 "Library missing / Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle")。
 发版脚本用 generic 是对的(要 universal),但那只走 Release。
 
+
+## 15.x 病例:Sparkle 报 "Unable to Check For Updates / updater failed to start"
+
+**症状(2026-09-15,用户截图)**:点「检查更新…」弹出
+*"The updater failed to start. Please verify you have the latest version…"* —— 注意这句**不含原因** ✗,
+它甚至建议你"去看 Console"。**真话确实只在 Console 里** ✓:
+
+```
+log show --last 15m --predicate 'process == "Glance"' | grep -i sparkle
+→ The provided EdDSA key could not be decoded.
+→ Fatal updater error (1): The EdDSA public key is not valid for Glance.
+```
+
+**根因**:写进 `Info.plist` 的 `SUPublicEDKey` **少了一个字符**(43 字符)。32 字节 Ed25519 公钥的
+base64 必须是 **44 个字符**(含 `=` 补位)—— 43 个字符 base64 解不出 32 字节,Sparkle 判定密钥非法,
+**在启动阶段就失败**。逐字对比:
+
+```
+真正从钥匙串还原:  VAb4hFJen1ix0MilzJD6YDxaTCmt7X8613+ w q67yfE8=
+手抄进 plist 的:   VAb4hFJen1ix0MilzJD6YDxaTCmt7X8613+   q67yfE8=   ← 少一个 w
+```
+
+**纪律(两条)**:
+1. **公钥永远从工具取,绝不手抄** ✓ —— 私钥在钥匙串里,公钥可以随时还原:
+   `generate_keys -p --account glance`(工具在 Sparkle 发行包的 `bin/`)。私钥没变,
+   所以**已签好的 appcast 不用重签** ✓。
+2. **Sparkle 的"启动失败"不会告诉你原因** ✗ —— 必须看 Console(`process == "Glance"`),
+   日志里有 `(Sparkle)` 子系统的原文 ✓。
+
+**自查一行**:
+```bash
+/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" <App>.app/Contents/Info.plist | tr -d '\n' | wc -c   # 必须是 44
+```
+
+**注意别把"启动失败"和"没有更新源"搞混** ✗:本例是**启动阶段**的致命错(会弹窗);
+把公钥修对之后,如果 GitHub 上还没有发布过 `appcast.xml`,手动「检查更新…」
+**仍然会报错**(找不到更新源)—— 那是**预期**的,不是同一个病 ✓;而开机时的**自动检查**失败是**静默**的 ✓。
