@@ -49,7 +49,7 @@ never on a timer. The panel dismisses instantly on every exit path.
 
 ## Download
 
-Signed builds are on the [Releases page](https://github.com/cheney12138/Glance/releases/latest).
+Signed builds are on the [Releases page](https://github.com/cheney12138/glance/releases/latest).
 Download `Glance-x.y.z.dmg`, drag `Glance.app` into **Applications**, then grant the two
 permissions below.
 
@@ -59,7 +59,7 @@ so the first launch needs one extra step — see *Updating*.
 ## Build and run
 
 ```bash
-git clone https://github.com/cheney12138/Glance.git
+git clone https://github.com/cheney12138/glance.git
 cd Glance
 open Glance.xcodeproj          # then ⌘R
 ```

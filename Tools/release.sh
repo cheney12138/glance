@@ -61,7 +61,7 @@ python3 - "$VERSION" "$BUILD" "$MIN_SYS" "$TAG" "$DMG_PATH" "$SIG" <<'PYX'
 import sys, os, datetime
 version, build, min_sys, tag, dmg, sig = sys.argv[1:7]
 size = os.path.getsize(dmg)
-url = f"https://github.com/cheney12138/Glance/releases/download/{tag}/{os.path.basename(dmg)}"
+url = f"https://github.com/cheney12138/glance/releases/download/{tag}/{os.path.basename(dmg)}"
 pub = datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 xml = f"""<?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
@@ -94,7 +94,7 @@ cat <<EOF
     gh release create $TAG "$HOME/Desktop/Glance-$VERSION.dmg" "$HOME/Desktop/appcast.xml" \\
       --title "Glance $VERSION" --notes "…"
 
-  没装 gh:到 https://github.com/cheney12138/Glance/releases/new 新建 $TAG,
+  没装 gh:到 https://github.com/cheney12138/glance/releases/new 新建 $TAG,
   把**两个文件都**传上去当资产(appcast.xml 必须在最新那一版上 —— app 里的 SUFeedURL
   指向 releases/latest/download/appcast.xml,少传它更新就会断)。
 
