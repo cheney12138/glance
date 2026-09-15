@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import GlanceCore
 
 /// 切换器主面板 —— 施工契约 = 最新设计 demo「Liquid Glass App Switcher」。
 ///
@@ -219,17 +220,36 @@ private struct IconCell: View {
             .animation(motion, value: selected)
     }
 
-    /// 窗数点:每扇窗一粒,坐在图标下缘(demo bottom:-11)。
+    /// 窗数记号:圆点 = 1 扇、**短横 = 5 扇**(记账法 / 罗马数字 I-V 那一套,见 `WindowTally`)。
     ///
-    /// 选中时必须跟着图标一起抬(`dotLift`,理由见 PanelTokens)—— 点挂的是**格子**底边,
-    /// 而图标选中后是"上浮 + 放大"两件事一起动,点不跟就会掉队到托盘底边上去。
+    /// 2026-09-15 定稿:原来是"每扇窗一粒点" —— 13 扇正好铺满格子、20 扇溢出 1.56 倍
+    /// (相邻两格的点连成一片),而且同色点只能逐个默数。现在:① 5 进制记号把 20 扇从 164pt
+    /// 压到 29.8pt;② 超宽时**等比收窄**,到下限还放不下就从尾部摘记号(兜底,现实中到不了)。
+    /// 口径(用户定):窗数不是必须被 100% 解析的信息 —— 它能告诉你"这家窗多",而不是
+    /// "有 7 扇",所以宁可靠近示意也不要溢出。
+    ///
+    /// 选中时必须跟着图标一起抬(`dotLift`,理由见 `PanelTokens`)—— 记号挂的是**格子**底边,
+    /// 而图标选中后是"上浮 + 放大"两件事一起动,不跟就会掉队到托盘底边上去。
     @ViewBuilder private var windowDots: some View {
-        if group.windows.count > 0 {
-            HStack(spacing: PanelMetrics.dotGap) {
-                ForEach(0..<group.windows.count, id: \.self) { _ in
-                    Circle()
-                        .fill(PanelColors.dot)
-                        .frame(width: PanelMetrics.dot, height: PanelMetrics.dot)
+        let tally = WindowTally.layout(windows: group.windows.count,
+                                       available: PanelMetrics.icon,
+                                       metrics: PanelMetrics.tally)
+        if !tally.marks.isEmpty {
+            HStack(spacing: tally.sizes.gap) {
+                ForEach(Array(tally.marks.enumerated()), id: \.offset) { _, mark in
+                    switch mark {
+                    case .dot:
+                        Circle()
+                            .fill(PanelColors.dot)
+                            .frame(width: tally.sizes.dot, height: tally.sizes.dot)
+                    case .dash:
+                        // 横要"压得住"五个点:同色、但更矮(≈0.42 高)。高度不参与宽度裁量,
+                        // 所以它留在视图层 —— 这是唯一需要看图调的旋钮
+                        Capsule()
+                            .fill(PanelColors.dot)
+                            .frame(width: tally.sizes.dashWidth,
+                                   height: max(1.6, tally.sizes.dot * 0.42))
+                    }
                 }
             }
             .opacity(0.8)

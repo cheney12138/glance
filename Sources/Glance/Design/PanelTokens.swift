@@ -80,9 +80,16 @@ enum PanelMetrics {
     static var ripple: CGFloat { k(140) }
     static let rippleScale: CGFloat = 4.2
     static let tRipple: Double = 0.55
-    // 窗数点
+    // 窗数点(记账法:圆点=1 扇 / 短横=5 扇)
     static var dot: CGFloat { max(k(4), 3) }
     static var dotGap: CGFloat { k(3) }
+    /// 窗数记账法的基准尺寸。**裁量全在 `GlanceCore.WindowTally`**(含为什么不用"每窗一粒点"、
+    /// 为什么保留 24→25 的进位跳变、以及极端窗数下从尾部摘记号的兜底),这里只给设计 token ——
+    /// 调外观只改这几个数。
+    static var tally: WindowTally.Metrics {
+        WindowTally.Metrics(dot: dot, dashWidth: dot * 1.6, gap: dotGap,
+                            minDot: max(k(2.5), 2.5), minGap: k(1.7))
+    }
     static var dotBottom: CGFloat { k(7) }
     /// 窗数点在选中态要**跟着图标一起抬**多少。
     ///
