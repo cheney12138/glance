@@ -46,6 +46,8 @@ final class PanelController: ObservableObject {
     private var previewHostingView: ClickThroughHostingView<PreviewPanelView>?
     private var contextScreen: NSScreen?
     private var outsideClickMonitor: Any?
+    /// 自己窗口的点击(全局监听看不见自己家的事件,见 `installOutsideClickMonitor`)
+    private var localClickMonitor: Any?
     /// 退场演出期间的窗口拆迁单(见 `dismiss`):淡出/涟漪播完才 orderOut,
     /// 新一轮 `begin` 会把它撤掉
     private var teardown: DispatchWorkItem?
@@ -584,6 +586,13 @@ final class PanelController: ObservableObject {
         return NSSize(width: c.width + pad, height: c.height + pad)
     }
 
+    /// 面板**内容**(玻璃)在本屏坐标里的矩形。面板窗口 = 内容 + 四周 shadowPadStrip,所以窗口往内收
+    /// 一圈就是玻璃。与 `previewContentRect()` 同一个口径(ADR-0006 的推论:凡判"指针/点击在不在"都用内容矩形)。
+    func panelContentRect() -> NSRect? {
+        guard let p = panel, p.isVisible else { return nil }
+        return p.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
+    }
+
     /// 托盘**内容**(玻璃)在本屏坐标里的矩形。窗口可能比内容大,所以凡是判"托盘在哪"的地方
     /// (指针重定位、面板外点击)都必须用这个,不能用窗口 frame。
     func previewContentRect() -> NSRect? {
@@ -1050,31 +1059,52 @@ final class PanelController: ObservableObject {
     }
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
+    ///
+    /// **两个监听都要装**(2026-09-15 病例:"点面板周围的空白区域不关闭"):
+    /// - **全局**监听收"落到别的 App / 桌面"的点击;
+    /// - **本地**监听收"落在我们**自己**窗口里"的点击 —— 透明呼吸区只是
+    ///   `ClickThroughHostingView.hitTest` 返回 nil(不吃点击),但 AppKit 里这**不会**把事件转给下层
+    ///   的 App ✗;面板又是 nonactivating,事件也不进任何 view ✗。于是这一格点击既不属于"别的 App"
+    ///   (全局监听收不到),也没人处理 —— 直接掉在地上,用户看到的是"点空白处没反应"。
+    /// 两者共用同一条判据 `OutsideClickRule`(纯核 + 单测)。
     private func installOutsideClickMonitor() {
         removeOutsideClickMonitor()
         if pinPanelDebug { return }
+
+        // 全局:别人的点击,吞不掉(全局监听没有返回值的权力)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let panel = self.panel else { return }
-                // 判"外"要判玻璃,不是窗口:呼吸区 96pt 是透明且点击穿过的,
-                // 点在那儿等于点在面板外(事件已经落到桌面/别的 App)
-                let point = NSEvent.mouseLocation
-                let strip = panel.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
-                // **托盘是另一扇窗**(与长条同皮不同窗):不把它算进来,点托盘上任何地方
-                // (卡片、题头、红绿灯)都会被当成"面板外点击"把面板关掉 —— 实机现形:
-                // 2026-09-14 用户报"用鼠标点红绿灯的操作也不关闭面板"
-                // 同理:托盘可能比玻璃大(窗口按整局最大布局开),判"里外"只能用内容矩形
-                let tray = self.previewContentRect()
-                if !strip.contains(point), !(tray?.contains(point) ?? false) {
-                    self.dismiss(reason: "面板外点击,放弃")
-                }
+                guard let self else { return }
+                self.dismissIfClickOutside()
             }
         }
+
+        // 本地:自己窗口的点击(**能吞**)——点空白就是关面板,不该顺手把下层那个 App 也点开
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            return self.dismissIfClickOutside() ? nil : event
+        }
+    }
+
+    /// 判"这一下点击在不在面板外";在的话关面板并返回 true。判据见 `OutsideClickRule`:
+    /// **判玻璃,不判窗口** —— 窗口比玻璃大(透明呼吸区),而托盘还可能按整局最大布局开得更大
+    /// (以前把托盘的呼吸区当成"里",点红绿灯就被误关,2026-09-14 实机现形)。
+    @discardableResult
+    private func dismissIfClickOutside() -> Bool {
+        guard let panel, isVisible else { return false }
+        let point = NSEvent.mouseLocation
+        let panelRect = panel.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
+        guard OutsideClickRule.isOutside(point: point, panelContent: panelRect,
+                                         trayContent: previewContentRect()) else { return false }
+        dismiss(reason: "面板外点击,放弃")
+        return true
     }
 
     private func removeOutsideClickMonitor() {
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
         outsideClickMonitor = nil
+        if let m = localClickMonitor { NSEvent.removeMonitor(m) }
+        localClickMonitor = nil
     }
 }
 
