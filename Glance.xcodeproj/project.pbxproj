@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		5A0000000000000000000011 /* GlanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000021 /* GlanceApp.swift */; };
 		5A00000000000000000000C4 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000C3 /* UpdateChecker.swift */; };
+		5A00000000000000000000D1 /* SessionMarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000D0 /* SessionMarks.swift */; };
 		5A0000000000000000000012 /* PermissionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000023 /* PermissionMonitor.swift */; };
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
@@ -45,6 +46,7 @@
 /* Begin PBXFileReference section */
 		5A0000000000000000000021 /* GlanceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlanceApp.swift; sourceTree = "<group>"; };
 		5A00000000000000000000C3 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
+		5A00000000000000000000D0 /* SessionMarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMarks.swift; sourceTree = "<group>"; };
 		5A0000000000000000000022 /* Glance.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Glance.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000023 /* PermissionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionMonitor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
@@ -211,6 +213,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000096 /* Stdout.swift */,
+				5A00000000000000000000D0 /* SessionMarks.swift */,
 				AA0000000000000000000F02 /* FrameProbe.swift */,
 			);
 			path = Diagnostics;
@@ -295,6 +298,7 @@
 			files = (
 				5A0000000000000000000011 /* GlanceApp.swift in Sources */,
 				5A00000000000000000000C4 /* UpdateChecker.swift in Sources */,
+				5A00000000000000000000D1 /* SessionMarks.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
 				AA0000000000000000000F0A /* AppearancePreference.swift in Sources */,
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,

@@ -115,6 +115,8 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        // 打卡器开账:一局的环节时间轴从这里起算(见 `SessionMarks`)
+        SessionMarks.begin("唤起")
         // **先抢优先级,再干活**:`.latencyCritical` 这条断言要从按键那一刻生效,不能等到 `showPanel`
         // 才拿 —— "隔一段时间不用、再唤起就顿"最可能的原因就是这期间进程被挂起(App Nap)、
         // 窗口后备存储被 WindowServer 回收,而**最贵的几帧恰好是刚回来的这几帧**。
@@ -149,6 +151,7 @@ final class PanelController: ObservableObject {
     }
 
     private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime, reverse: Bool) {
+        SessionMarks.step("枚举")
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
         let screen = contextScreen
@@ -184,6 +187,7 @@ final class PanelController: ObservableObject {
         // 托底**上一次画在哪一格**:视图是复用的,它就停在上局结束时的落点 ——
         // 入场动效要靠它判断"这一局托底到底会不会滑"(见 showPanel 的两条路)
         lastLandedIndex = appIndex
+        SessionMarks.step("落点")
         appIndex = advanceOnOpen ? LandingRule.landingIndex(count: groups.count, reverse: reverse) : 0
         // 落点这行**每次都打**:开关 × 正反向 × 环序有四种走法,只看"高亮在第几格"分不清是哪一种 ——
         // 下次再说"开关没生效",看这一行就够(第一格是不是当前 App、落点是不是上一个 App 一目了然)
@@ -394,6 +398,12 @@ final class PanelController: ObservableObject {
         print(String(format: "[唤起] %@, %d 个 App · 按键→上屏 %.0fms(枚举 %.0fms)",
                      contextScreen?.localizedName ?? "?", groups.count,
                      (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs))
+        SessionMarks.step("开窗")
+        // 首帧:下一次 runloop 回来 ≈ 第一帧已经上屏(`FrameProbe` 那边有精确帧账,这里只求"环节到哪")
+        DispatchQueue.main.async {
+            SessionMarks.step("首帧")
+            SessionMarks.finish()
+        }
         installOutsideClickMonitor()
         updatePreview()
 

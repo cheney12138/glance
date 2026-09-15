@@ -88,7 +88,9 @@ final class Snapshotter: ObservableObject {
             let (images, missing) = await Self.capture(windows, failedOnce: self?.failedOnce)
             guard let self else { return }
             if isTraceEnabled {
-                print("[T5] 预截回填 \(images.count)/\(windows.count) 窗"
+                // 规模计数:掉帧若随"外接屏 App 多"来,这一行是第一个证人 ——
+                // 它会告诉我们**这一局实际拍了多少扇窗**(缓存命中后本该远小于窗口总数)
+                print("[T5] 预截 要拍 \(windows.count) 窗 → 回填 \(images.count) 窗"
                       + (missing.isEmpty ? "" : "(缺 \(missing.count),第 \(attempt) 轮)"))
             } else if !missing.isEmpty {
                 // 没拍到就**不打折地报**,不靠 GLANCE_TRACE:面板上空一个卡片就是用户看得见的毛病,
@@ -102,6 +104,9 @@ final class Snapshotter: ObservableObject {
                     guard current == self.session else { return }
                     let now = CFAbsoluteTimeGetCurrent()
                     self.cache.merge(images) { _, new in new }
+                    // 首图上屏时刻(相对按键):trace 下单独一行。窗口多 → 这一批图多 →
+                    // 主线程合并 + SwiftUI 重绘的代价全在这一刻,正是"体感掉帧"的嫌疑人
+                    SessionMarks.noteFirstThumb(images.count)
                     for id in images.keys { self.cacheAt[id] = now }
                 }
             }
