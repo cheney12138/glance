@@ -16,10 +16,13 @@ SCHEME="Glance"
 CONFIG="Release"
 
 echo "== 1/4 Release 构建"
-xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" build \
-  | tail -3
+# -destination generic/platform=macOS:不加的话 xcodebuild 会挑"第一个匹配的目标"(= 本机架构),
+# 出包只有 arm64 —— 正式包要 universal(Apple silicon + Intel)
+xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
+  -destination 'generic/platform=macOS' build | tail -3
 
-SETTINGS=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -showBuildSettings 2>/dev/null)
+SETTINGS=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
+  -destination 'generic/platform=macOS' -showBuildSettings 2>/dev/null)
 BUILT_DIR=$(echo "$SETTINGS" | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{print $2; exit}')
 PRODUCT=$(echo "$SETTINGS" | awk -F' = ' '/ FULL_PRODUCT_NAME = /{print $2; exit}')
 APP="$BUILT_DIR/$PRODUCT"
@@ -27,7 +30,7 @@ APP="$BUILT_DIR/$PRODUCT"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 DMG="$OUT_DIR/Glance-$VERSION.dmg"
-echo "== 2/4 产物 $APP(版本 $VERSION)"
+echo "== 2/4 产物 ${APP}（版本 ${VERSION}）"
 
 echo "== 3/4 组装布局"
 STAGE=$(mktemp -d)
@@ -40,7 +43,7 @@ mkdir -p "$OUT_DIR"
 rm -f "$DMG"
 hdiutil create -volname "Glance" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 echo
-echo "✅ $DMG（$(du -h "$DMG" | cut -f1)）"
+echo "✅ ${DMG}（$(du -h "${DMG}" | cut -f1)）"
 echo
 echo "装法:打开 DMG,把 Glance.app 拖进 Applications。"
 echo "注意:① 先退掉 Xcode 里那份(单实例守卫会让第二份直接退出);"
