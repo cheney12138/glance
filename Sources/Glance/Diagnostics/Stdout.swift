@@ -8,7 +8,7 @@ import Darwin
 /// 而 `docs/debugging.md` 里那套工作流的全部意义就是"边跑边 grep"。
 ///
 /// 写法说明:全局 `let` 是惰性初始化的 —— 光声明不会执行,必须在 App 启动路径上**碰它一下**
-/// (`MacSwitcherApp.init()` 里那句 `_ = stdoutIsLineBuffered`)。
+/// (`GlanceApp.init()` 里那句 `_ = stdoutIsLineBuffered`)。
 let stdoutIsLineBuffered: Void = {
     if isTraceEnabled {
         setvbuf(stdout, nil, _IOLBF, 0)

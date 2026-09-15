@@ -1,6 +1,6 @@
 # Glance
 
-macOS 窗口级 App 切换器(产品名 Glance,工程代号 mac-switcher,bundle id 不变):
+macOS 窗口级 App 切换器(产品名与工程名均为 Glance;bundle id 仍是 `com.cheney12138.macswitcher`——它是授权与偏好的锚,故意不改):
 鼠标在哪块屏,就只看哪块屏的窗;选中哪扇窗,就只拉起哪扇窗。
 术语见 `CONTEXT.md`,样式契约见 `design/brand-spec.md`(交互语义)与 `design/v4/design-system.md`
 (面板视觉)、`design/settings-spec.md`(设置窗),决策见 `docs/adr/`。
@@ -27,7 +27,7 @@ TCC 授权锚在签名证书上。若 Team 为空,Xcode 会静默退到 ad hoc �
 编译都变 → 每次重新要权限)。先登录账号选上 Personal Team:
 
 1. Xcode → `⌘,` → Accounts → `+` → 登录免费 Apple ID(证书自动生成到钥匙串)
-2. 项目 → mac-switcher target → Signing & Capabilities → Team → 选 Personal Team
+2. 项目 → Glance target → Signing & Capabilities → Team → 选 Personal Team
 
 ## 权限重置(状态乱了时用)
 ```bash

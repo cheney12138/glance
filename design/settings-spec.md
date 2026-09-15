@@ -1,7 +1,7 @@
 # Glance 设置窗 · 设计规格(v1 定案)
 
 > **契约**:设计 demo `design/v4/Glance 设置 v1.html`(自包含,直接双击可见形态)。
-> **施工**:`Sources/mac-switcher/Settings/{SettingsView,SettingsControls,SettingsTheme}.swift`。
+> **施工**:`Sources/Glance/Settings/{SettingsView,SettingsControls,SettingsTheme}.swift`。
 > **范围**:本文只管**设置窗**;切换器面板归 `design/v4/design-system.md`,交互语义归 `design/brand-spec.md`。
 > 样式争议一律回到 demo 与本文,不回代码、不回口头。
 

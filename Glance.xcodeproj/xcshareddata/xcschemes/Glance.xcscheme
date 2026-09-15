@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5A0000000000000000000002"
-               BuildableName = "mac-switcher.app"
-               BlueprintName = "mac-switcher"
-               ReferencedContainer = "container:mac-switcher.xcodeproj">
+               BuildableName = "Glance.app"
+               BlueprintName = "Glance"
+               ReferencedContainer = "container:Glance.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,9 +46,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5A0000000000000000000002"
-            BuildableName = "mac-switcher.app"
-            BlueprintName = "mac-switcher"
-            ReferencedContainer = "container:mac-switcher.xcodeproj">
+            BuildableName = "Glance.app"
+            BlueprintName = "Glance"
+            ReferencedContainer = "container:Glance.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <EnvironmentVariables>
@@ -70,9 +70,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5A0000000000000000000002"
-            BuildableName = "mac-switcher.app"
-            BlueprintName = "mac-switcher"
-            ReferencedContainer = "container:mac-switcher.xcodeproj">
+            BuildableName = "Glance.app"
+            BlueprintName = "Glance"
+            ReferencedContainer = "container:Glance.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

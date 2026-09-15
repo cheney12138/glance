@@ -112,7 +112,7 @@ for file in swiftFiles(in: coreRoot) {
 
 // 规矩 ②③:模块禁引符号表
 for (module, forbidden) in forbiddenSymbols.sorted(by: { $0.key < $1.key }) {
-    for file in swiftFiles(in: "Sources/mac-switcher/\(module)") {
+    for file in swiftFiles(in: "Sources/Glance/\(module)") {
         let code = stripCommentsAndStrings(try String(contentsOfFile: file, encoding: .utf8))
         for symbol in forbidden where code.contains(symbol) {
             violations.append("② \(module) 越界:\(file) 引用了 \(symbol)\n"

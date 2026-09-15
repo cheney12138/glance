@@ -101,13 +101,13 @@ final class HotkeyTapCenter {
         mouseTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.leftMouseDown])
         navTap = makeTap(at: .cghidEventTap, options: .defaultTap, types: [.keyDown])
         guard flagsTap != nil else {
-            print("[mac-switcher] 触发层创建失败——辅助功能权限未就绪,触发层不工作")
+            print("[Glance] 触发层创建失败——辅助功能权限未就绪,触发层不工作")
             return
         }
         registerTrigger(TriggerConfig.load())
         NativeHotkeys.apply(trigger: TriggerConfig.load(), takeover: TriggerConfig.takeoverEnabled)
         observeTriggerChanges()
-        print("[mac-switcher] 触发层上线(Carbon 热键 + 3 tap;只有会话期的 navTap 有吞键权)")
+        print("[Glance] 触发层上线(Carbon 热键 + 3 tap;只有会话期的 navTap 有吞键权)")
     }
 
     /// 归一历史状态:老版本把"接管"记在触发键上(键写成 ⌘Tab 就算接管),而现在的口径是

@@ -4,8 +4,8 @@
 
 | 标记 | 落点 | 说明 |
 |---|---|---|
-| **App 图标** | `Sources/mac-switcher/Assets.xcassets/AppIcon.appiconset` | macOS 十档 16…1024,每档从矢量直接栅格化 |
-| **菜单栏图标** | `Sources/mac-switcher/Assets.xcassets/MenuBarIcon.imageset` | 18/36/54(1x/2x/3x),`template` 渲染 |
+| **App 图标** | `Sources/Glance/Assets.xcassets/AppIcon.appiconset` | macOS 十档 16…1024,每档从矢量直接栅格化 |
+| **菜单栏图标** | `Sources/Glance/Assets.xcassets/MenuBarIcon.imageset` | 18/36/54(1x/2x/3x),`template` 渲染 |
 
 ## 设计读(read)
 
@@ -32,7 +32,7 @@
 `"template-rendering-intent": "template"`;系统据此在浅色栏上自动变黑。
 若强写死白色,浅色菜单栏上就是一个看不见的图标。
 
-接线在 `Sources/mac-switcher/App/mac_switcherApp.swift`:
+接线在 `Sources/Glance/App/GlanceApp.swift`:
 权限齐 → `Image("MenuBarIcon")`(asset catalog);缺权 → `Image(systemName: "exclamationmark.triangle")`(SF Symbols)。
 
 ★ **两格必须是两个构造器,不能合并成三元表达式**:`Image(_ name:)` 只查 asset catalog,
@@ -40,24 +40,37 @@
 asset catalog,查不到就画一个空图 —— 日志里报 “No image named 'exclamationmark.triangle'
 found in asset catalog”,而菜单栏上“缺权限”整个没有可见信号。
 
-## 再生成
+## App 图标:定稿(2026-09-15)
 
-改设计 = 改下面的脚本,不要手改 PNG。
+**来源 = 外部生图模型出的那张正投影**(`glance-source.png`,2048×2048,暖米色渐变底)——
+不是矢量的。所以这份资产的性质是:**一张被精确裁切过的位图**,不是"可无限缩放的矢量"。
 
-> ⚠️ **当前图标处于待定状态(2026-09-14)**:v1(`make_icon.py`,棱镜色散多彩)被认为配色过多;
-> v2/v3 的 SVG 迭代也被否 —— 横条母题塞进圆角方上下必然留死白(几何决定)。
-> 现改走**纯 logo 标记 + 对角线构图**,由外部生图模型出图,提示词见
-> **`prompt-image-model.md` 第 9 节; jimeng 出图方向已进一步由 `make_icon_v4.py` 矢量化为可交付的 v4 玻璃斜掠光(SVG + PNG)。
-> 定稿后:裁 squircle 遮罩(超椭圆 n=5,内容 824/1024)→ 各档从矢量重栅格化 → 写回资产目录。
-> `make_icon_v2.py` / `make_icon_v3.py` 与其 `build/` 产物均为探索期草稿,定稿后可删。
+裁切是**确定性**的,由 `Tools/Iconify.swift` 一次跑完(不手改 PNG):
 
 ```bash
-python3 design/icon/build_assets.py     # 渲染并写回 Assets.xcassets
+swiftc -O -target arm64-apple-macos14.0 -o /tmp/iconify Tools/Iconify.swift
+/tmp/iconify design/icon/glance-source.png      # 出 icon/icon_{16…1024}.png + 预览
 ```
 
-- `make_icon.py` —— App 图标(参数化 SVG):`python3 design/icon/make_icon.py` 出 1024 预览
-- `make_menubar.py` —— 菜单栏图标的候选草图对照表(定稿用的是 `A-strip`)
-- `build_assets.py` —— 按 Xcode 档位渲染进资产目录(Chrome headless 栅格化,无第三方依赖)
+四步,每一步都有理由(踩过的坑写在注释里):
 
-> 渲染器用本机 Chrome headless(SVG → PNG,透明底);`sips` 只用来抽查,不参与出图
-> —— 每一档都从矢量直接栅格化,不做"1024 缩一圈"的二次采样。
+1. **找边从外向内扫"第一条跳变"**,不是找"最强边" —— 中线竖扫时最强的那条是里面那层磨砂头,
+   玻璃外壳的顶边是柔和渐变、强度反而低 ✗;
+2. **强制正方形**(用宽度同时当高)—— 底边扫到的是投影会偏大,照它裁会把图形拉长 ✗;
+3. **再内缩 2.00%** —— 从外向内扫到的第一条边是外层**泛光**的起点,不收就会带出一圈背景光 ✗。
+   这个数字是**量出来的**:沿四条边取样比较"本地背景色",顶边到 1.75% 才干净(1.6% 时还有 12% 的
+   样本是背景 —— 就是当初肉眼看到的那一点点 ✗)。判据只用顶边,因为另外三条边的玻璃本身近似背景色、
+   这个指标会误报(注释里写明了,免得后人拿那三个数做决策);
+4. **圆角遮罩 31.5%** + 摆到画布 **82%**(Apple 图标网格),四周透明 —— 生成图的水印在方块外,自动切掉 ✓。
+
+写回资产目录:十档按 `Contents.json` 的槽位命名(16/32 各 1x·2x …… 512 各 1x·2x)。
+
+**已知局限**:位图降采样到 16/32px 是干净的,但它**不是矢量** —— 真要无限锐利,得由设计同学
+**分层描摹**成 4 条路径(外壳 / 头 / 三块)。
+
+## 早期探索稿(留档,可删)
+
+`make_icon.py`(v1 棱镜色散)、`make_icon_v2/v3/v4.py`、`make_macos.py`、`build_assets.py`、
+`make_menubar.py`、`preview.py` 都是**探索期**的矢量尝试 —— 结论是"横条母题塞进圆角方上下必然留死白
+(几何决定)",最后没走矢量,改由生图模型出图 + 上面的确定性裁切。菜单栏图标仍用矢量脚本
+`make_menubar.py` 出(定稿用的是 `A-strip`),它的口径见上面"为什么必须是白色"一节。

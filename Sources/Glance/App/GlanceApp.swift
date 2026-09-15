@@ -1,11 +1,11 @@
 import SwiftUI
 import GlanceCore
 
-// mac-switcher 入口。T1 范围:菜单栏图标 + 设置占位 + 退出。
+// Glance 入口。T1 范围:菜单栏图标 + 设置占位 + 退出。
 // T2 追加:权限门禁——缺权限时启动即弹引导窗,菜单栏图标带警示态,菜单第一行实时报门禁。
 // 结构备忘:MenuBarExtra 取代 AppDelegate+StatusBarController;T9 设置面板同样走 openWindow。
 @main
-struct MacSwitcherApp: App {
+struct GlanceApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
         _ = stdoutIsLineBuffered

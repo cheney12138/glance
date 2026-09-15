@@ -304,7 +304,7 @@ final class SheenTracker {
     func step(target: CGPoint?) -> (CGPoint, CGFloat)? {
         if let t = target {
             // 第一次被点亮打一行:光晕有没有被驱动起来,日志里一眼可见(只打一次)
-            if !logged { logged = true; print("[T6] 光晕上线:指针 \(Int(t.x)), \(Int(t.y))") }
+            if !logged, isTraceEnabled { logged = true; glog("[T6] 光晕上线:指针 \(Int(t.x)), \(Int(t.y))") }
             point = point.map { CGPoint(x: $0.x + (t.x - $0.x) * follow, y: $0.y + (t.y - $0.y) * follow) } ?? t
             intensity += (1 - intensity) * 0.35
             return (point!, intensity)

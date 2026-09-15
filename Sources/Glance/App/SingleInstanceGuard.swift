@@ -27,7 +27,7 @@ enum SingleInstanceGuard {
           两个 Glance 会抢同一组 ⌘Tab:先装触发层的那个收键,后到的那个照样画自己的面板 ——
           屏幕上会出现"两块面板叠在一起"的怪象(底色互相透、Esc 要按两次才关)。
           要换新构建:先退出旧实例(⌘Q,或 kill \(pid)),或在 Xcode 里 Stop 再 Run。
-          确认还剩几个:`pgrep -fl mac-switcher`
+          确认还剩几个:`pgrep -fl Glance`
         ────────────────────────────────────────────────
         """)
         exit(0)

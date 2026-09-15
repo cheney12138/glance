@@ -121,10 +121,10 @@ swift -target arm64-apple-macos14.0 Tools/CaptureWindow.swift shot --owner Glanc
   底色互相透(看起来像"app 在发光")、Esc 要按两次才关(第一发关了看不见的那个)。
   单实例下完全不复现,所以从代码里读不出来。现在 `App/SingleInstanceGuard.swift` 会在
   `App.init`(早于任何触发层装配)拦住第二个实例并打印原因;诊断时用
-  `pgrep -fl mac-switcher` 确认。
+  `pgrep -fl Glance` 确认。
 
 ```bash
-pgrep -fl 'mac-switcher.app/Contents/MacOS/mac-switcher'   # 数实例;带 NSDocumentRevisionsDebugMode 的是 Xcode 那个
+pgrep -fl 'Glance.app/Contents/MacOS/Glance'   # 数实例;带 NSDocumentRevisionsDebugMode 的是 Xcode 那个
 kill -9 <pid>                                              # 调试器下 SIGTERM 无效
 swift -target arm64-apple-macos14.0 Tools/CaptureWindow.swift list Glance   # 面板:owner=Glance,layer=101(长条)/100(托盘)
 ```
@@ -361,3 +361,34 @@ traceCost("托盘改尺寸") { setFrameIfNeeded(previewPanel, frame) }
 唤起两次卡片仍是深色)。所以"事件驱动刷新"对这类变化**天然无效**,
 **"这一组被显示出来的那一刻强制重拍"这一条不许优化掉** —— 见 `Snapshotter.precapture(_:force:)`:
 正在显示的那一组永远 `force`,其余组走缓存(它们的图只负责"Tab 过去第一帧有东西")。
+
+## 12. 日志预算:一次唤起 ≤ 2 行(2026-09-15)
+
+事故:用户实评"日志内容太多了"。当时的日常输出被**逐键/逐像素/逐帧**的行淹了 ——
+`[T6] 选中(键盘 Tab)`、`[T6] hover 到窗`、`[T6] 窗口选中(指针)` 每移动一次指针就一行,
+五十次唤起就是几百行,真正的信号(哪次唤起慢、哪个裁决翻了)反而找不到。
+
+规矩:按**"这条账能回答什么问题"**分类,不是按"我想不想看":
+
+| 类别 | 归属 | 例子 |
+|---|---|---|
+| 一次唤起一行 | 无条件 | `[唤起] <语境屏>, N 个 App · 按键→上屏 XXms(枚举 XXms)` |
+| 一次用户动作一行 | 无条件 | `[T7] 已聚焦: …` · `[处决后] …` · `[T12] 退出应用: …` |
+| **状态变化才打** | 变了才打 | `[尺寸] …`(档位变了) · `[动效] …` · `[幽灵窗滤除] …`(内容变了) |
+| 失败 / 兜底 | 无条件 | `[T5] 预截缺 …` · `[T7] 降级聚焦` · `[尺寸] 托盘玻璃 > 可用` |
+| **其余一切**(逐键 / 逐像素 / 逐帧 / 每次鼠标移动) | **trace 灰度** | `[T6] 选中(键盘 Tab)` · `[T6] hover 到窗` · `[T5] 预截回填` · `[保温] …` |
+
+**一次唤起的正常输出只有两行**:
+
+```
+[落点] 唤起即切换 · 正向 · [2/9] 大象
+[唤起] LEN T27p-10, 9 个 App · 按键→上屏 42ms(枚举 34ms)
+```
+
+确认聚焦时再加一行 `[T7] 已聚焦: …`。要排查时开 trace(`GLANCE_TRACE=1`,或
+`defaults write com.cheney12138.macswitcher debug.trace -bool true`),那时才需要那些逐键的账 ——
+**trace 是诊断模式,不是日常配置**。
+
+同一轮顺带清掉的:三行开局账(`[T8]` + 面板出现 + `按键→上屏`)合并成 `[唤起]` 一行;
+`[尺寸] 托盘窗口 …`(那是"整局只 setFrame 一次"的验证账,已验证完)删除;
+`glassConstrainedX` 死代码删除(它那行"托盘玻璃超宽"的兜底已由内容矩形那套承担)。

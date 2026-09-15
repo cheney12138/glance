@@ -27,11 +27,11 @@ final class WindowTitleTests: XCTestCase {
     }
 
     func testXcodeProjectComesFirst() {
-        // Xcode 实机标题:`mac-switcher — mac-switcher.xcodeproj`(工程在前,但要靠"不像文件名"选中)
+        // Xcode 实机标题:`Glance — Glance.xcodeproj`(工程在前,但要靠"不像文件名"选中)
         XCTAssertEqual(
-            WindowTitle.display(raw: "mac-switcher — mac-switcher.xcodeproj",
+            WindowTitle.display(raw: "Glance — Glance.xcodeproj",
                                 bundleID: "com.apple.dt.Xcode"),
-            "mac-switcher"
+            "Glance"
         )
     }
 

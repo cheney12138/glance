@@ -25,6 +25,11 @@ final class PanelController: ObservableObject {
     /// (内容在窗口里**底部对齐、水平居中**,所以小布局看起来与今天完全一样。)
     private var trayMaxContentSize: NSSize = .zero
 
+    /// "只在变化时打"用的状态位(见 `applySessionScaleCap` 的档位行与那行动效状态)。
+    /// 理由同一句话:**常量不该每局重印** —— 日志的价值在"变了没有",不在"还是那样"。
+    private static var lastScaleLine: String?
+    private static var lastMotionDescribe: String?
+
     /// 上一局结束时托底所在的格(视图复用,那就是它现在的实际位置)。nil = 这是第一次出现。
     /// 用来判断入场是"滑"还是"升" —— 见 `showPanel`。
     private var lastLandedIndex: Int?
@@ -181,9 +186,9 @@ final class PanelController: ObservableObject {
         // 落点这行**每次都打**:开关 × 正反向 × 环序有四种走法,只看"高亮在第几格"分不清是哪一种 ——
         // 下次再说"开关没生效",看这一行就够(第一格是不是当前 App、落点是不是上一个 App 一目了然)
         if groups.indices.contains(appIndex) {
-            print("[T6] 落点:唤起即切换=\(advanceOnOpen ? "开" : "关") · \(reverse ? "反向" : "正向")"
-                  + " · 选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)"
-                  + " · 顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
+            print("[落点] \(advanceOnOpen ? "唤起即切换" : "停在当前") · \(reverse ? "反向" : "正向")"
+                  + " · [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+            trace("[T6] 落点顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
         }
         winIndex = 0
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
@@ -199,13 +204,13 @@ final class PanelController: ObservableObject {
         Snapshotter.shared.precapture(shown, force: true)
         Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
-        print(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
+        trace(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
             print("[T6] 本屏无窗,面板不出现(语境屏 = \(screen?.localizedName ?? "?"))")
             endActivity() // 同上:早退要还
             return
         }
-        print("[T6] 面板出现:语境屏 = \(screen?.localizedName ?? "?"),\(groups.count) 个 App")
+        // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
         applySessionScaleCap(on: screen)
         // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
         // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
@@ -214,7 +219,11 @@ final class PanelController: ObservableObject {
             return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
         }
         // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
-        print("[T6] 动效:\(MotionPolicy.describe)")
+        // 动效状态**只在变化时打**:它在一台机器上是常量,每局重印就是噪音
+        if Self.lastMotionDescribe != MotionPolicy.describe {
+            Self.lastMotionDescribe = MotionPolicy.describe
+            print("[动效] \(MotionPolicy.describe)")
+        }
         showPanel(beganAt: beganAt, enumerateMs: ms)
     }
 
@@ -278,16 +287,15 @@ final class PanelController: ObservableObject {
         // 行/列要在**收紧之后**再算:列数取的是当前尺寸下能放几张,
         // 收紧前算出来的会是上一局的尺寸(日志里就会看到对不上的行 × 列)
         let worstLayout = trayLayout(count: worstN)
-        // 一行账,永远打:面板为什么变小了,看一眼日志就知道(比"尺寸不对但不知道为什么"值钱)
+        // **只在档位变化时打**:同一台机器上它几乎每局一样,重印就是噪音;变了一定要看
+        if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
+        Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)
         print(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
                      s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
                      cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : ""))
-        if trayMaxContentSize.width > 0 {
-            let w = previewSize()
-            print(String(format: "[尺寸] 托盘窗口 %.0f×%.0fpt(按整局最大 %d 窗,整局只 setFrame 一次)",
-                         w.width, w.height, worstN))
-        }
+        // (托盘窗口尺寸那行撤了:它是"整局只 setFrame 一次"的验证账,已验证完;
+        //  要复核时看 `[工] 托盘改尺寸` 是否只在开局出现即可)
         if cap < 0.6 {
             print("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
         }
@@ -340,7 +348,7 @@ final class PanelController: ObservableObject {
             if CGFloat(c) * cardW + padW <= trayRoomW + 0.5 { return (r, c) }
         }
         // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
-        // (由 glassConstrainedX 居中、两端对称地切)也不往上堆成一面墙
+        // (由调用方按"内容居中 + 两端对称地切"兜底)也不往上堆成一面墙
         let r = min(n, PanelMetrics.trayMaxRows)
         return (r, (n + r - 1) / r)
     }
@@ -369,7 +377,7 @@ final class PanelController: ObservableObject {
             && lastLandedIndex != nil && lastLandedIndex != appIndex
         selectionArmed = willSlide                          // 要滑才上膛,否则第一帧定死
         contentEntryRise = MotionPolicy.entryFloatDistance   // 上浮:两种情形都有
-        print("[T6] 入场:上浮" + (willSlide
+        trace("[T6] 入场:上浮" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 
@@ -379,8 +387,11 @@ final class PanelController: ObservableObject {
         panel.orderFrontRegardless()
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
-        glog(String(format: "[T6] 按键→上屏 %.0fms(其中枚举 %.0fms)",
-                    (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs))
+        // **一次唤起的全部结算,一行**:语境屏 + App 数 + 按键→上屏(含枚举)。
+        // 这三件事永远同时发生,原来占三行(`[T8]` / 面板出现 / `[T6] 按键→上屏`)
+        print(String(format: "[唤起] %@, %d 个 App · 按键→上屏 %.0fms(枚举 %.0fms)",
+                     contextScreen?.localizedName ?? "?", groups.count,
+                     (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs))
         installOutsideClickMonitor()
         updatePreview()
 
@@ -428,7 +439,7 @@ final class PanelController: ObservableObject {
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
         previewPanel?.ignoresMouseEvents = true
-        print("[T6] \(reason):面板关闭")
+        trace("[T6] \(reason):面板关闭")
         teardownPanel(generation: beginGeneration)
     }
 
@@ -624,29 +635,6 @@ final class PanelController: ObservableObject {
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
-    /// 把窗口的 x 收进语境屏 —— **约束是玻璃,不是窗口**(两侧 pad 是透明的,允许出屏)。
-    /// 玻璃放得下时返回"收进屏内的期望位置";放不下时原样居中(两端对称地切)。
-    ///
-    /// 长条不走这条路:它的窗口与玻璃**同轴居中**(`centerFrame`),超界是对称的,且尺寸上限已保证
-    /// 玻璃放得下 —— 只有托盘会因为"居中于长条 + 自身过宽"而被推到单侧出屏。
-    private func glassConstrainedX(desired: CGFloat,
-                                   windowWidth: CGFloat,
-                                   pad: CGFloat,
-                                   area: NSRect) -> CGFloat {
-        let glass = windowWidth - pad * 2
-        let room = area.width - PanelMetrics.screenMargin * 2
-        guard glass <= room else {
-            // 玻璃比屏还宽:会话上限本该拦住(它按最宽的那一组算),这里只是兜底 ——
-            // 居中 = 两端对称地切,比旧写法"钉住右缘、左缘整片吃到屏外"诚实,也保证与长条仍然同轴
-            if !trayOverflowLogged {
-                trayOverflowLogged = true
-                glog("[尺寸] 托盘玻璃 \(Int(glass))pt > 可用 \(Int(room))pt,已居中(两端会被切)")
-            }
-            return desired
-        }
-        return min(max(desired, area.minX + PanelMetrics.screenMargin - pad),
-                   area.maxX - PanelMetrics.screenMargin - glass + pad)
-    }
 
     private func updatePreview() {
         guard let frame = previewFrame() else {
@@ -697,7 +685,7 @@ final class PanelController: ObservableObject {
         guard i >= 0, i < g.windows.count, x - CGFloat(i) * pitch <= PanelMetrics.thumbW else { return }
         guard i != winIndex else { return }
         winIndex = i
-        glog("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
+        trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
     }
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
@@ -708,7 +696,7 @@ final class PanelController: ObservableObject {
             appIndex = (appIndex + delta + groups.count) % groups.count
             winIndex = 0
             // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
-            glog("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+            trace("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
             refreshSnapshotForSelection()
             updatePreview()
         }
@@ -718,19 +706,25 @@ final class PanelController: ObservableObject {
     /// 那里量的是"帧间隔有没有崩" —— 两者对上就是结论
     private static let traceOn = isTraceEnabled
 
+    /// trace 灰度里的行也带毫秒时间戳(原来它用裸 print,复盘时对不上别的时间)
     private func trace(_ line: String) {
         guard Self.traceOn else { return }
-        print(line)
+        glog(line)
     }
 
+    /// 主线程耗时记账。**两道阈值,平时也开着**(2026-09-15 改,借 AltTab `MainThreadStall` 的口径):
+    ///   · trace 全开(诊断中)→ 超过 **2ms** 就报,细到能做对照;
+    ///   · 平时 → 超过 **16ms(一帧)** 才报 —— 那才是"用户看得见"的门槛。
+    ///
+    /// 为什么平时也要开:以前它是 trace 灰度的,于是**只有我在调的时候才有账**,用户平时卡了没记录;
+    /// 更要命的是"关掉 trace 之后到底还卡不卡"这件事**测不出来**(量尺跟着一起关了)。
+    /// 代价:每次调用两次取表(约几十纳秒),不超阈值不打印。
     private func traceCost(_ label: String, _ body: () -> Void) {
-        guard Self.traceOn else { return body() }
         let t0 = CFAbsoluteTimeGetCurrent()
         body()
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        // 只报"值得看"的:换选中本来应该是微秒级,超过 2ms 就写一行
-        guard ms > 2 else { return }
-        trace(String(format: "[工] %@ 主线程 %.1fms", label, ms))
+        guard ms > (Self.traceOn ? 2.0 : 16.0) else { return }
+        glog(String(format: "[工] %@ 主线程 %.1fms", label, ms))
     }
 
     private func moveWindow(_ delta: Int) {
@@ -739,7 +733,7 @@ final class PanelController: ObservableObject {
         let n = expandedCount
         guard n > 1 else { return }
         winIndex = (winIndex + delta + n) % n
-        glog("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
+        trace("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
     }
 
     /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
@@ -783,7 +777,7 @@ final class PanelController: ObservableObject {
         if pointerHasSpoken() { return true }
         if !gateBlockedLogged {
             gateBlockedLogged = true
-            print("[T6] 指针 hover 被闸掉(面板开在指针下方,指针还没挪窝)")
+            trace("[T6] 指针 hover 被闸掉(面板开在指针下方,指针还没挪窝)")
         }
         return false
     }
@@ -796,7 +790,7 @@ final class PanelController: ObservableObject {
         traceCost("指针换选中") {
             // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
             // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
-            glog("[T6] 选中(指针 hover): [\(i + 1)/\(groups.count)] \(groups[i].appName)"
+            trace("[T6] 选中(指针 hover): [\(i + 1)/\(groups.count)] \(groups[i].appName)"
                   + "(共 \(groups[i].windows.count) 窗)")
             appIndex = i
             winIndex = 0
@@ -810,12 +804,12 @@ final class PanelController: ObservableObject {
         // **到达**与**接受**分两行记:这一行证明"hover 事件到了",下一行证明"我们认了"。
         // 两行之间的时间差 = 我们这边的处理耗时;两行都晚 = 事件本身就投递晚了(窗口/层级/系统侧)
         if let g = currentGroup, g.windows.indices.contains(i) {
-            glog("[T6] hover 到窗 [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)(闸:\(pointerHasSpoken() ? "开" : "关"))")
+            trace("[T6] hover 到窗 [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)(闸:\(pointerHasSpoken() ? "开" : "关"))")
         }
         guard hoverAllowedByGate() else { return }
         winIndex = i
         if let g = currentGroup, g.windows.indices.contains(i) {
-            glog("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
+            trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
         }
     }
 
@@ -870,7 +864,7 @@ final class PanelController: ObservableObject {
         let before = groups.reduce(0) { $0 + $1.windows.count }
         let after = next.reduce(0) { $0 + $1.windows.count }
         guard next.count != groups.count || after != before else { return } // zoom/fullscreen:没摘,不必走这一趟
-        glog("[T12] 本地先摘: \(groups.count) 个 App / \(before) 窗 → "
+        trace("[T12] 本地先摘: \(groups.count) 个 App / \(before) 窗 → "
               + "\(next.count) 个 App / \(after) 窗")
         applyRefreshed(next, keepPID: nil, keepWin: winIndex)
     }
@@ -1025,8 +1019,8 @@ final class PanelController: ObservableObject {
             setFrameIfNeeded(panel, target)
         }
         updatePreview()
-        glog("[T12] 处决后留在原地(核实): \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] "
-              + "\(groups[appIndex].appName) · 顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
+        print("[处决后] \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+        trace("[T12] 处决后顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
     }
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。

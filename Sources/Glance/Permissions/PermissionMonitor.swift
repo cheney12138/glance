@@ -52,6 +52,6 @@ final class PermissionMonitor: ObservableObject {
     private func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
-        print("[mac-switcher] 权限就绪,门禁打开")
+        print("[Glance] 权限就绪,门禁打开")
     }
 }

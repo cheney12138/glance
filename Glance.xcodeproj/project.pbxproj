@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5A0000000000000000000011 /* mac_switcherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000021 /* mac_switcherApp.swift */; };
+		5A0000000000000000000011 /* GlanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000021 /* GlanceApp.swift */; };
 		5A0000000000000000000012 /* PermissionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000023 /* PermissionMonitor.swift */; };
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
@@ -41,8 +41,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		5A0000000000000000000021 /* mac_switcherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mac_switcherApp.swift; sourceTree = "<group>"; };
-		5A0000000000000000000022 /* mac-switcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "mac-switcher.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A0000000000000000000021 /* GlanceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlanceApp.swift; sourceTree = "<group>"; };
+		5A0000000000000000000022 /* Glance.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Glance.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000023 /* PermissionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionMonitor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000025 /* CursorScreenAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorScreenAnchor.swift; sourceTree = "<group>"; };
@@ -89,12 +89,12 @@
 		5A0000000000000000000031 = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000032 /* Sources/mac-switcher */,
+				5A0000000000000000000032 /* Sources/Glance */,
 				5A0000000000000000000033 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		5A0000000000000000000032 /* Sources/mac-switcher */ = {
+		5A0000000000000000000032 /* Sources/Glance */ = {
 			isa = PBXGroup;
 			children = (
 				5A00000000000000000000A0 /* App */,
@@ -108,13 +108,13 @@
 				5A0000000000000000000070 /* Settings */,
 				AA0000000000000000000F0D /* Assets.xcassets */,
 			);
-			path = "Sources/mac-switcher";
+			path = "Sources/Glance";
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000033 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000022 /* mac-switcher.app */,
+				5A0000000000000000000022 /* Glance.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -184,7 +184,7 @@
 		5A00000000000000000000A0 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				5A0000000000000000000021 /* mac_switcherApp.swift */,
+				5A0000000000000000000021 /* GlanceApp.swift */,
 				AA0000000000000000000F04 /* SingleInstanceGuard.swift */,
 			);
 			path = App;
@@ -214,9 +214,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5A0000000000000000000002 /* mac-switcher */ = {
+		5A0000000000000000000002 /* Glance */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5A0000000000000000000062 /* Build configuration list for PBXNativeTarget "mac-switcher" */;
+			buildConfigurationList = 5A0000000000000000000062 /* Build configuration list for PBXNativeTarget "Glance" */;
 			buildPhases = (
 				5A0000000000000000000041 /* Sources */,
 				5A0000000000000000000042 /* Frameworks */,
@@ -226,12 +226,12 @@
 			);
 			dependencies = (
 			);
-			name = "mac-switcher";
+			name = Glance;
 			packageProductDependencies = (
 				5A00000000000000000000B1 /* GlanceCore */,
 			);
-			productName = "mac-switcher";
-			productReference = 5A0000000000000000000022 /* mac-switcher.app */;
+			productName = Glance;
+			productReference = 5A0000000000000000000022 /* Glance.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -249,7 +249,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 5A0000000000000000000061 /* Build configuration list for PBXProject "mac-switcher" */;
+			buildConfigurationList = 5A0000000000000000000061 /* Build configuration list for PBXProject "Glance" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -265,7 +265,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5A0000000000000000000002 /* mac-switcher */,
+				5A0000000000000000000002 /* Glance */,
 			);
 		};
 /* End PBXProject section */
@@ -286,7 +286,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5A0000000000000000000011 /* mac_switcherApp.swift in Sources */,
+				5A0000000000000000000011 /* GlanceApp.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
 				AA0000000000000000000F0A /* AppearancePreference.swift in Sources */,
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,
@@ -482,7 +482,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5A0000000000000000000061 /* Build configuration list for PBXProject "mac-switcher" */ = {
+		5A0000000000000000000061 /* Build configuration list for PBXProject "Glance" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5A0000000000000000000051 /* Debug */,
@@ -491,7 +491,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5A0000000000000000000062 /* Build configuration list for PBXNativeTarget "mac-switcher" */ = {
+		5A0000000000000000000062 /* Build configuration list for PBXNativeTarget "Glance" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5A0000000000000000000053 /* Debug */,

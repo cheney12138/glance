@@ -1,7 +1,7 @@
 # ADR-0005:⌘Tab 接管改用系统 symbolic hotkey,不再靠事件 tap 吞键
 
 状态:已采纳(2026-09-14,v1.13)
-相关:`design/v4/design-system.md` Changelog v1.12 / v1.13、`docs/debugging.md`、`Sources/mac-switcher/Trigger/`
+相关:`design/v4/design-system.md` Changelog v1.12 / v1.13、`docs/debugging.md`、`Sources/Glance/Trigger/`
 
 ## 背景
 

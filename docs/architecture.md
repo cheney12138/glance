@@ -70,7 +70,7 @@ Trigger / Inventory / Focus / Permissions / Design / Diagnostics ──► Glanc
 ```bash
 swift Tools/check-architecture.swift                    # 边界
 cd Packages/GlanceCore && swift test                     # 纯核
-xcodebuild -project mac-switcher.xcodeproj -scheme mac-switcher -configuration Debug build
+xcodebuild -project Glance.xcodeproj -scheme Glance -configuration Debug build
 ```
 
 行为改动(输入管线、视觉)还要按 `docs/debugging.md` 实测 —— 编译通过不代表 ⌘Tab 还归你。

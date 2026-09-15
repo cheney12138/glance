@@ -10,7 +10,7 @@
 
 | T | 一句话 | 主要落点 | commit |
 |---|---|---|---|
-| T1 | 空壳:菜单栏 + 退出,⌘R 可跑 | `App/mac_switcherApp.swift` | ca87f10 |
+| T1 | 空壳:菜单栏 + 退出,⌘R 可跑 | `App/GlanceApp.swift` | ca87f10 |
 | T2 | 权限引导:双门禁 + 自家窗口锚定光标屏 | `Permissions/`,`Panel/CursorScreenAnchor.swift` | 05a491c |
 | T3 | 触发层:⌥Tab 状态机 + README 签名先决 | `Trigger/HotkeyTap.swift`,README | 3d7c5c7 |
 | T4 | 语境 + 库存:双屏过滤 + 修 AppKit/Quartz 坐标系 | `Inventory/WindowEnumerator.swift` | 258802e |
@@ -39,7 +39,7 @@
 | T19 | 输入管线:⌘Tab 入场动效下线、枚举搬后台、退场拆迁单带世代号 | `Panel/{PanelView,PreviewPanelView,PanelController}.swift`、`Inventory/WindowEnumerator.swift` | `design-system.md` Changelog v1.12(主线程占用 110ms → 12ms) |
 | T20 | 调试工具沉淀:注入器 / 按住器 / 窗口截图 / 原生热键开关 + 手册 | `Tools/{InjectChord,HoldChord,CaptureWindow,NativeHotkeys}.swift`、`docs/debugging.md` | 工具自身实测:A/B 验证 `程序坞` 出现与不出现 |
 | T21 | ⌘Tab 接管改走系统 symbolic hotkey(私有 SkyLight API;**默认关闭、显式开关**) | `Trigger/{HotkeyTap,NativeHotkeyGuards}.swift`、`GlanceCore/NativeHotkeys.swift`、`docs/adr/0005` | 四步实机验收(接管 / 强杀后 ⌘Tab 确实死 / 启动自愈 / 归还原生)+ 单测 |
-| T22 | 架构:模块化 + 纯核 `GlanceCore`(本地包)+ 可执行约定 | `Sources/mac-switcher/{App,Design,Diagnostics}/*`、`Packages/GlanceCore`、`Tools/check-architecture.swift`、`docs/architecture.md` | `check-architecture` ✅ / `swift test` 14 passed / 构建 ✅ / 真机 ⌥Tab 与 ⌘Tab 双路 |
+| T22 | 架构:模块化 + 纯核 `GlanceCore`(本地包)+ 可执行约定 | `Sources/Glance/{App,Design,Diagnostics}/*`、`Packages/GlanceCore`、`Tools/check-architecture.swift`、`docs/architecture.md` | `check-architecture` ✅ / `swift test` 14 passed / 构建 ✅ / 真机 ⌥Tab 与 ⌘Tab 双路 |
 
 > 本轮五件事**互相咬在同一个工作区**(pbxproj 被三段各自改过;`mac_switcherApp`、`HotkeyTap`、
 > `design-system.md` 同属多个任务),按文件切出来的中间提交不可构建 —— 所以合成一笔提交,
@@ -54,8 +54,8 @@
 | T25 | 缩略图管线:保温器(激活/换屏事件,无定时器)+ **AX 幽灵窗过滤** + macOS 26 `captureScreenshot` + 单次超时/重试/跨会话缓存 | `Inventory/{ThumbnailRefresher,AXWindowList,Snapshotter,WindowEnumerator}.swift`、`docs/architecture.md` §7 | 实测 SCShareableContent 28ms / 每窗 26–52ms / 10 窗串行 346ms;幽灵窗探针零误伤(用户"ok,剔除了") |
 | T26 | 事件日志加**毫秒时间戳**,hover 拆成"到达 / 接受"两行 —— 让"有多慢"变成数字,不再靠感觉争论 | `Diagnostics/Stdout.swift`、`Trigger/HotkeyTap.swift`、`Panel/PanelController.swift`、`Focus/WindowFocuser.swift` | 用户日志实据:每对 `hover 到窗`→`窗口选中` 相差 **0ms**,而 App 层选中到第一次卡片 hover 空着 **652ms** |
 | T27 | 指针重定位:视图在指针底下**自己挪位**时 SwiftUI 不补发 hover(托盘换组换宽度,1 扇 288pt / 2 扇 540pt → 卡片平移 ~126pt)→ 尺寸变了就按指针位置重判卡片 | `Panel/PanelController.swift`(`resyncSelectionUnderPointer`) | 同 T26 的日志;修后应出现 `[T6] 视图挪位后指针重定位(卡片)` |
-| T28 | 颜色外观:浅色 / 深色 / **自动(默认)**。一处 `NSApp.appearance` 管全套(面板取色全走按外观解析的动态色),设置窗一起换 | `Design/AppearancePreference.swift`、`Settings/{SettingsView,SettingsControls}.swift`(新 `BeamSegmented`)、`App/mac_switcherApp.swift` | 架构 ✅ / 构建 ✅;分段控件视觉复用 `SettingsTabRail` 的凹槽 + 会滑的实心舌 |
-| T29 | 借鉴 AltTab 三件:**全局 AX 消息超时 0.5s**(AltTab:全局 1s / app 元素 0.25s)、**F 全屏 / H 隐藏 App**(AltTab 默认键)、**标题中段截断**(AltTab `titleTruncation`) | `Inventory/AXWindowList.swift`、`App/mac_switcherApp.swift`、`Trigger/HotkeyTap.swift`、`Panel/PanelController.swift`、`Focus/WindowFocuser.swift`、`Packages/GlanceCore/WindowTitle.swift`、`Tools/HoldChord.swift` | `swift test` 22 passed(含中段截断 5 例);`AXUIElementSetMessagingTimeout(systemWide, 0.5)` 实测 err=0;构建 ✅ / 架构 ✅;H 的两幕病例见下 |
+| T28 | 颜色外观:浅色 / 深色 / **自动(默认)**。一处 `NSApp.appearance` 管全套(面板取色全走按外观解析的动态色),设置窗一起换 | `Design/AppearancePreference.swift`、`Settings/{SettingsView,SettingsControls}.swift`(新 `BeamSegmented`)、`App/GlanceApp.swift` | 架构 ✅ / 构建 ✅;分段控件视觉复用 `SettingsTabRail` 的凹槽 + 会滑的实心舌 |
+| T29 | 借鉴 AltTab 三件:**全局 AX 消息超时 0.5s**(AltTab:全局 1s / app 元素 0.25s)、**F 全屏 / H 隐藏 App**(AltTab 默认键)、**标题中段截断**(AltTab `titleTruncation`) | `Inventory/AXWindowList.swift`、`App/GlanceApp.swift`、`Trigger/HotkeyTap.swift`、`Panel/PanelController.swift`、`Focus/WindowFocuser.swift`、`Packages/GlanceCore/WindowTitle.swift`、`Tools/HoldChord.swift` | `swift test` 22 passed(含中段截断 5 例);`AXUIElementSetMessagingTimeout(systemWide, 0.5)` 实测 err=0;构建 ✅ / 架构 ✅;H 的两幕病例见下 |
 | T30 | **一局之内顺序冻结**(`mergeRefreshed`):中途动作只改"窗"不改"位",MRU 只在**开局**排一次 | `Panel/PanelController.swift` | 由 T29 第二幕逼出来;核实行现在把顺序也打进日志,便于验证 |
 | T31 | 入场动效**同步**:升起偏移的作用范围 = **托底 + 选中的那一格图标**(同一次 `withAnimation`、同一根弹簧 `PanelMotion.entrance`),其余图标一律不动 | `Panel/{PanelView,PanelController}.swift`、`Design/PanelMotion.swift` | 用户实评两轮:①「托底块还没滑上去,App 图标已经上去了……期望跟正常 Tab 切换一样,动效是同步的」→ 我第一版做成**整行**一起升 ✗ 被否(「你改成全部图标一起弹出来了」);② 正确范围就是"正常 Tab 切换"的范围 —— 动的永远只有托底与新选中的那个图标。命名同步对齐(设置 key 不动,偏好不丢) | · **第四轮(2026-09-15)**:「入场上浮」关闭时若托底**本来就停在同一格**(唤起即切换开着时每次都落第二格),就没得滑、又不上浮 = 面板像贴上去的 → 改成**滑与升互斥**:会滑就滑(承接上一格),不会滑就退回上浮(`lastLandedIndex` 判断,开局打 `[T6] 入场:…` 一行) · 速度同轮调整:`PanelMotion.entrance` response **0.28 → 0.20**(实评"这个上浮有点慢了") · **第五轮(同日,结构重做)**:用户口径「上浮是通用的,从 c 滑动到 a 这个是额外的动效」——把二选一改成**两层**:① 上浮(通用、永远在、无开关)② 从上一个 App 滑过来(额外、可关、默认关)。代码随之变成 `contentEntryRise` 永远摆起点 + `selectionArmed` 只由要不要滑决定;**key 换新**(`panel.slideFromLastApp`;旧 `panel.puckRiseFromBottom` 语义已反转,特意不迁移);设置行改为「从上一个 App 滑过来」(默认关,不写说明)
 
@@ -94,6 +94,9 @@ Q/W/M 保留这条;**zoom/fullscreen 不摘**(全屏是进出 Space,猜错方向
 | T35 | **光效总闸** `panel.sheen`(默认开):① 跟随指针的柔光 ② App 图标的静态反光(选中提亮 / 未选中压暗)—— **一起开一起关**。关掉时那层视图连同 TimelineView 一起不存在(零开销),图标回到本来的样子;选中态仍由放大 + 上浮 + 托底交代 | `Panel/PanelView.swift`(SheenOverlay 门 + IconCell 的 saturation/brightness)、`Settings/SettingsView.swift` | 用户口径两轮:「把高光晕染改成配置的吧,有人不一定喜欢这个光效」→「你只关了指针移动在背景上的反光,app 上的静态反光也要一起开关」;架构 ✅ / 构建 ✅ |
 | T36 | **托盘窗口按整局最大布局开一次**:换选中只换内容不换窗框,消掉每次 Tab 的 14–26ms 同步窗口布局 | `Panel/PanelController.swift`(`trayMaxContentSize` / `previewContentSize` / `previewContentRect`)、`Panel/PreviewPanelView.swift`(底部对齐) | 实测量到 `[工] 托盘改尺寸 23.3ms` ↔ 外层 `键盘换选中 26.3ms`(89%);`[帧]` 证据:入场 0.2s 内 0 长帧,唯一长帧 @1.37s = 按 Tab 那一下 | · **同轮补两件**:① `precapture(_:force:)` —— 正在显示的那一组强制重拍(换主题这类**应用内部**画面变化系统不发任何事件,事件驱动刷新抓不到,只能靠「显示即重拍」);② 沉淀 `docs/adr/0006-window-size-is-a-session-invariant.md` + `docs/debugging.md` §11(括号归因法、窗口大于内容时的检查清单)
 | T37 | **克制上浮幅度**(`iconLift` 14 → 8 基准):修"选中图标贴边"用的是砍幅度,不是加边距 | `Design/PanelTokens.swift` | 第一版给长条加上边距(+24pt)被否——"加上边距也太丑了,你要考虑没选中的时候啊";净边距 2.2 → **9.4pt**,视觉上移 24.2 → 17pt;弹簧(`PanelMotion.select`)与放大倍率(1.14)一格未动 |
+| T38 | **日志收敛:一次唤起 ≤ 2 行**。逐键/逐像素/逐帧/每次鼠标移动的账全部收进 trace;三行开局账合并成 `[唤起] …`;`[尺寸]`/`[动效]`/`[幽灵窗滤除]` 只在**变化时**打;删掉"整局只 setFrame 一次"那条验证账与死代码 `glassConstrainedX` | `Panel/PanelController.swift`、`Panel/PanelView.swift`、`docs/debugging.md` §12 | 用户口径:「清理一下现在无用的日志输出,内容太多了」;规则写进 `docs/debugging.md` §12(按"能回答什么问题"分类) |
+
+| T40 | **App 图标定稿 + 工程改名 `mac-switcher` → `Glance`**。图标只留玻璃方块(外圈泛光 / 底部阴影 / 生成水印全部切在遮罩外),十档进 `AppIcon.appiconset`;工程名、target、scheme、源码目录、源文件与全部路径引用一并改名,**bundle id 故意不动**(`com.cheney12138.macswitcher`——TCC 授权与用户偏好都锚在它上面,改了要重新授权 + 偏好清零) | `Tools/Iconify.swift`(新增,确定性裁切)、`Sources/Glance/Assets.xcassets/AppIcon.appiconset/*`、`Glance.xcodeproj`、`Sources/Glance/`、`README.md` 等路径引用 | 构建 ✅ / `swift test` ✅ / `check-architecture` ✅ / 产物 `Glance.app` 内 `AppIcon.icns` 与 `CFBundleName=Glance` 已核对。裁切的**数字是量出来的**:沿四边取样比背景色,顶边到 **1.75%** 内缩才干净(原 1.6% 时仍有 12% 样本是背景 —— 即肉眼看到的那一点点);取 2.00%(+0.25% 余量),另三边同值。口径与坑写进 `design/icon/README.md` | · 改名踩到的坑:scheme 里 `BuildableName` 替换后**漏了引号** → XML 非法 → scheme 加载失败,xcodebuild 报「Scheme Glance is not currently configured for the build action」(真因是 XML 不是配置);target 名在 pbxproj 里是 `name = "mac-switcher"` **带引号**,第一次替换没命中 → target 与 scheme 指向不一致 |
 
 ### T32 病例(一次回车被两个主人收下,2026-09-14)
 
@@ -124,7 +127,7 @@ Q/W/M 保留这条;**zoom/fullscreen 不摘**(全屏是进出 Space,猜错方向
 | 🚧 **输入状态机进核**(`GlanceCore.HotkeyStateMachine`:`(state, event, config, pinPanel) → (state, actions, swallow)`) | 本轮连修三个输入 bug(漏一颗 ⌘↓ 就整局失守 / 超时那颗粒放行 / Carbon 不重复投递导致 Tab 不动),全靠真机连按才发现。抽成纯函数后**全都能写成测试** | `docs/architecture.md` §6.1 |
 | 🚧 **窗口归属几何进核**(`ownsByContextScreen` + `quartzFrame`) | 双屏/跨屏是最容易错的地方(T4 就翻过车),现在跟 AX/CGS 调用缠在一起,没法单独验 | §6.2 |
 | 🚧 **MRU 排序进核**(`MruEvidence.ordered`) | 输入是 pid 序列、输出是顺序,天然纯函数 | §6.3 |
-| 🎛️ **触摸板手势唤起**(T38 候选,2026-09-15 记) | 用户问"能不能识别触摸板手势、加一个唤起方式"。**能**:AltTab 有一等公民实现(`nextWindowGesture`:三/四指 × 横/竖滑,默认关),它同时是"唤起 + 前/后切一个 App"的路径。要照它的分层做:① 纯核 `GestureKernel`(触摸帧 → 方向 + 是否吸收,可单测);② **只读监听 tap**(常开)+ **吸收 tap**(仅会话期开)—— 绝不能挂进现有 navTap:活动 tap 会 gate 整条输入流,手指在板上期间光标发涩(AltTab #5911);③ 会话层加 `beginGesture(direction:)` + **停手 0.4s 自动确认**(手势没有"松手"事件,这是 ADR-0004 的正当例外);④ 设置默认**关**(抢系统手势)。坑:系统 Mission Control / App Exposé 也吃三/四指(AltTab 的 TODO:某些设置下底层内容仍会跟着滚),惯性事件(`momentumPhase`)必须滤 | AltTab `src/events/{TrackpadEvents,GestureTriggerKernel}.swift` | 最小可用版:只做**三指横滑** = 唤起并前/后切一个 App |
+| 🎛️ **触摸板手势唤起**(T39 候选,2026-09-15 记) | 用户问"能不能识别触摸板手势、加一个唤起方式"。**能**:AltTab 有一等公民实现(`nextWindowGesture`:三/四指 × 横/竖滑,默认关),它同时是"唤起 + 前/后切一个 App"的路径。要照它的分层做:① 纯核 `GestureKernel`(触摸帧 → 方向 + 是否吸收,可单测);② **只读监听 tap**(常开)+ **吸收 tap**(仅会话期开)—— 绝不能挂进现有 navTap:活动 tap 会 gate 整条输入流,手指在板上期间光标发涩(AltTab #5911);③ 会话层加 `beginGesture(direction:)` + **停手 0.4s 自动确认**(手势没有"松手"事件,这是 ADR-0004 的正当例外);④ 设置默认**关**(抢系统手势)。坑:系统 Mission Control / App Exposé 也吃三/四指(AltTab 的 TODO:某些设置下底层内容仍会跟着滚),惯性事件(`momentumPhase`)必须滤 | AltTab `src/events/{TrackpadEvents,GestureTriggerKernel}.swift` | 最小可用版:只做**三指横滑** = 唤起并前/后切一个 App |
 | 👀 **面板内搜索**(打字过滤 App) | **2026-09-14 用户判"先不做"**:不是刚需("不然我为什么不直接用 Raycast")。交互方案已想清,要做直接照做:面板起来**直接打字**即搜(吞键范围扩到 ASCII 可打印字符)、查询显示在图标行上方、只匹配 App 名子串、Esc 先清空再关闭、**不接 IME**(AltTab #5766 的输入法血案) | 本文 §五 |
 | 👀 应用例外名单(黑名单/白名单) | 成本最低、人人会要的一件(借鉴清单第 1 条) | 本文 §五 |
 | 👀 窗口排序可选(MRU / 标题 / 屏幕位置) | 纯函数进核 + 单测的正面案例 | 本文 §五 |

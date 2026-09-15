@@ -85,7 +85,7 @@ private func fail(_ message: String) -> Never {
 private func glanceInstances() -> [String] {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-    process.arguments = ["-fl", "mac-switcher.app/Contents/MacOS/mac-switcher"]
+    process.arguments = ["-fl", "Glance.app/Contents/MacOS/Glance"]
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
