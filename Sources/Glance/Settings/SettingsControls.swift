@@ -105,25 +105,37 @@ struct RowValue: View {
     }
 }
 
-/// demo `.key`:等宽键位胶囊。`highlighted` = 录制态,借 accent 示意"正在等你按"。
+/// demo `.key`:等宽键位胶囊。**两副相貌,别混用**。
+///
+/// 2026-09-15 病例(用户实拍):`Tab / ⇧ Tab`、`Q / W / M` 这些只是**键位说明**,
+/// 而「触发键」那枚是**能点进去改**的 —— 两者长得一模一样,用户点说明没反应,以为是 bug。
+/// 修法:把"能不能改"从**芯片自己身上**说出来 ——
+/// · 只读(默认):**无边框** + 文字 `ink2` + 底色减半 = 禁用相貌;
+/// · 可改(`editable`,只有触发键):底色足、文字上墨色、**常驻一圈强调色描边**;
+/// · 录制中(`highlighted`):描边打满 —— 描边在 = 能改,描边满 = 正在录。
 struct KeyChip: View {
     let text: String
+    /// 这枚键位**能不能改**(只有「触发键」那枚是 true)
+    var editable: Bool = false
+    /// 正在录制(只在 editable 时有意义)
     var highlighted: Bool = false
 
     var body: some View {
         Text(text)
             .font(SettingsFont.key)
-            .foregroundStyle(highlighted ? SettingsTheme.beam : SettingsTheme.ink)
+            .foregroundStyle(highlighted ? SettingsTheme.beam
+                                         : (editable ? SettingsTheme.ink : SettingsTheme.ink2))
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(SettingsTheme.keyBg)
+                    .fill(SettingsTheme.keyBg.opacity(editable ? 1 : 0.5))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .strokeBorder(SettingsTheme.beam, lineWidth: SettingsMetrics.hairline)
-                    .opacity(highlighted ? 1 : 0)
+                    // 描边在 = 能改;描边满 = 正在录。只读的那枚一根线都没有
+                    .opacity(highlighted ? 1 : (editable ? 0.4 : 0))
             )
     }
 }

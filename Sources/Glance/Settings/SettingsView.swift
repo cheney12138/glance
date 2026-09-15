@@ -216,7 +216,8 @@ struct ShortcutPane: View {
                     Button {
                         recording ? stopRecording() : startRecording()
                     } label: {
-                        KeyChip(text: recording ? "按下新组合…" : chip(config), highlighted: recording)
+                        KeyChip(text: recording ? "按下新组合…" : chip(config),
+                                editable: true, highlighted: recording)
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled(!SettingsTheme.showsFocusRing)
