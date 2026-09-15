@@ -17,8 +17,7 @@ window raises **that window** — the app does not simply come forward with whic
 would have preferred.
 
 Everything stays on the machine and stays quiet. Previews are captured when windows change,
-never on a timer. The panel dismisses instantly on every exit path. Glance contains no
-networking code.
+never on a timer. The panel dismisses instantly on every exit path.
 
 ## Highlights
 
@@ -39,12 +38,23 @@ networking code.
   <kbd>⌥</kbd><kbd>Tab</kbd> unless you ask for more.
 - **Quiet by design.** No bounce, no ripple, no confirmation flourish. Motion follows the
   system *Reduce Motion* setting, with an explicit override if you want the full animation.
+- **Updates itself.** A scheduled check fetches a signed appcast from GitHub — the only network
+  request Glance ever makes. 「检查更新…」 in the menu bar checks on demand.
 
 ## Requirements
 
 - macOS 14 or later.
 - Building from source: Xcode 26 or later. A free Apple ID (Personal Team) is enough —
   no paid developer account.
+
+## Download
+
+Signed builds are on the [Releases page](https://github.com/cheney12138/Glance/releases/latest).
+Download `Glance-x.y.z.dmg`, drag `Glance.app` into **Applications**, then grant the two
+permissions below.
+
+The build is signed but **not notarized** (notarization needs a paid Apple Developer account),
+so the first launch needs one extra step — see *Updating*.
 
 ## Build and run
 
@@ -123,7 +133,12 @@ outside the panel to dismiss.
 
 ## Privacy
 
-- **No network.** Glance contains no networking code and sends nothing anywhere.
+- **No analytics, no telemetry, no accounts.** Nothing about you or your windows is ever sent
+  anywhere.
+- **One network request: the update check.** The updater (Sparkle) fetches a signed appcast from
+  GitHub when a scheduled check is due and when you choose 「检查更新…」. The request reports the
+  version it is running and (if there is a newer one) downloads the DMG — nothing else. Turn it
+  off with `defaults write com.cheney12138.macswitcher SUEnableAutomaticChecks -bool false`.
 - **Window titles and previews stay in memory** for the duration of a session.
 - **Preferences** live in the app's `UserDefaults` (appearance, trigger, switches, window frames).
 - **One additional file** is written: a small marker in
@@ -153,9 +168,25 @@ A signal lets Glance restore the shortcut on the way out; `SIGKILL` does not.
 **The panel does not appear.** Check both permissions above, then reset them with the
 `tccutil` commands and restart the app.
 
+**「检查更新…」 reports an error.** Two different failures with two different causes:
+
+- *"The updater failed to start"* — the build's `SUPublicEDKey` is not a valid key (a valid
+  Ed25519 public key is 44 base64 characters). Rebuild. The alert never says why; the reason is
+  in the system log: `log show --last 15m --predicate 'process == "Glance"'`.
+- *"An error occurred in retrieving update information"* — the appcast could not be fetched,
+  which almost always means the newest GitHub release is missing `appcast.xml` (the app looks it
+  up at `releases/latest/download/appcast.xml`).
+
+Scheduled checks fail silently by design; only a manual check reports an error.
+
 ## Updating
 
-Glance does not check for updates yet; updating is manual:
+Glance updates itself. It checks a signed appcast once a day (and whenever you choose
+「检查更新…」 in the menu bar); when a newer build exists, Sparkle offers it, verifies the EdDSA
+signature against the public key in `Info.plist`, and installs it in place. Sparkle-downloaded
+updates are not quarantined, so they need no extra step.
+
+To update by hand — for instance for the first install from the Releases page:
 
 1. Quit Glance (menu bar icon ▸ **Quit**, or `pkill -TERM Glance`).
 2. Open the new DMG and drag `Glance.app` into **Applications**, replacing the old copy.
@@ -182,15 +213,28 @@ xattr -dr com.apple.quarantine /Applications/Glance.app
 bash Tools/release.sh 0.2.0     # 构建 universal DMG → EdDSA 签名 → 写出 appcast.xml
 ```
 
-Then create the GitHub release tagged `v0.2.0` with **both** assets attached:
-`Glance-0.2.0.dmg` and `appcast.xml`. The app's feed URL points at
-`releases/latest/download/appcast.xml`, so the appcast must be attached to the newest release —
-without it, update checking breaks.
+Then publish the release with the GitHub CLI — **both** assets, tag exactly `v0.2.0`, asset name
+exactly `Glance-0.2.0.dmg` (the appcast spells both out in its download URL):
+
+```bash
+gh release create v0.2.0 ~/Desktop/Glance-0.2.0.dmg ~/Desktop/appcast.xml --title "Glance 0.2.0"
+```
+
+The app's feed URL points at `releases/latest/download/appcast.xml`, so the appcast must be on
+the newest release — without it, update checking breaks (silently, for automatic checks).
 
 Updates are authenticated with Sparkle's EdDSA key: the private key lives in the maintainer's
 login keychain (account `glance`), the public key in `Info.plist`. **No Apple Developer account
 is required.** Only the very first install needs the quarantine workaround above, because a
 browser still tags the DMG it downloads.
+
+**Never hand-copy the public key.** One wrong character is enough to make Sparkle fail at
+startup, and the alert does not say why. Read it back from the keychain instead:
+
+```bash
+~/Library/Caches/glance-sparkle/bin/generate_keys -p --account glance   # 打印公钥,应为 44 字符
+/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" Glance.app/Contents/Info.plist | wc -c
+```
 
 ## Project layout
 
