@@ -106,11 +106,17 @@ enum WindowEnumerator {
             // 注意**不要**顺手动 `.accessory`(菜单栏型 App)—— 它们可以有正当的窗口(例如我们自己的设置窗,若将来放出来)。
             let app = NSRunningApplication(processIdentifier: r.pid)
             let bundleID = app?.bundleIdentifier ?? ""
-            if app?.activationPolicy == .prohibited || Self.promptHostBundleIDs.contains(bundleID) {
-                let why = app?.activationPolicy == .prohibited
-                    ? "无 Dock 图标的后台进程(activationPolicy=prohibited)"
-                    : "系统提示框宿主(点名)"
-                Self.logGhostOnce("\(r.ownerName)[\(bundleID)]:\(why) —— 不入面板")
+            let byPolicy = app?.activationPolicy == .prohibited
+            let byBundle = Self.promptHostBundleIDs.contains(bundleID)
+            let byName = Self.promptHostNames.contains(r.ownerName)
+            if byPolicy || byBundle || byName {
+                let why = byPolicy ? "无 Dock 图标的后台进程(activationPolicy=prohibited)"
+                    : byBundle ? "系统提示框宿主(点名 bundle)"
+                    : "系统提示框宿主(点名进程名)"
+                // bundle 取不到时把"取不到"写出来,而不是留一个空的方括号 ——
+                // 这正是本次定位到的线索:名单里有它,却因为 bundleIdentifier 为空而匹配不上
+                let idText = bundleID.isEmpty ? "无 bundle id" : bundleID
+                Self.logGhostOnce("\(r.ownerName)[\(idText)]:\(why) —— 不入面板")
                 continue
             }
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,
@@ -151,6 +157,23 @@ enum WindowEnumerator {
     /// 这里点名管"有 Dock 图标身份、但本质是系统提示框"的那几个。
     /// **这份名单为什么可以存在**:它只收系统提示框宿主(极小),而且名单外的任何闯入者
     /// 会**直接出现在 `[T6] 落点顺序` 那一行里**(App 名一目了然)—— 维护成本几乎为零。
+    /// 为什么还需要**按进程名**点名(2026-09-16 追加,用户报"这种权限弹窗还是出现了"):
+    /// 录屏许可提示窗的宿主进程叫 `universalAccessAuthWarn`,但它的 `bundleIdentifier` **取不到**
+    /// (bundle-less 的 XPC 小进程,按需拉起;提示窗关掉后进程就没了,连 find 都找不到)
+    /// ⇒ 上报名单里的 "com.apple.universalAccessAuthWarn" **永远匹配不上**,弹窗照旧混进面板。
+    /// 日志实证(它真的进了面板,而且能被操作):
+    ///   `[T6] 选中(指针 hover): [10/10] universalAccessAuthWarn(共 1 窗)`
+    ///   `[T7] 已聚焦: universalAccessAuthWarn — 录屏`
+    /// 所以除 bundle id 之外**再按进程名点名** —— 提示框宿主多为无 bundle 的 XPC 小进程,
+    /// 进程名才是可靠标识。名单仍然只收系统提示框宿主,闯入者照样会在 `[T6] 落点顺序` 里现形。
+    nonisolated static let promptHostNames: Set<String> = [
+        "universalAccessAuthWarn",      // 录屏 / 辅助功能许可提示(本次实证)
+        "UserNotificationCenter",       // 通用通知 / 权限提示
+        "CoreServicesUIAgent",          // "xxx 想打开…" 之类
+        "tccd",                         // TCC 本体(某些系统版本直接由它出窗)
+        "ScreenCaptureApprovalUI",      // 录屏许可确认
+    ]
+
     nonisolated static let promptHostBundleIDs: Set<String> = [
         "com.apple.universalAccessAuthWarn",   // 辅助功能警告(本次实测抓到)
         "com.apple.UserNotificationCenter",    // 通用通知 / 权限提示
