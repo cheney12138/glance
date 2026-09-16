@@ -199,10 +199,16 @@ struct ShortcutPane: View {
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
     @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
+    /// 双击 ⌃ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)
+    @AppStorage("pointer.doubleControlJumps") private var doubleControlJumps = false
 
     var body: some View {
         Group {
             SettingsGroup(label: "触发") {
+            SettingsRow(title: "双击 ⌃ 指针跳到另一块屏",
+                        desc: "指针保持相对位置落到另一块屏。") {
+                BeamSwitch(isOn: $doubleControlJumps)
+            }
                 SettingsRow(title: "接管系统 ⌘Tab",
                             desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
                     BeamSwitch(isOn: takeoverBinding)
