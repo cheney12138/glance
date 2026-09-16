@@ -3,7 +3,7 @@ import GlanceCore
 import SwiftUI
 
 /// 面板控制器:导航态状态机的唯一权威。
-/// 出现(begin)→ 选中移动(next/prev/windowLeft/windowRight/hover)→ 确认(confirm)/放弃(cancel),
+/// 出现(begin)→ 选中移动(next/prev/firstGroup/lastGroup/hover)→ 确认(confirm)/放弃(cancel),
 /// 四状态无旁路。确认的真实聚焦在 T7 接 WindowFocuser,现在只打日志。
 @MainActor
 final class PanelController: ObservableObject {
@@ -96,8 +96,10 @@ final class PanelController: ObservableObject {
         case .beginReverse: begin(reverse: true)
         case .next: moveApp(1)
         case .prev: moveApp(-1)
-        case .windowLeft: moveWindow(-1)
-        case .windowRight: moveWindow(1)
+        case .firstGroup: jumpToGroupEdge(0)
+        case .lastGroup: jumpToGroupEdge(groups.count - 1)
+        case .cycleWindowPrev: moveWindow(-1)   // ` 循环窗口(与 ←/→ 分家)
+        case .cycleWindowNext: moveWindow(1)
         case .confirm: confirmSelection()
         case .cancel: dismiss(reason: "放弃")
         // 截图会话里的回车(T32):面板退场、**不聚焦任何窗**。
@@ -769,6 +771,16 @@ final class PanelController: ObservableObject {
         glog(String(format: "[工] %@ 主线程 %.1fms%@", label.trimmingCharacters(in: .whitespaces), ms, kids))
     }
 
+
+    /// ←/→ = **跳到最左 / 最右的 App**(用户 2026-09-15 重新设计)。
+    /// 为什么改:原来的 ←/→ 是"在当前 App 的窗口间移动",而这正是 ` 的职责 —— 功能重复;
+    /// 走组的职责在 Tab。把 ←/→ 换成"跳到两端",是最便宜的一条效率提升(H/M/L 的心智)。
+    private func jumpToGroupEdge(_ target: Int) {
+        guard groups.indices.contains(target), target != appIndex else { return }   // 两端 = 夹住,不环绕
+        appIndex = target
+        winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
+        trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+    }
 
     private func moveWindow(_ delta: Int) {
         // 权责冻结(用户拍板):App 移动归 Tab 与指针,←→ 只管展开层的窗;

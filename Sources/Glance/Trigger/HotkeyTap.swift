@@ -28,8 +28,12 @@ final class HotkeyTapCenter {
         case beginReverse     // 首次 ⇧⌥+Tab:同上,但方向相反(落点判断要用,见 PanelController)
         case next             // Tab:图标层后移
         case prev             // ⇧Tab:图标层前移
-        case windowLeft       // ←:展开层左移
-        case windowRight      // →:展开层右移
+        case firstGroup      // ←:跳到**最左**的 App
+        case lastGroup       // →:跳到**最右**的 App
+        /// ` 循环窗口:在**当前 App 的窗口之间**循环 —— 与 ←/→ 是两件事
+        /// (2026-09-15 分家:原先是同一个 case,导致两个键做同一件事)
+        case cycleWindowPrev
+        case cycleWindowNext
         case confirm          // ⌥ 释放:确认(聚焦选中窗)
         case cancel           // Esc:放弃
         case yieldToCapture   // 截图中按回车:关面板、不聚焦(回车的第一所有权在截图工具,见 CaptureSessionRule)
@@ -316,13 +320,13 @@ final class HotkeyTapCenter {
         case Self.keyM: emit(.minimizeWindow)
         case Self.keyF: emit(.toggleFullscreen)
         case Self.keyH: emit(.hideApp)
-        case Self.keyLeft: emit(.windowLeft)
-        case Self.keyRight: emit(.windowRight)
+        case Self.keyLeft: emit(.firstGroup)
+        case Self.keyRight: emit(.lastGroup)
         case Self.keyGrave:
             // 开关关着就**放行**(return false = 不吞),让系统那条 ⌘` 照旧工作
             guard Self.graveCyclesWindows else { return false }
             // ⇧` = 反向,与触发键的 ⇧ 反向约定一致
-            emit(event.flags.contains(.maskShift) ? .windowLeft : .windowRight)
+            emit(event.flags.contains(.maskShift) ? .cycleWindowPrev : .cycleWindowNext)
         default: break
         }
         return true
@@ -427,8 +431,10 @@ final class HotkeyTapCenter {
         case .beginReverse: return "首次 ⇧⌥+Tab → 导航开始(反向)"
         case .next: return "Tab → 后移"
         case .prev: return "⇧Tab → 前移"
-        case .windowLeft: return "← → 窗口左移"
-        case .windowRight: return "→ → 窗口右移"
+        case .firstGroup: return "← → 跳到最左的 App"
+        case .lastGroup: return "→ → 跳到最右的 App"
+        case .cycleWindowPrev: return "⇧` → 当前 App 上一个窗口"
+        case .cycleWindowNext: return "` → 当前 App 下一个窗口"
         case .confirm: return "⌥ 释放 → 确认(T7 聚焦此处)"
         case .cancel: return "Esc → 放弃(面板关闭,不聚焦)"
         case .yieldToCapture: return "回车落在截图会话 → 只关面板、不聚焦(T32;这一颗不吞)"
