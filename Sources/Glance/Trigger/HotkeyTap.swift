@@ -495,6 +495,9 @@ final class DoubleControlTap {
     /// 设置项。**默认关**：macOS 本身没有这个功能，按"新开关一律默认对齐 macOS"的规则应为关。
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
     static let defaultsKey = "pointer.doubleControlJumps"
+    /// 移完指针是否**一并落焦**到那块屏台前的那扇窗(默认开:用户明确期望"过去就能打字")
+    /// 关掉它 = 只搬指针,不碰键盘(适用于"只是过去点一下"的场景)
+    static let landsFocusKey = "pointer.doubleControlLandsFocus"
     private var enabled: Bool { UserDefaults.standard.bool(forKey: Self.defaultsKey) }
 
     private var globalMonitor: Any?
@@ -544,6 +547,17 @@ final class DoubleControlTap {
         }
     }
 
+    /// 目标屏上 Z 序最前的那扇窗 = 用户说的"台前第一个 App"。
+    /// 为什么落焦到**窗**而不是 App:同一个 App 可能两块屏各有窗,让 App 自己决定键盘给谁
+    /// 正是"激活不保证落焦"那个坑(见 CONTEXT.md)。
+    private func landingWindow(on displayID: CGDirectDisplayID) -> WindowRecord? {
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
+        }) else { return nil }
+        // rawGroups 已是 Z 序(面板之后才用 orderByMRU 重排) ⇒ 第一个 App 的第一扇窗就是台前那扇
+        return WindowEnumerator.rawGroups(on: screen).first?.windows.first
+    }
+
     /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），
     /// 而不是丢到角落 —— 指针像"平移"过去，这是体感的关键。
     private func jumpToNextDisplay() {
@@ -564,7 +578,16 @@ final class DoubleControlTap {
         let ry = min(max((cursor.y - a.minY) / a.height, 0.02), 0.98)
         CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
         CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
-        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (相对 %.0f%% / %.0f%%)",
-                     from + 1, (from + 1) % ids.count + 1, rx * 100, ry * 100))
+        // 把"工作上下文"一起搬过去:落焦到那块屏台前的那扇窗 ⇒ 过去就能直接打字。
+        // 不算融合操作 —— 落点由那块屏自身决定,没有替用户做选择(ADR-0007 修正)。
+        let targetID = ids[(from + 1) % ids.count]
+        var landed = ""
+        let wantFocus = UserDefaults.standard.object(forKey: Self.landsFocusKey) as? Bool ?? true
+        if wantFocus, let w = landingWindow(on: targetID) {
+            MainActor.assumeIsolated { WindowFocuser.focus(window: w) }   // 监听器在主线程,无需再跳
+            landed = " · 落焦 \(w.ownerName)"
+        }
+        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (相对 %.0f%% / %.0f%%)%@",
+                     from + 1, (from + 1) % ids.count + 1, rx * 100, ry * 100, landed))
     }
 }

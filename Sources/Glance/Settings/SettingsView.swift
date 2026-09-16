@@ -201,6 +201,8 @@ struct ShortcutPane: View {
     @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
     /// 双击 ⌃ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)
     @AppStorage("pointer.doubleControlJumps") private var doubleControlJumps = false
+    /// 移动后是否顺手把键盘也带过去(默认开)
+    @AppStorage("pointer.doubleControlLandsFocus") private var doubleControlLandsFocus = true
 
     var body: some View {
         Group {
@@ -208,6 +210,10 @@ struct ShortcutPane: View {
             SettingsRow(title: "双击 ⌃ 指针跳到另一块屏",
                         desc: "指针保持相对位置落到另一块屏。") {
                 BeamSwitch(isOn: $doubleControlJumps)
+            }
+            SettingsRow(title: "顺带把键盘也带过去",
+                        desc: "切到那块屏最前面的窗口，过去就能直接打字。") {
+                BeamSwitch(isOn: $doubleControlLandsFocus)
             }
                 SettingsRow(title: "接管系统 ⌘Tab",
                             desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
