@@ -92,7 +92,8 @@ struct PreviewPanelView: View {
                     wid: w.wid,
                     close: { controller.closeWindowClicked(w.wid) },
                     minimize: { controller.minimizeWindowClicked(w.wid) },
-                    zoom: { controller.zoomWindowClicked(w.wid) }
+                    zoom: { controller.zoomWindowClicked(w.wid) },
+                    dimmed: !(i == controller.winIndex)
                 )
             },
             motion: MotionPolicy.animation(PanelMotion.thumb)
@@ -117,6 +118,8 @@ struct TrafficLights: View {
     let close: () -> Void
     let minimize: () -> Void
     let zoom: () -> Void
+    /// 未选中的卡片:三粒灯去饱和(= macOS 上"非激活窗口"的样子 ✓)
+    let dimmed: Bool
     /// 哪一粒被直接踩到(nil = 没踩到整组):
     /// 整组里**任意一粒**被悬停 → 三粒一起出符号;只有被直接踩到的那一粒放大
     @State private var hoveredDot: Int?
@@ -135,6 +138,7 @@ struct TrafficLights: View {
         TrafficLight(color: color, symbol: symbol, hint: hint,
                      showsGlyph: hoveredDot != nil,
                      hovering: hoveredDot == index,
+                     dimmed: dimmed,
                      action: action)
             .padding(3)
             // 逐粒听 hover,而不是给 HStack 挂一个:容器上的 onHover 会被子按钮吃掉
@@ -156,6 +160,8 @@ private struct TrafficLight: View {
     let hint: String
     let showsGlyph: Bool
     let hovering: Bool
+    /// 未选中 = 灰(见 TrafficLights.dimmed)
+    let dimmed: Bool
     let action: () -> Void
 
     var body: some View {
@@ -174,6 +180,12 @@ private struct TrafficLight: View {
                         .opacity(showsGlyph ? 1 : 0)
                 }
                 .scaleEffect(hovering ? 1.15 : 1)
+                // 去饱和是"克制"的来源:亮点只在你看着它的时候出现。
+                // 用 saturation+opacity 而非新增灰色常量 —— 灰值随明暗外观自动正确,
+                // 也不必为一个中间态往设计系统里塞 token ✓
+                .saturation(dimmed ? 0 : 1)
+                .opacity(dimmed ? 0.55 : 1)
+                .animation(.easeOut(duration: 0.18), value: dimmed)
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .animation(.easeOut(duration: 0.12), value: showsGlyph)
         }
