@@ -109,6 +109,11 @@ final class HotkeyTapCenter {
     private static var graveCyclesWindows: Bool {
         UserDefaults.standard.object(forKey: "switch.graveCyclesWindows") as? Bool ?? false
     }
+    /// 面板出现期间是否接管滚动(设置里的「双指滑动换组」,默认开)。
+    /// 关掉时必须**放行**:设置里的说明写着"关闭后…照常交给底下的应用"。
+    private static var scrollMovesSelection: Bool {
+        UserDefaults.standard.object(forKey: "switch.scrollMovesSelection") as? Bool ?? true
+    }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
@@ -287,6 +292,10 @@ final class HotkeyTapCenter {
             // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap(会话期才有、唯一有吞键权的那个)。
             // 返回 true = 吞掉。惯性事件也一并吞:只吞非惯性的话,甩动的尾巴会继续滚底下的 App。
             if let nse = NSEvent(cgEvent: event) { onScroll?(nse) }
+            // ⚠️ 必须先看开关:设置里写的是"关闭后,滚轮与双指滑动照常交给底下的应用",
+            // 无条件吞就会让那句说明变成假话(关掉后底下 App 依然滚不动)。
+            // 设置项一旦承诺了行为,代码就得兑现 —— 否则不如不写那句说明。
+            guard Self.scrollMovesSelection else { return false }   // false = 放行,不吞
             return true
         default: return false
         }

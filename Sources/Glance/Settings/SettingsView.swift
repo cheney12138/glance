@@ -203,17 +203,42 @@ struct ShortcutPane: View {
     @AppStorage("pointer.doubleControlJumps") private var doubleControlJumps = false
     /// 移动后是否顺手把键盘也带过去(默认开)
     @AppStorage("pointer.doubleControlLandsFocus") private var doubleControlLandsFocus = true
+    /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
+    @AppStorage("switch.scrollMovesSelection") private var scrollMovesSelection = true
+    /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
+    /// 滑杆若线性映射到间隔,两端手感会严重不均(慢端几乎不动)。默认 10 = 原 0.10s。
+    @AppStorage("panel.scrollSpeed") private var scrollSpeed: Double = 10
 
     var body: some View {
         Group {
             SettingsGroup(label: "触发") {
             SettingsRow(title: "双击 ⌃ 指针跳到另一块屏",
-                        desc: "指针保持相对位置落到另一块屏。") {
+                        desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
                 BeamSwitch(isOn: $doubleControlJumps)
             }
             SettingsRow(title: "顺带把键盘也带过去",
-                        desc: "切到那块屏最前面的窗口，过去就能直接打字。") {
+                        desc: "关掉后只移指针，不动键盘。") {
                 BeamSwitch(isOn: $doubleControlLandsFocus)
+            }
+            SettingsRow(title: "滚动切换应用") {
+                BeamSwitch(isOn: $scrollMovesSelection)
+            }
+            SettingsRow(title: "切换速度", hairline: false) {
+                HStack(spacing: 10) {
+                    // 照抄"App 间距"那一行的形状:裸 Slider(不用 step:)—— 带 step 的滑杆
+                    // 会在轨道下方画一排刻度点,而本设计里没有任何刻度语言。
+                    Slider(value: $scrollSpeed, in: 3...20)
+                        .frame(width: 150)
+                        .disabled(!scrollMovesSelection)      // 开关关掉时置灰:主从关系一眼可见
+                        .opacity(scrollMovesSelection ? 1 : 0.4)
+                        .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                    Text("\(Int(scrollSpeed)) 次/秒")
+                        .font(SettingsFont.rowValue)
+                        .foregroundStyle(SettingsTheme.ink2)
+                        .monospacedDigit()
+                        .frame(width: 62, alignment: .trailing)
+                        .opacity(scrollMovesSelection ? 1 : 0.4)
+                }
             }
                 SettingsRow(title: "接管系统 ⌘Tab",
                             desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
