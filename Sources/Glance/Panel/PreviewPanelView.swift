@@ -230,6 +230,11 @@ private struct WindowThumb<Overlay: View>: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    // **卡面压色**(方案 D,`design/卡面实验台.html` 用户拍板):非选中的卡把截图
+                    // 压到 30%,统一底色(`PanelColors.thumbBg`)接管卡面 —— 一排过去不再深浅乱跳;
+                    // 选中/悬停的那张恢复原样。压色量挂在卡片末尾同一条
+                    // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
+                    .opacity(selected ? 1 : PanelMetrics.thumbWash)
             } else {
                 Rectangle().fill(Color.gray.opacity(0.15))
                 Text("截图中…")
@@ -253,6 +258,8 @@ private struct WindowThumb<Overlay: View>: View {
                     .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
                     .clipped()
                     .blur(radius: PanelMetrics.lightsBlur, opaque: true)
+                    // 毛玻璃条随底图一起压色:它就是这张截图自己,底图压了它不压,顶部会浮出一截"实"的
+                    .opacity(selected ? 1 : PanelMetrics.thumbWash)
                     .mask(alignment: .top) {
                         LinearGradient(
                               stops: [

@@ -39,6 +39,18 @@ final class Snapshotter: ObservableObject {
     /// 曾经成功拍到过的 window id(只增不减;`prune` 不动它)。见 `precapture` 的 missLost 分账。
     private var everCaptured: Set<CGWindowID> = []
 
+    /// 缓存的字节量(粗账:逐张按位图 `bytesPerRow × height` 累加,不追 CGImage 内部对齐)。
+    /// 用途:LumaRing 式懒加载("非热组不预截")的**先量后议**(2026-09-16 用户问,裁决:内存是
+    /// 懒加载唯一真值,交互不动)—— 账挂在 `[唤起]` 行天天可见,有数才有"值不值得省"的裁决
+    var cacheMemoryBytes: Int {
+        cache.values.reduce(0) { acc, img in
+            if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                return acc + cg.bytesPerRow * cg.height
+            }
+            return acc
+        }
+    }
+
     func prune(keeping liveWindows: Set<CGWindowID>) {
         // ⚠️ 2026-09-15:原来这里**无条件** `session &+= 1` —— 而这个函数在每次列表刷新时都会被调用,
         // 于是"开局发出去的预拍"经常在飞回来的路上被判成"上一局",整批丢掉 ✗。

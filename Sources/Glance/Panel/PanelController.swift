@@ -424,9 +424,11 @@ final class PanelController: ObservableObject {
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
         // **一次唤起的全部结算,一行**:语境屏 + App 数 + 按键→上屏(含枚举)。
         // 这三件事永远同时发生,原来占三行(`[T8]` / 面板出现 / `[T6] 按键→上屏`)
-        print(String(format: "[唤起] %@, %d 个 App · 按键→上屏 %.0fms(枚举 %.0fms)",
+        print(String(format: "[唤起] %@, %d 个 App · 按键→上屏 %.0fms(枚举 %.0fms)· 缓存 %.1fMB/%d 张",
                      contextScreen?.localizedName ?? "?", groups.count,
-                     (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs))
+                     (CFAbsoluteTimeGetCurrent() - beganAt) * 1000, enumerateMs,
+                     Double(Snapshotter.shared.cacheMemoryBytes) / 1_048_576,
+                     Snapshotter.shared.cache.count))
         SessionMarks.step("开窗")
         // 首帧:下一次 runloop 回来 ≈ 第一帧已经上屏(`FrameProbe` 那边有精确帧账,这里只求"环节到哪")
         DispatchQueue.main.async {
