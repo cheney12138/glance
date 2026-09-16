@@ -718,6 +718,27 @@ final class PanelController: ObservableObject {
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
 
+    /// 滚轮 / 双指滑动 = 面板里的「Tab」。事件由 **navTap** 转来(会话期才存在的那个 tap,
+    /// 它把滚动吞掉,所以底下的 App 收不到),动作仍走 Tab 那条路(`handle(.next/.prev)`)。
+    private var lastScrollAt: TimeInterval = 0
+    /// 节流。0.22s 是照抄 LumaRing 的,用户实测要求更快 ⇒ 0.10s。
+    private static let scrollInterval: TimeInterval = 0.10
+
+    /// 两条细节照抄 LumaRing 实测经验:惯性滚动不算一次操作;节流(一次滑动会送几十个事件)。
+    /// 吞事件的部分在 navTap —— 这里只管"要不要动选中"。
+    func handleScrollEvent(_ e: NSEvent) {
+        guard panel?.isVisible == true else { return }   // 双保险:面板不在就什么都不做
+        guard e.momentumPhase == [] else { return }
+        let dx = e.scrollingDeltaX, dy = e.scrollingDeltaY
+        let d = abs(dy) >= abs(dx) ? dy : dx
+        guard abs(d) > 0.1 else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastScrollAt > Self.scrollInterval else { return }
+        lastScrollAt = now
+        trace("[T6] 选中(滚轮/双指滑): dx=\(Int(dx)) dy=\(Int(dy)) → \(d < 0 ? "下一组" : "上一组")")
+        handle(d < 0 ? .next : .prev)
+    }
+
     private func moveApp(_ delta: Int) {
         guard !groups.isEmpty else { return }
         traceCost("键盘换选中") {

@@ -49,6 +49,9 @@ final class HotkeyTapCenter {
     private(set) var state: State = .idle
     /// T6 起由面板控制器赋值;T3 阶段默认为打印。
     var onAction: ((Action) -> Void)?
+    /// 会话期间的滚动(由 navTap 转来)。面板是浮层 ⇒ 滚动**只该服务于面板**,
+    /// 所以 navTap 那一发被吞掉,底下的 App 收不到。
+    var onScroll: ((NSEvent) -> Void)?
     /// T7.5:⌘+左键点击(Quartz 全局坐标)。导航态里挂起(Q9-④)
     var onCmdClick: ((CGPoint) -> Void)?
 
@@ -126,7 +129,7 @@ final class HotkeyTapCenter {
         installEventHandler()
         flagsTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.flagsChanged])
         mouseTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.leftMouseDown])
-        navTap = makeTap(at: .cghidEventTap, options: .defaultTap, types: [.keyDown])
+        navTap = makeTap(at: .cghidEventTap, options: .defaultTap, types: [.keyDown, .scrollWheel])
         guard flagsTap != nil else {
             print("[Glance] 触发层创建失败——辅助功能权限未就绪,触发层不工作")
             return
@@ -279,6 +282,12 @@ final class HotkeyTapCenter {
         case .flagsChanged: return handleFlags(event)
         case .leftMouseDown: return handleMouse(event)
         case .keyDown: return handleNavKey(event)
+        case .scrollWheel:
+            // 用户实报:「我滑动的时候, ghostty 的滚轮也跟着动了」——
+            // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap(会话期才有、唯一有吞键权的那个)。
+            // 返回 true = 吞掉。惯性事件也一并吞:只吞非惯性的话,甩动的尾巴会继续滚底下的 App。
+            if let nse = NSEvent(cgEvent: event) { onScroll?(nse) }
+            return true
         default: return false
         }
     }

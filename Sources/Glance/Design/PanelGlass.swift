@@ -121,6 +121,17 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     /// 透明呼吸区宽度,与对应视图的 `.padding(shadowPad…)` 同值
     var pad: CGFloat = 0
 
+    /// 滚轮 / 双指滑动 ⇒ 转交面板控制器,语义**等价于 Tab / ⇧Tab**(CONTEXT.md「走 / 跳」)。
+    /// 为什么放在这个 view:滚动事件由系统按"指针底下的那个窗口"派发,只有它收得到;
+    /// 局部/全局 NSEvent 监听都拿不到,而且这条路**不需要任何权限**
+    /// —— 比做触控板手势识别省掉一整套基础设施(IOKit + 冲突处理 + 多设备 + 睡眠挂起)。
+    @MainActor var onScroll: ((CGFloat, CGFloat, Bool) -> Void)?   // (dx, dy, isMomentum)
+
+    override func scrollWheel(with event: NSEvent) {
+        onScroll?(event.scrollingDeltaX, event.scrollingDeltaY, event.momentumPhase != [])
+        super.scrollWheel(with: event)   // 不消费:保持"只旁观、不吞"的一贯做法
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard pad > 0 else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
