@@ -554,8 +554,30 @@ final class DoubleControlTap {
         guard let screen = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
         }) else { return nil }
-        // rawGroups 已是 Z 序(面板之后才用 orderByMRU 重排) ⇒ 第一个 App 的第一扇窗就是台前那扇
-        return WindowEnumerator.rawGroups(on: screen).first?.windows.first
+        // ⚠️ 不能直接用 WindowEnumerator.rawGroups(on:).first —— 那个数组是按 pid 分组后的
+        // **Dictionary 的值**,而 Swift 里 Dictionary 的顺序是未定义的。实机现形(2026-09-15 用户报):
+        // "不是台前第一个…现在是系统自己选的" —— .first 拿到的是哈希序里的某个 App ✗。
+        //
+        // 所以直接问 CGWindowList:它返回的数组是**前到后**的 Z 序,第一个命中者就是"层级最上面"那扇窗。
+        // 过滤规则与 rawGroups 保持一致(layer==0 / 排除自家窗 / 尺寸合理 / 归属屏恰为目标屏)。
+        guard let infos = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        for info in infos {                       // 顺序遍历 = 从最上面往下,第一个命中即答案
+            guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width > 1, bounds.height > 1,
+                  WindowEnumerator.ownsByContextScreen(bounds, contextScreen: screen)
+            else { continue }
+            let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
+            let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
+            return WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds)
+        }
+        return nil
     }
 
     /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），

@@ -187,7 +187,8 @@ enum WindowEnumerator {
     /// NSScreen.frame 是 AppKit 坐标(主屏左下原点),Y 轴反向。
     /// 交集前必须统一,否则外接屏恒无交集(T4 双屏实机现形)。
     /// `nonisolated`:归属判定要跟着枚举一起下后台(见 `rawGroups`);`NSScreen.screens` 是快照式读取。
-    nonisolated private static func ownsByContextScreen(_ bounds: CGRect, contextScreen: NSScreen) -> Bool {
+    /// 从 private 放开为 internal:落焦要复用同一套「本屏窗」判定,不复制规则。
+    nonisolated static func ownsByContextScreen(_ bounds: CGRect, contextScreen: NSScreen) -> Bool {
         let area = bounds.width * bounds.height
         guard area > 0 else { return false }
         var bestScreen: NSScreen?
