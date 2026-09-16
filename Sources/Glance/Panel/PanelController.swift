@@ -655,7 +655,9 @@ final class PanelController: ObservableObject {
         let nApps = CGFloat(max(groups.count, 1))
         var w = nApps * PanelMetrics.icon + max(nApps - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
         if launchSectionEnabled {
-            w += PanelMetrics.entrySlotWidth + PanelMetrics.iconGap
+            // v14:分割线(一个 gap 格)+ 入口槽(压缩窄格 entrySlotWidth+gap,比 App 小一档)
+            w += PanelMetrics.iconGap
+                + PanelMetrics.entrySlotWidth + PanelMetrics.iconGap
         }
         return NSSize(width: max(w, PanelMetrics.minStripWidth),
                       height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)

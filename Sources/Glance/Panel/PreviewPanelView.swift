@@ -152,15 +152,22 @@ struct PreviewPanelView: View {
     private func launchCell(_ i: Int) -> some View {
         let app = controller.launchables[i]
         let selected = i == controller.launchIndex
-        return Image(nsImage: app.icon)
-            .resizable()
-            .renderingMode(.original)
-            .aspectRatio(contentMode: .fit)
-            .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
-            .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
-            .scaleEffect(selected ? PanelMetrics.iconScale : 1)
-            .offset(y: selected ? -PanelMetrics.iconLift : 0)
+        return ZStack {
+            // **幽灵贴座位**(T84):未启动图标不再裸坐 —— 与主环入口槽的空壳是同一枚贴。
+            // 一致性从这条韵脚来:入口槽 = "还没装图的壳",启动行 = "装了图的壳";
+            // 图标收到壳的 76%,壳露出一圈才读得出"座位"
+            GhostTile()
+                .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
+            Image(nsImage: app.icon)
+                .resizable()
+                .renderingMode(.original)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: PanelMetrics.icon * 0.76, height: PanelMetrics.icon * 0.76)
+                .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
+                .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
+        }
+        .scaleEffect(selected ? PanelMetrics.iconScale : 1)
+        .offset(y: selected ? -PanelMetrics.iconLift : 0)
             .elevation(.icon, active: selected)   // 帧率优先:只有选中的那颗有投影(与主环同款)
             .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
             // **不要托底了**(用户 2026-09-16 裁定):启动行只要"上浮"这一层反馈。

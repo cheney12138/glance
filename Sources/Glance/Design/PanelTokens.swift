@@ -200,10 +200,18 @@ enum PanelMetrics {
     /// 长条最小宽度:单 App 时不至于缩成一枚图标
     static var minStripWidth: CGFloat { k(280) }
 
-    // § 启动区入口槽(方案 E,design/启动区实验台.html 用户拍板 2026-09-16)
-    /// 入口槽宽 = 图标 × 0.72:比图标窄一档,才读得出"这是一道缝,不是一枚 App"
-    static var entrySlotWidth: CGFloat { icon * 0.72 }
-    /// 缝高 = 图标高 × 0.66:上下留白让它退到"记号"的层级,不抢图标
+    // § 启动区(v11):**分割线 + 入口槽**两件套。分割线占一个 gap 格;
+    // 入口槽 v18 定稿:占格收到"两段各约一个 App 间距"(用户口径:可以稍微宽一点点)
+    /// 入口槽占格宽(v18,用户裁定「APP 到竖线、竖线到入口的间距 ≈ 两个 APP 之间的间距,
+    /// 可以稍微宽一点点」):= 点阵记号宽(3.5×entryDot)+ 一个 gap + 4pt 余量。
+    /// 这样 App→竖线 ≈ gap、竖线→点阵 ≈ gap+2,与主环节奏同族,不再出现大空档
+    static var entrySlotWidth: CGFloat { entryDot * 3.5 + iconGap + k(4) }
+    /// **幽灵贴圆角**(T84):走 macOS 图标的比例(≈22.5%) ——
+    /// 幽灵贴(托盘启动行的壳)的立身之本是"读起来是一枚 app 图标形状的壳"
+    static var ghostTileRadius: CGFloat { icon * 0.225 }
+    /// 点阵的**点径**(v9):比窗数点大一档 —— 窗数点是"记账",笔画要轻;
+    /// 这里是"把手记号",要独自撑起整个启动区的入口,太细就"空"了
+    static var entryDot: CGFloat { dot * 1.3 }
 }
 
 // MARK: - 色板(浅 / 深双值)
@@ -297,9 +305,21 @@ enum PanelColors {
     static let puckLip = dynamic(white(0.6), white(0.5))
     /// 入口槽分隔缝的**中段色**(两端收干的渐变由视图承担)。浅色暗、深色亮 —— 与发丝边同一族:
     /// 它要读成"玻璃上的一道记号",不是"画上去的一条线"
-    /// 入口槽点阵在**透镜板上**的颜色(v4):板是亮的(浅=白 .62 / 深=slate 138),
-    /// 记号换深一档的墨色才压得住 —— 常态仍用 `dot`(窗数点同族,坐在玻璃上)
-    static let entryDotOnPlate = dynamic(ink(0.50), ink(0.50))
+    /// 入口槽分割线(v10 定色,用户口径:浅色主体下为**黑**,暗色主体下为**白**,
+    /// 就是为了视觉上有区别)。v11 起它站在入口槽**前面**,负责"区与区之间"
+    static let entrySeparator = dynamic(ink(0.30), white(0.34))
+    /// 分割线的选中/悬停态(v10 预留;v11 分割线不做选中表达,暂不接线)
+    static let entrySeparatorHot = dynamic(ink(0.58), white(0.70))
+    /// **幽灵贴**(T84):托盘启动行的「壳」(v15 起入口槽不用它 —— 那里是纯点阵,无底座)。
+    /// 比 puck 收一档 —— 壳是**座位**,不是主角:坐进去的图标必须比壳先被看见
+    static let ghostTile = dynamic(white(0.42), slate(138, alpha: 0.62))
+    /// 瓷贴发丝边(v14):浅色暗发丝收形;**深色透明** —— 白色受光唇/亮边让瓷贴读起来
+    /// 像一枚 App 窗口(用户裁定去掉),深色的"这是入口"由底色差自己交代
+    static let ghostTileBorder = dynamic(ink(0.10), NSColor.clear)
+    /// 点阵点的**微渐变**(v12):顶亮底沉,一粒点也有了受光方向 ——
+    /// 平涂的灰点是多边形教具,受光的点才是"元件"。深色反向:顶更亮的白
+    static let entryDotTop = dynamic(ink(0.70), white(0.88))
+    static let entryDotBottom = dynamic(ink(0.38), white(0.52))
     /// 窗数点:浅色 ink .55(暗点,坐在亮玻璃上);深色白 .72 ——
     /// 旧版 .65 压在半透明玻璃上实得 L≈175,泛灰不清爽,深色的点必须更亮更纯
     static let dot = dynamic(ink(0.55), white(0.72))

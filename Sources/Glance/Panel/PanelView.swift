@@ -2,6 +2,27 @@ import SwiftUI
 import AppKit
 import GlanceCore
 
+/// **幽灵贴**(T84):托盘启动行的「壳」—— 未启动图标坐在一枚 **app 图标几何**的玻璃贴里。
+/// 立身之本:**图标同尺寸 + macOS 图标同圆角比例**(`ghostTileRadius`),
+/// 材质比 puck 收一档 —— 壳是座位,不是主角。
+/// (曾兼作主环入口槽的底座;v15 用户终审:入口槽**不要底座** —— 无底色/无边框/无软影,
+/// 只留点阵 + 凸透镜放大。任何"贴"在入口槽里都会被读成一枚 App,而它只是个入口。)
+struct GhostTile: View {
+    var body: some View {
+        let r = PanelMetrics.ghostTileRadius
+        return RoundedRectangle(cornerRadius: r, style: .continuous)
+            .fill(PanelColors.ghostTile)
+            .overlay(
+                // 发丝外边:浅色暗发丝收形;深色不给白边(v14)
+                RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .strokeBorder(PanelColors.ghostTileBorder, lineWidth: 1)
+            )
+            // 贴身软影:壳离玻璃 1mm 的那点厚度
+            .shadow(color: Color(nsColor: NSColor.black.withAlphaComponent(0.10)),
+                    radius: 4, x: 0, y: 2)
+    }
+}
+
 /// 切换器主面板 —— 施工契约 = 最新设计 demo「Liquid Glass App Switcher」。
 ///
 /// 本文件是全系统度量与色板的**唯一来源**:`PanelController` 的定位数学与两个面板视图同源,
@@ -110,14 +131,17 @@ struct PanelView: View {
                     if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
                 }
             }
-            // 启动区入口槽(方案 E):一道可以被选中的分隔缝,挂在主环尾部。
-            // 样式与主环同语法 —— 同一格宽节奏、同一个托底胶囊、同一根弹簧,不造第二套视觉
+            // 启动区(v11):**分割线 + 入口槽** —— 分割线负责"区与区之间"(macOS 原生语),
+            // 入口槽负责"这里还有一区"(v9 淡座点阵,但占一整格与普通 App 同节奏)。
+            // v10 的教训记牢:分割线是**加在**入口槽前面的,不是替掉它
             if !controller.launchables.isEmpty {
+                entrySeparator
+                    .frame(width: PanelMetrics.iconGap, height: PanelMetrics.icon)
+                    .allowsHitTesting(false)
                 entrySlot
                     .frame(width: PanelMetrics.entrySlotWidth + PanelMetrics.iconGap, height: PanelMetrics.icon)
                     .contentShape(Rectangle())
                     .onHover { inside in
-                        entryHovered = inside
                         if inside {
                             controller.hoverEntry()
                         } else {
@@ -179,53 +203,43 @@ struct PanelView: View {
         CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
     }
 
-    /// 入口槽本槽:**点阵**(2×3,"这里还有"的把手记号)。
-    /// 常态记号 = 「窗数点」同族色;hover 微放大;
-    /// **选中态 = 凸透镜板 + 点阵放大**(v7 定稿)。**没有任何方向性滑动** ——
-    /// 从左滑、从右滑、从底浮,三案全被用户否决(2026-09-16):选中就是"板子淡入 + 点阵放大",
-    /// 不搬运位置。板子仍常驻层级、由 sel 显式驱动透明度(不用条件插入的 transition,
-    /// 那是 v3"偶尔乱起笔"的根因)。
+    /// 启动区 = **分割线 + 入口槽**两件套(v11,用户裁定"只是让你加个分割线,不是让你把
+    /// 入口删了"—— v10 误读成替换,已纠正)。
+    ///
+    ///   · 分割线:macOS 原生语,浅黑/深白(`entrySeparator`),一根发丝线表达"区与区之间",
+    ///     占一个 gap 宽的格子,两端各得半个 gap,与左右元素等距;
+    ///   · 入口槽:v9 淡座点阵原样回归(幽灵贴淡座 α .30 + 3×3 点阵,选中点亮),
+    ///     但格子从 `entrySlotWidth+gap` 扩成**一整格**(icon + iconGap)—— 挤的病根就是
+    ///     槽比格子窄,壳被逼得溢进邻居的间隙;现在间距有保证,不再挤。
+    private var entrySeparator: some View {
+        RoundedRectangle(cornerRadius: PanelMetrics.hairline / 2, style: .continuous)
+            .fill(PanelColors.entrySeparator)
+            .frame(width: PanelMetrics.hairline, height: PanelMetrics.icon * 0.52)
+    }
+
     private var entrySlot: some View {
         let sel = controller.entrySelected
-        let dot = PanelMetrics.dot
-        return ZStack {
-            // 凸透镜板:主环 puck 的配方(fill + 受光唇 + 底缘内阴影),尺寸收轻(与图标同高、无投影)
-            RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous)
-                .fill(PanelColors.puck)
-                .overlay(
-                    RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous)
-                        .strokeBorder(PanelColors.puckLip, lineWidth: 1)
-                        .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-                )
-                .overlay(alignment: .bottom) {
-                    LinearGradient(colors: [.clear, .black.opacity(0.12)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 6)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous))
-                .frame(width: PanelMetrics.entrySlotWidth, height: PanelMetrics.icon)
-                .opacity(sel ? 1 : 0)
-            // 点阵:未选中坐玻璃(窗数点同族色);选中坐透镜板(板是亮的,点换深一档才压得住)
-            HStack(spacing: dot * 1.9) {
-                ForEach(0..<2, id: \.self) { _ in
-                    VStack(spacing: dot * 1.7) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            Circle()
-                                .fill(sel ? PanelColors.entryDotOnPlate : PanelColors.dot)
-                                .frame(width: dot, height: dot)
-                        }
+        let d = PanelMetrics.entryDot
+        // v17(用户裁定):**竖向 3 行 × 2 列** —— 竖着数三个、横着数两个,
+        // 紧凑居中(行距 = 列距),在 icon 高度内居中
+        return VStack(spacing: d * 1.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(spacing: d * 1.5) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        Circle()
+                            .fill(AnyShapeStyle(
+                                LinearGradient(colors: [PanelColors.entryDotTop, PanelColors.entryDotBottom],
+                                               startPoint: .top, endPoint: .bottom)))
+                            .frame(width: d, height: d)
                     }
                 }
             }
-            .scaleEffect(sel ? 1.22 : (entryHovered ? 1.08 : 1))
         }
-        .frame(width: PanelMetrics.entrySlotWidth, height: PanelMetrics.icon - 10)
-        .animation(MotionPolicy.animation(PanelMotion.entrance), value: entryHovered)
+        .frame(height: PanelMetrics.icon)
+        .scaleEffect(sel ? 1.18 : 1)
         .animation(MotionPolicy.animation(PanelMotion.entrance), value: sel)
         .allowsHitTesting(false)
     }
-
-    /// 入口槽的 hover 视觉状态(纯视图侧;选中语义在 controller.entrySelected)
-    @State private var entryHovered = false
 
     /// 顶缘一道**极窄的**受光边(深色专用)。
     ///
