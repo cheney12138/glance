@@ -620,11 +620,14 @@ final class DoubleControlTap {
         // 就不需要 y 翻转 —— 少一次换算出错的机会（这类翻转是经典 bug 源）。
         let cursor = CGEvent(source: nil)?.location ?? .zero
         guard let from = ids.firstIndex(where: { CGDisplayBounds($0).contains(cursor) }) else { return }
-        let a = CGDisplayBounds(ids[from])
         let b = CGDisplayBounds(ids[(from + 1) % ids.count])
-        // 夹到 2%–98%：永远不落在最边缘（贴边会蹭出 Dock / 触发别的边缘行为）
-        let rx = min(max((cursor.x - a.minX) / a.width, 0.02), 0.98)
-        let ry = min(max((cursor.y - a.minY) / a.height, 0.02), 0.98)
+        // **居中落点**(用户 2026-09-15):指针永远落在那块屏的**正中间**。
+        // 原先按"相对位置"平移(右屏 70% 高处 → 左屏 70% 高处),思路是"像把指针平推过去";
+        // 改动理由是**可预测**:落焦已经把键盘交给目标屏台前的窗之后,
+        // 指针的精确位置不再承载意义,而"永远在正中间"是闭着眼也知道的事。
+        // 顺带不需要再夹 2%–98% —— 屏幕中心天生远离各条边缘。
+        let rx = 0.5
+        let ry = 0.5
         CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
         CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
         // 把"工作上下文"一起搬过去:落焦到那块屏台前的那扇窗 ⇒ 过去就能直接打字。
@@ -636,7 +639,7 @@ final class DoubleControlTap {
             MainActor.assumeIsolated { WindowFocuser.focus(window: w) }   // 监听器在主线程,无需再跳
             landed = " · 落焦 \(w.ownerName)"
         }
-        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (相对 %.0f%% / %.0f%%)%@",
-                     from + 1, (from + 1) % ids.count + 1, rx * 100, ry * 100, landed))
+        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (居中)%@",
+                     from + 1, (from + 1) % ids.count + 1, landed))
     }
 }
