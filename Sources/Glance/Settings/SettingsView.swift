@@ -46,6 +46,8 @@ struct SettingsView: View {
     @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
+    /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
+    @AppStorage("panel.showLaunchables") private var showLaunchables = true
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
     @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
@@ -136,6 +138,11 @@ struct SettingsView: View {
                             desc: "关闭后松开按键即确认,面板随之关闭。",
                             hairline: false) {
                     BeamSwitch(isOn: $pinPanel)
+                }
+                SettingsRow(title: "展示 Dock 常驻应用",
+                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $showLaunchables)
                 }
             }
 

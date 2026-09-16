@@ -89,7 +89,9 @@ struct PanelView: View {
             ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                 IconCell(
                     group: group,
-                    selected: i == controller.appIndex,
+                    // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
+                    // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
+                    selected: i == controller.appIndex && !controller.entrySelected,
                     // 开局第一帧/animation 关掉时给 nil:窗口是复用的,上一局的选中会在新一局开局时
                     // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
                     motion: controller.selectionAnimation(PanelMotion.select)
@@ -100,13 +102,31 @@ struct PanelView: View {
                 // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
                 //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的";
                 // ③ 幅度 = `entryFloatDistance`(选中图标自己的上浮量):读作"轻轻浮上来",不是"钻出来"
-                .offset(y: i == controller.appIndex ? controller.contentEntryRise : 0)
+                .offset(y: i == controller.appIndex && !controller.entrySelected ? controller.contentEntryRise : 0)
                 .contentShape(Rectangle())
                 .onHover { inside in if inside { controller.hoverApp(i) } }
                 // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
                 .onTapGesture {
                     if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
                 }
+            }
+            // 启动区入口槽(方案 E):一道可以被选中的分隔缝,挂在主环尾部。
+            // 样式与主环同语法 —— 同一格宽节奏、同一个托底胶囊、同一根弹簧,不造第二套视觉
+            if !controller.launchables.isEmpty {
+                entrySlot
+                    .frame(width: PanelMetrics.entrySlotWidth + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        entryHovered = inside
+                        if inside {
+                            controller.hoverEntry()
+                        } else {
+                            // 离开槽 = 挂"悬停回退单"(迟滞 0.3s):指针没进托盘就回退到主环选中
+                            controller.scheduleEntryRevert()
+                        }
+                    }
+                    // 点入口槽 = 选中(托盘弹启动行);已选中再点 = no-op(等用户进到某格)
+                    .onTapGesture { if !controller.entrySelected { controller.hoverEntry() } }
             }
         }
         .padding(.horizontal, -PanelMetrics.iconGap / 2) // 首格左、末格右各收回半个间隙
@@ -138,14 +158,74 @@ struct PanelView: View {
                     .strokeBorder(PanelColors.puckBorder, lineWidth: 1)
             )
             .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
-            .offset(x: CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap),
+            .opacity(controller.entrySelected ? 0 : 1)
+            .offset(x: puckOffsetX,
                     // 纵向 = 入场升起(与选中那一格同源同值,所以两者永远同步)
                     y: controller.contentEntryRise)
             .elevation(.puck)
             // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
             // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
             .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
+            .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.entrySelected)
     }
+
+    // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)
+
+    /// 托底落点:**回归主环**(v3 裁定)。v2 曾让托底滑进环尾槽(实心大胶囊罩住空槽,
+    /// 用户实评"丑的要死");v3 起槽的选中由**记号自己**表达(点阵点亮 + 描边胶囊),
+    /// 托底永远只属于主环的 App。历史账:"缩宽"与"滑过去淡出"两案也都试过、都被否
+    /// —— 那是在"槽里没有可见记号"的前提下的困境;有了点阵,落点由记号承担。
+    private var puckOffsetX: CGFloat {
+        CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
+    }
+
+    /// 入口槽本槽:**点阵**(2×3,"这里还有"的把手记号)。
+    /// 常态记号 = 「窗数点」同族色;hover 微放大;
+    /// **选中态 = 凸透镜板 + 点阵放大**(v7 定稿)。**没有任何方向性滑动** ——
+    /// 从左滑、从右滑、从底浮,三案全被用户否决(2026-09-16):选中就是"板子淡入 + 点阵放大",
+    /// 不搬运位置。板子仍常驻层级、由 sel 显式驱动透明度(不用条件插入的 transition,
+    /// 那是 v3"偶尔乱起笔"的根因)。
+    private var entrySlot: some View {
+        let sel = controller.entrySelected
+        let dot = PanelMetrics.dot
+        return ZStack {
+            // 凸透镜板:主环 puck 的配方(fill + 受光唇 + 底缘内阴影),尺寸收轻(与图标同高、无投影)
+            RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous)
+                .fill(PanelColors.puck)
+                .overlay(
+                    RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous)
+                        .strokeBorder(PanelColors.puckLip, lineWidth: 1)
+                        .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+                )
+                .overlay(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, .black.opacity(0.12)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 6)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.scaled(18), style: .continuous))
+                .frame(width: PanelMetrics.entrySlotWidth, height: PanelMetrics.icon)
+                .opacity(sel ? 1 : 0)
+            // 点阵:未选中坐玻璃(窗数点同族色);选中坐透镜板(板是亮的,点换深一档才压得住)
+            HStack(spacing: dot * 1.9) {
+                ForEach(0..<2, id: \.self) { _ in
+                    VStack(spacing: dot * 1.7) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            Circle()
+                                .fill(sel ? PanelColors.entryDotOnPlate : PanelColors.dot)
+                                .frame(width: dot, height: dot)
+                        }
+                    }
+                }
+            }
+            .scaleEffect(sel ? 1.22 : (entryHovered ? 1.08 : 1))
+        }
+        .frame(width: PanelMetrics.entrySlotWidth, height: PanelMetrics.icon - 10)
+        .animation(MotionPolicy.animation(PanelMotion.entrance), value: entryHovered)
+        .animation(MotionPolicy.animation(PanelMotion.entrance), value: sel)
+        .allowsHitTesting(false)
+    }
+
+    /// 入口槽的 hover 视觉状态(纯视图侧;选中语义在 controller.entrySelected)
+    @State private var entryHovered = false
 
     /// 顶缘一道**极窄的**受光边(深色专用)。
     ///

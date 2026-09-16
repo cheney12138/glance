@@ -86,6 +86,100 @@ final class PanelController: ObservableObject {
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
     var expandedCount: Int { currentGroup?.windows.count ?? 0 }
 
+    // MARK: 启动区(方案 E「入口槽」,T83;设计稿 design/启动区实验台.html,用户 2026-09-16 拍板)
+    //
+    // 未启动 App = Dock 常驻且没在跑的(「无窗应用」是**在跑没窗**,这是两个概念,别混)。
+    // 它们不进主环 —— 主环是"切换的世界",一格 = 一个活跃 App;它们住在**入口槽后面的托盘里**:
+    // 托盘本来就承载"选中格的内容"(活跃格 → 窗口卡,入口槽 → 启动图标行),零新增语法。
+    // 常态下面板与今天一个像素不差(没有第二行);Tab 走到主环末尾再按一次 = 选中入口槽。
+    /// Dock 常驻且未在跑的 App(每局 begin 时取一次,按 Dock 顺序)
+    @Published private(set) var launchables: [DockAppsProvider.LaunchableApp] = []
+    /// 入口槽被选中(托盘切到启动行)
+    @Published private(set) var entrySelected = false
+    /// 启动行内的选中下标(nil = 入口槽选中但还没进到行内某格)
+    @Published private(set) var launchIndex: Int?
+
+    /// 启动行 hover 的**帧拍兜底**(与 SheenOverlay 同一哲学:非 key 窗口的事件投递靠不住
+    /// —— 先"哑"后"迟钝"两次实咬 —— 每帧问一次全局指针位置,自己算格子,事件丢了也有帧拍)。
+    /// 几何与 `hoverLaunchAt` 同源;由 PreviewPanelView 里的 TimelineView 每帧驱动,
+    /// 只在启动区活着时跑。与逐格 onHover 并存:两边写同一个 launchIndex,等值守卫不抖。
+    ///
+    /// ⚠️ 本函数运行在 Canvas 的**绘制闭包**里(视图更新中)——**不许在这里直接写 @Published**,
+    /// 否则 Runtime 警告 "Publishing changes from within view updates" 并引发布局递归
+    /// (2026-09-16 实机两连:警告 + `-layoutSubtreeIfNeeded` 递归)。算好下标,异步一跳再落账。
+    func pollLaunchHover() {
+        guard entrySelected, isVisible, !launchables.isEmpty,
+              let previewPanel, previewPanel.isVisible, !previewPanel.ignoresMouseEvents,
+              let glass = previewContentRect() else { return }
+        let p = NSEvent.mouseLocation
+        guard glass.contains(p) else {
+            scheduleEntryRevert()   // 指针不在启动行:挂回退单(已挂则跳过);回到行内由 hover 撤单
+            return
+        }
+        cancelEntryRevert()
+        let (rows, cols) = launchLayout(count: launchables.count)
+        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
+        // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
+        let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
+        let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom)
+        guard x >= 0, yUp >= 0 else { return }
+        let c = max(0, min(cols - 1, Int(x / pitch)))
+        let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
+        let i = r * cols + c
+        guard launchables.indices.contains(i), i != launchIndex else { return }
+        let hovered = i
+        Task { @MainActor in
+            // 异步一跳后核对:这一跳的间隙里可能已关面板/换局
+            guard self.entrySelected, self.launchables.indices.contains(hovered) else { return }
+            self.launchIndex = hovered
+            trace("[T6] 启动区选中(帧拍): [\(hovered + 1)/\(self.launchables.count)] \(self.launchables[hovered].name)")
+        }
+    }
+    /// 启动区这局关了(设置开关/名单为空)—— 视图与键盘路径都靠它短路
+    private var launchSectionEnabled: Bool { !launchables.isEmpty }
+
+    /// 启动区的**悬停回退单**(v9 用户裁定:主环 hover 是粘性的,启动区是悬停预览 ——
+    /// 指针离开槽和启动行,回退到最后选中的主环 app)。
+    /// 迟滞 **0.12s**(v10:0.3s 被用户实评「大概要半秒才回到」太慢)。为什么要有迟滞:
+    /// 槽(长条窗)与启动行(托盘窗)之间隔着一道缝,指针跨窗的路上 onHover(false) 先到,
+    /// 立即回退会把启动行在指针脚下拆掉 —— 永远够不着。
+    /// 判"还在启动区"的区域 = 长条玻璃 ∪ 托盘玻璃 ∪ **两块玻璃之间的缝**(走廊):
+    /// 有了走廊,迟滞收紧到 0.12s 也不会把慢速跨缝的人拦腰截断。
+    private var entryRevertWork: DispatchWorkItem?
+
+    /// 挂/重挂回退单。已挂时跳过(帧拍每帧都会来,不能每帧重置计时)。
+    func scheduleEntryRevert() {
+        guard entryRevertWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.entryRevertWork = nil
+            guard self.entrySelected else { return }
+            let p = NSEvent.mouseLocation
+            let strip = self.panelContentRect()
+            let tray = self.previewContentRect()
+            let inStrip = strip?.contains(p) ?? false
+            let inTray = tray?.contains(p) ?? false
+            // 缝间走廊:两块玻璃之间 y 向的空当,x 在两者的横向范围内
+            var inCorridor = false
+            if let strip, let tray {
+                let x0 = min(strip.minX, tray.minX), x1 = max(strip.maxX, tray.maxX)
+                inCorridor = p.x >= x0 && p.x <= x1 && p.y >= strip.maxY && p.y <= tray.minY
+            }
+            guard !inStrip, !inTray, !inCorridor else { return }   // 指针又回来了 → 不回退
+            self.entrySelected = false
+            self.launchIndex = nil
+            self.updatePreview()
+        }
+        entryRevertWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    func cancelEntryRevert() {
+        entryRevertWork?.cancel()
+        entryRevertWork = nil
+    }
+
     /// 本局内被 H 隐藏的 App。为什么要记:
     /// 隐藏是**异步**的(0.2–0.3s 动画),这期间重枚举**还看得见它的窗** ——
     /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
@@ -106,7 +200,9 @@ final class PanelController: ObservableObject {
         case .pickWindow(let n):
             // 只在"当前 App 的窗口范围"内生效:越界 = 什么都不做
             // (跳到不存在的地方不该有副作用 —— 与"两端夹住、不环绕"同一个道理)
-            guard groups.indices.contains(appIndex),
+            // 启动区里数字键无语义(没有窗可选),静默吞掉
+            guard !entrySelected,
+                  groups.indices.contains(appIndex),
                   groups[appIndex].windows.indices.contains(n) else { return }
             winIndex = n
             trace("[T6] 窗口选中(键盘数字 \(n + 1)): \(groups[appIndex].windows[n].title)")
@@ -168,6 +264,18 @@ final class PanelController: ObservableObject {
         guard generation == beginGeneration else { return }
         let screen = contextScreen
         groups = WindowEnumerator.orderByMRU(raw)
+        // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
+        // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
+        // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
+        // 新一局回到"主环第一格"的语义:上一局若停在启动区,这一局不带过去(主环才是本产品的主世界)
+        entrySelected = false
+        launchIndex = nil
+        if UserDefaults.standard.object(forKey: "panel.showLaunchables") as? Bool ?? true {
+            let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+            launchables = DockAppsProvider.launchables(excluding: running)
+        } else {
+            launchables = []
+        }
         // **唤起落点**(2026-09-14 做成开关;用户口径:"默认肯定是用 macOS 原生的习惯,不要调教用户"):
         //   开(**默认**)= 直接落在"上一个 App" —— 一次 ⌘Tab 就完成一次切换,这是 macOS 原生节奏;
         //   关        = 落在第一个(当前 App),要再按一次 Tab 才切走 —— 留给"先唤起看清列表再决定"的人。
@@ -252,6 +360,13 @@ final class PanelController: ObservableObject {
         trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
             let c = previewContentSize(for: g)
             return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
+        }
+        // 启动行(方案 E)也是托盘的一种内容:它可能是本局**最大**的托盘(未启动比某组的窗多),
+        // 不进 max 的话,选中入口槽那一下就会把托盘窗口撑到中途改尺寸
+        if launchSectionEnabled {
+            let c = previewContentSize(launchCount: launchables.count)
+            trayMaxContentSize = NSSize(width: max(trayMaxContentSize.width, c.width),
+                                        height: max(trayMaxContentSize.height, c.height))
         }
         // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
         // 动效状态**只在变化时打**:它在一台机器上是常量,每局重印就是噪音
@@ -478,6 +593,9 @@ final class PanelController: ObservableObject {
         // 不拦的话枚举回来会把面板在放弃之后又冒出来
         beginGeneration &+= 1
         removeOutsideClickMonitor()
+        cancelEntryRevert()
+        entrySelected = false
+        launchIndex = nil
         isVisible = false
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
@@ -532,13 +650,15 @@ final class PanelController: ObservableObject {
 
     /// 长条内容尺寸 = 图标 78 × n + 间距 6 + 左右缘 26;高 = 上下缘 22 + 图标 78
     /// 预览托盘不计入住——它是独立浮窗,中心正对选中 App 头顶
+    /// 启动区入口槽(方案 E)挂在主环尾部:一道可以被选中的分隔缝,占一格的宽
     func contentSize() -> NSSize {
         let nApps = CGFloat(max(groups.count, 1))
-        let w = max(
-            nApps * PanelMetrics.icon + max(nApps - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2,
-            PanelMetrics.minStripWidth
-        )
-        return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+        var w = nApps * PanelMetrics.icon + max(nApps - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        if launchSectionEnabled {
+            w += PanelMetrics.entrySlotWidth + PanelMetrics.iconGap
+        }
+        return NSSize(width: max(w, PanelMetrics.minStripWidth),
+                      height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
     }
 
     /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 shadowPadStrip)。
@@ -563,7 +683,7 @@ final class PanelController: ObservableObject {
     }
 
     private func makeChromePanel() -> NSPanel {
-        let p = NSPanel(
+        let p = GlancePanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -600,8 +720,41 @@ final class PanelController: ObservableObject {
     /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源。
     /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组
     func previewContentSize(for group: AppGroup?) -> NSSize {
-        guard let g = group, !g.windows.isEmpty else { return .zero }
-        let n = g.windows.count
+        previewContentSize(cards: group?.windows.count ?? 0)
+    }
+
+    /// 启动行(方案 E v2)的托盘尺寸:**主环的图标节距**(icon + iconGap),不是窗口卡的壳 ——
+    /// v1 借窗口卡壳被用户实评否决(「丑的要死」:一枚小图标浮在大灰卡上,空得难受)。
+    /// v2 = 第二条主环,尺寸数学与主环同源
+    func previewContentSize(launchCount n: Int) -> NSSize {
+        guard n > 0 else { return .zero }
+        let (rows, cols) = launchLayout(count: n)
+        let c = CGFloat(cols)
+        let r = CGFloat(max(rows, 1))
+        return NSSize(
+            width: c * (PanelMetrics.icon + PanelMetrics.iconGap) - PanelMetrics.iconGap
+                + PanelMetrics.trayPadX * 2,
+            height: PanelMetrics.trayPadTop + r * PanelMetrics.icon
+                + max(r - 1, 0) * PanelMetrics.trayRowGap + PanelMetrics.trayPadBottom
+        )
+    }
+
+    /// 启动行的行 × 列:与 `trayLayout` 同一套"放得下的最少行数"逻辑,只是格距换成图标节距。
+    /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
+    func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
+        guard n > 0 else { return (0, 1) }
+        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap
+        for r in 1...min(n, PanelMetrics.trayMaxRows) {
+            let c = (n + r - 1) / r
+            if CGFloat(c) * pitch + padW <= trayRoomW + 0.5 { return (r, c) }
+        }
+        let r = min(n, PanelMetrics.trayMaxRows)
+        return (r, (n + r - 1) / r)
+    }
+
+    private func previewContentSize(cards n: Int) -> NSSize {
+        guard n > 0 else { return .zero }
         // 一行摆不下就换行:宽度按**实际列数**算(不是总窗数),高度按行数叠加。
         // 行/列只从 `trayLayout` 出 —— 与 PreviewPanelView 的网格同源,不许各算各的
         let (rows, cols) = trayLayout(count: n)
@@ -617,7 +770,10 @@ final class PanelController: ObservableObject {
         )
     }
 
-    func previewContentSize() -> NSSize { previewContentSize(for: currentGroup) }
+    /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
+    func previewContentSize() -> NSSize {
+        entrySelected ? previewContentSize(launchCount: launchables.count) : previewContentSize(for: currentGroup)
+    }
 
     /// 托盘**窗口**尺寸:本局最大布局 + 两侧呼吸区。
     /// 用它(而不是当前组的内容)是为了让窗口在整局里**只 setFrame 一次**(病例见 `trayMaxContentSize`)。
@@ -666,7 +822,8 @@ final class PanelController: ObservableObject {
     ///
     /// 现在把约束换成玻璃:只要玻璃放得下(会话上限保证了这一点),**一定居中且不出屏**。
     private func previewFrame() -> NSRect? {
-        guard expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
+        // 入口槽选中时托盘显示启动行,与"当前组有窗"互斥地撑起托盘
+        guard entrySelected || expandedCount > 0, let panel, let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
         let contentW = previewContentSize().width
         let inset = (size.width - contentW) / 2 // 内容在窗口里的左右留白
@@ -721,7 +878,15 @@ final class PanelController: ObservableObject {
     /// 长条(图标)不走这条路:本局 App 数不变,长条宽度就是常量,图标不会在指针底下来回挪。
     private func resyncSelectionUnderPointer() {
         guard isVisible, pointerHasSpoken() else { return } // 指针没挪过窝就别抢选中(与 hover 同一道闸)
-        guard let g = currentGroup, g.windows.count > 1 else { return }
+        // 托盘两种内容(窗口卡 / 启动图标行)共用同一套卡壳几何,只有名单不同 —— 几何算一份
+        let count: Int; let names: [String]
+        if entrySelected {
+            count = launchables.count; names = launchables.map(\.name)
+        } else if let g = currentGroup {
+            count = g.windows.count; names = g.windows.map(\.title)
+        } else { return }
+        // 同上:只有一格时也要能选中它(循环才需要 > 1)
+        guard count > 0 else { return }
         let p = NSEvent.mouseLocation
         // 窗框 ≠ 玻璃(窗口按整局最大布局开,内容底部居中)→ 必须用内容矩形
         guard let glass = previewContentRect(), glass.contains(p) else { return }
@@ -732,10 +897,16 @@ final class PanelController: ObservableObject {
         guard x >= 0, y >= 0, y <= PanelMetrics.thumbH else { return }
         let pitch = PanelMetrics.thumbW + PanelMetrics.thumbGap
         let i = Int(x / pitch)
-        guard i >= 0, i < g.windows.count, x - CGFloat(i) * pitch <= PanelMetrics.thumbW else { return }
-        guard i != winIndex else { return }
-        winIndex = i
-        trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
+        guard i >= 0, i < count, x - CGFloat(i) * pitch <= PanelMetrics.thumbW else { return }
+        if entrySelected {
+            guard i != launchIndex else { return }
+            launchIndex = i
+            trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
+        } else {
+            guard i != winIndex else { return }
+            winIndex = i
+            trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(count)] \(names[i])")
+        }
     }
 
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
@@ -772,6 +943,12 @@ final class PanelController: ObservableObject {
     private func moveApp(_ delta: Int) {
         guard !groups.isEmpty else { return }
         traceCost("键盘换选中") {
+            // 启动区**不在 Tab 环里**(T83 用户裁定:「tab 只能是切换 app 的语义,` 才是切换窗口」)。
+            // 在启动区里按 Tab = 回到主环并照常切换;到达启动区只有 hover/点击
+            if entrySelected {
+                entrySelected = false
+                launchIndex = nil
+            }
             appIndex = (appIndex + delta + groups.count) % groups.count
             winIndex = 0
             // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
@@ -834,7 +1011,9 @@ final class PanelController: ObservableObject {
     /// 为什么改:原来的 ←/→ 是"在当前 App 的窗口间移动",而这正是 ` 的职责 —— 功能重复;
     /// 走组的职责在 Tab。把 ←/→ 换成"跳到两端",是最便宜的一条效率提升(H/M/L 的心智)。
     private func jumpToGroupEdge(_ target: Int) {
-        guard groups.indices.contains(target), target != appIndex else { return }   // 两端 = 夹住,不环绕
+        guard groups.indices.contains(target), target != appIndex || entrySelected else { return }   // 两端 = 夹住,不环绕
+        entrySelected = false        // ←/→ 只在主环里跳(启动区归 Tab/hover,见 moveApp)
+        launchIndex = nil
         appIndex = target
         winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
         trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
@@ -844,6 +1023,24 @@ final class PanelController: ObservableObject {
         // 权责冻结(用户拍板):App 移动归 Tab 与指针,←→ 只管展开层的窗;
         // 组内 ≤1 窗时 ←→ 无语义,静默吞掉
         let n = expandedCount
+        // 启动行有它自己的"窗"序列:` = 行内循环(与主环的 ` 同一个心智:在当前位置前后挪一格)。
+        // 用户实报「未启动的app不能用`切换选中」—— 启动行的成员本来就是**它自己的内容**,
+        // 拿"它不是窗"把它挡掉是把代码的分类当成了用户的分类。
+        if entrySelected {
+            let m = launchables.count
+            // ⚠️ 不能写 m > 1:只剩一个待启动 App 时(用户实报),` 会被直接 return 掉,
+            // launchIndex 永远停在 nil ⇒ 那一格**无法被选中**。循环需要 2 个以上,
+            // 但"选中"只需要 1 个 —— 这两件事不是同一件。
+            guard m > 0 else { return }
+            if m == 1 { launchIndex = 0; trace("[T6] 启动行选中(`): [1/1] \(launchables[0].name)"); return }
+            // launchIndex == nil(只在入口槽、还没进到行里)时,第一下 ` 落到第一格;
+            // 否则按 delta 在行内循环,两个方向都取正模
+            let cur = launchIndex
+            let next = cur == nil ? 0 : (((cur! + delta) % m) + m) % m
+            launchIndex = next
+            trace("[T6] 启动行选中(`): [\(next + 1)/\(m)] \(launchables[next].name)")
+            return
+        }
         guard n > 1 else { return }
         // 补记账(2026-09-15):日志里出现过一局 `长帧 4(6%)`,全部落在连按 ←→ 的那 3 秒里 ——
         // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
@@ -905,7 +1102,8 @@ final class PanelController: ObservableObject {
     func hoverApp(_ i: Int) {
         // 选中没变 = 同块地砖上挪指针,免工——onHover 每像素都发声,不设闸就是现拍风暴
         // (实机现形:日志被系统 QUARANTINED 截流)
-        guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex else { return }
+        // entrySelected 也要放行:指针从启动区挪回主环,等于选回主环
+        guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex || entrySelected else { return }
         traceCost("指针换选中") {
             // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
             // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
@@ -914,10 +1112,56 @@ final class PanelController: ObservableObject {
             // 拆账(2026-09-15):`指针换选中` 中位 12ms × 123 次,是现在最大的主线程开销 ✗。
             // 第一轮只拆了"拍图 / 托盘更新",结果**两笔都没超过 2ms** —— 说明钱不在这两处 ✗,
             // 于是把仅剩的候选(两个 @Published 写入,会同步惊动整棵观察者)也单独记一笔。
-            traceCost("  ↳写状态") { appIndex = i; winIndex = 0 }
+            traceCost("  ↳写状态") { entrySelected = false; launchIndex = nil; appIndex = i; winIndex = 0 }
             traceCost("  ↳拍图") { refreshSnapshotForSelection() }
             traceCost("  ↳托盘更新") { updatePreview() }
         }
+    }
+
+    /// 入口槽 hover(方案 E):选中它 = 托盘切到启动行。已在启动区里再 hover 槽 = no-op
+    /// (行内高亮保留,指针只是路过)。
+    func hoverEntry() {
+        cancelEntryRevert()
+        guard hoverAllowedByGate(), !entrySelected else { return }
+        traceCost("指针换选中") {
+            trace("[T6] 选中(指针 hover): 入口槽(启动区,共 \(launchables.count) 个未启动)")
+            traceCost("  ↳写状态") { entrySelected = true; launchIndex = nil }
+            traceCost("  ↳托盘更新") { updatePreview() }
+        }
+    }
+
+    /// 启动行内 hover:只挪高亮(内容已在托盘里),不重排窗框
+    /// 指针在启动行内的位置 → 格子下标。**由位置推导,不依赖 hover 事件**。
+    ///
+    /// 病例(2026-09-16 实机日志):hover 到网易云后再把指针移向微信,`[T6] 启动区 hover` 再也没有输出
+    /// —— 事件根本没送达。这是本仓库记过的一类病(见 `resyncSelectionUnderPointer`):SwiftUI 的
+    /// tracking area 在**视图于指针底下改变外观/重排**之后就哑了,不补发 hover。
+    /// 当初那份补丁只覆盖了窗口卡,启动行是新代码、没继承到。
+    ///
+    /// `onContinuousHover` 不走 tracking area:指针只要在行内移动就持续回调**位置**,我们自己算格子,
+    /// 因此不存在"事件丢失"。位置 → 下标是纯几何:x 按格距分列,y 按行高分行。
+    func hoverLaunchAt(x: CGFloat, y: CGFloat, count: Int, cols: Int, rows: Int) {
+        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
+        let c = max(0, min(cols - 1, Int(floor(x / pitch))))
+        let r = max(0, min(max(rows - 1, 0), Int(floor(y / rowH))))
+        let i = r * cols + c
+        guard launchables.indices.contains(i) else { return }
+        if !entrySelected { entrySelected = true }
+        launchIndex = i
+        trace("[T6] 启动区选中(位置推导): [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
+    }
+
+    func hoverLaunch(_ i: Int) {
+        // hover 到启动行某一格,**本身就意味着**入口槽是选中的 —— 不能再要求 entrySelected 为真:
+        // 指针从入口槽(面板)走到托盘是跨窗口的一段路,状态可能已被清掉,于是"鼠标再移动也选不中"
+        // (用户实报)。这里直接把它补回来,而不是让 hover 去依赖一段可能丢失的记忆。
+        cancelEntryRevert()
+        guard hoverAllowedByGate(), launchables.indices.contains(i) else { return }
+        entrySelected = true
+        guard launchIndex != i else { return }
+        trace("[T6] 启动区 hover: [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
+        launchIndex = i
     }
 
     func hoverWindow(_ i: Int) {
@@ -1006,7 +1250,8 @@ final class PanelController: ObservableObject {
     /// (避免"走了还是只关窗"的歧义),但实际用起来:关一扇窗、最小化一扇窗之后往往还想接着动
     /// 别的窗 —— 面板一消失,每动一次就要重新 ⌘Tab 开一局。现在动作做完就重枚举刷新,面板不散。
     private func destructive(_ op: DestructiveOp) {
-        guard groups.indices.contains(appIndex) else { return }
+        // 启动区里处决键无对象:appIndex 停在上一个活跃 App,动它 = 误杀,静默吞掉
+        guard !entrySelected, groups.indices.contains(appIndex) else { return }
         let g = groups[appIndex]
         switch op {
         case .quit:
@@ -1146,7 +1391,38 @@ final class PanelController: ObservableObject {
 
     /// 确认 = 唯一的"生效"动作:聚焦选中的那一扇窗(CONTEXT.md「确认」)。
     /// 到达路径:未钉住时松 ⌥;钉住时 Enter。
+    /// 点启动行某一格 = 启动它并散场。
+    ///
+    /// **刻意不走 hoverLaunch/confirmSelection**:指针要从面板的入口槽挪到托盘(另一个窗口),
+    /// 中间会经过"离开面板"的一段,`entrySelected` 可能已被复位 ⇒ `hoverLaunch` 的
+    /// `guard entrySelected` 挡下 ⇒ `launchIndex` 留不下来 ⇒ `confirmSelection` 静默 no-op。
+    /// 用户实报「那俩 app 也点不了」就是这么来的 —— 点击必须自带它的对象,不靠 hover 的记忆。
+    func launchAt(_ i: Int) {
+        guard launchables.indices.contains(i) else { return }
+        let app = launchables[i]
+        glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+        DockAppsProvider.launch(at: app.path)
+        dismiss(reason: "确认(启动 \(app.name))")
+    }
+
     func confirmSelection() {
+        // 启动区(方案 E):入口槽选中 = 没有可生效之物(它在等用户进到某格),no-op;
+        // 启动图标选中 = **启动并激活**,面板即关(与「确认」的"生效即散场"同款)。
+        // 启动失败的兜底在 DockAppsProvider.launch 的日志里 —— 面板已经关了,不回头等
+        if entrySelected {
+            // ⚠️ 这里**不能**裸 return:用户实报「选中这个之后, 松手, 不消失了」。
+            // 松开触发键 = 本局结束 ⇒ **所有**确认路径都必须散场(生效即散场)。
+            // 只选中入口槽、还没进到某格 = 没有可生效之物,但面板照样要关。
+            guard let j = launchIndex, launchables.indices.contains(j) else {
+                dismiss(reason: "确认(入口槽,未进到某格)")
+                return
+            }
+            let app = launchables[j]
+            glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+            DockAppsProvider.launch(at: app.path)
+            dismiss(reason: "确认(启动 \(app.name))")
+            return
+        }
         guard groups.indices.contains(appIndex) else {
             dismiss(reason: "确认(空列表)")
             return
@@ -1231,4 +1507,24 @@ extension NSRect {
             && abs(size.width - other.size.width) < eps
             && abs(size.height - other.size.height) < eps
     }
+}
+
+// MARK: - 面板窗口
+
+/// **必须能成为 key 的面板**(2026-09-16 定案,实机证据)。
+///
+/// 病(用户实报两条,实为同一个根因):
+///   ① 托盘里的启动格点不动 —— Xcode 控制台连续三行
+///      `-[NSWindow makeKeyWindow] … returned NO from -[NSWindow canBecomeKeyWindow]`,
+///      而 `[T84]` 的诊断日志**一行都没有** ⇒ 点击到了 AppKit,却没到 SwiftUI 的手势;
+///   ② 指针在启动行/托盘上移动后要**等好几秒**才换选中 ——
+///      AppKit 只把 `mouseMoved` 派发给 **key window**。
+///
+/// 根因:面板用 `.borderless` 造型,而无边框窗口的 `canBecomeKey` 默认就是 **false** ✗。
+/// `.nonactivatingPanel` 的正确用法恰恰相反:**能成为 key,但点它不激活 App**
+/// (AltTab / DockDoor 等先例都是这么配的)。所以这里显式打开 `canBecomeKey`,
+/// 同时把 `canBecomeMain` 关掉 —— 它是一个浮在别人上面的工具面板,不是主窗口。
+final class GlancePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }

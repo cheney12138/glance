@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>启动区实验台 v2 · 入口槽 + 托盘复用</title>
+<style>
+  :root{
+    --icon: 92px; --gap: 20px; --puck-light: rgba(255,255,255,.62); --puck-dark: rgba(150,156,165,.92);
+    --ink:#1c1f24; --ink2:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 44px;background:#f6f7f9;color:var(--ink);
+       font:13px/1.5 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  .hint{color:var(--ink2);font-size:12px;margin:0 0 16px}
+  fieldset{border:1px solid #dfe3e8;border-radius:10px;padding:12px 14px;margin:0 0 16px;background:#fff}
+  legend{font-size:12px;color:var(--ink2);padding:0 6px}
+  .row{display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap}
+  .row label{width:96px;color:var(--ink2);font-size:12px}
+  input[type=range]{width:170px}
+  .val{font-variant-numeric:tabular-nums;min-width:34px}
+  select{font:inherit}
+  .cap{font-size:12px;color:var(--ink2);margin:16px 0 2px}
+  .cap b{color:var(--ink)}
+
+  .strip{border-radius:20px;padding:12px 20px;margin:8px 0 4px;position:relative}
+  .strip.light{background:linear-gradient(180deg,#fbfcfd,#eef1f5);box-shadow:0 1px 0 #fff inset,0 8px 24px rgba(16,24,40,.10)}
+  .strip.dark {background:linear-gradient(180deg,#3a4048,#22262c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+
+  .icons{display:flex;align-items:center;justify-content:center;gap:var(--gap);padding:6px 0}
+  .slot{position:relative;width:calc(var(--icon) + 14px);display:flex;justify-content:center;flex:none}
+  .tile{width:var(--icon);height:var(--icon);border-radius:24px;display:flex;align-items:center;justify-content:center;
+        font-size:30px;font-weight:700;color:#fff;box-shadow:0 4px 10px rgba(16,24,40,.18)}
+  .slot .dot{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);
+        width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.55}
+  .slot.sel::before{content:"";position:absolute;left:-2px;right:-2px;top:-11px;bottom:-11px;border-radius:22px;
+        background:var(--puck,var(--puck-light));box-shadow:0 5px 7px rgba(16,24,40,.14)}
+  .slot.sel .tile{transform:translateY(-9px) scale(1.10)}
+
+  /* 入口槽:一格宽,中间一道竖向收干的细缝;hover/选中时整格托底 */
+  .slot.entry{width:calc(var(--icon)*.72)}
+  .slot.entry .seamv{width:1px;height:calc(var(--icon)*.66);
+        background:linear-gradient(180deg,transparent,rgba(15,20,30,.28),transparent)}
+  .strip.dark .slot.entry .seamv{background:linear-gradient(180deg,transparent,rgba(255,255,255,.22),transparent)}
+  .slot.entry.sel::before{left:6px;right:6px;top:-9px;bottom:-9px;border-radius:18px}
+  .slot.entry .dockglyph{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);
+        width:26px;height:3px;border-radius:2px;background:currentColor;opacity:.4}
+
+  /* 托盘(展开层):玻璃板 + 启动图标卡网格 */
+  .tray{border-radius:18px;padding:16px 18px 12px;margin:0 auto 6px;width:fit-content;max-width:920px}
+  .tray.light{background:linear-gradient(180deg,#fbfcfd,#eef1f5);box-shadow:0 8px 24px rgba(16,24,40,.12)}
+  .tray.dark {background:linear-gradient(180deg,#3a4048,#22262c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .tgrid{display:grid;grid-template-columns:repeat(var(--cols,6),1fr);gap:12px}
+  .tcard{width:128px;border-radius:14px;padding:10px 8px 7px;display:flex;flex-direction:column;align-items:center;gap:7px;
+        background:#eceff3;border:.5px solid rgba(15,20,30,.12)}
+  .tray.dark .tcard{background:#2b3037;border-color:rgba(255,255,255,.10)}
+  .tcard .it{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+        font-size:22px;font-weight:700;color:#fff}
+  .tcard .nm{font-size:11px;color:var(--ink2);max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tray.dark .tcard .nm{color:#aeb6c0}
+  .tcard.selc{box-shadow:0 0 0 2px #0a84ff,0 6px 16px rgba(10,132,255,.25);transform:scale(1.045)}
+  .twrap{display:flex;justify-content:center}
+
+  /* 方案 C(对比):同排内联,启动格缩距 */
+  .slot.mini .tile{width:calc(var(--icon)*.72);height:calc(var(--icon)*.72);border-radius:18px;font-size:22px}
+  .slot.mini{width:calc(var(--icon)*.72 + 10px)}
+  .vseam{align-self:center;width:1px;height:56px;margin:0 2px;
+        background:linear-gradient(180deg,transparent,rgba(15,20,30,.28),transparent)}
+  .strip.dark .vseam{background:linear-gradient(180deg,transparent,rgba(255,255,255,.22),transparent)}
+  .warn{font-size:12px;color:#b45309;margin:6px 0 0}
+  .strip.dark ~ .warn{color:#d29922}
+</style>
+</head>
+<body>
+<h1>启动区实验台 v2 · 入口槽 + 托盘复用(方案 E)</h1>
+<p class="hint">主环与今天<b>完全一样</b>;环尾多一个<b>入口槽</b>(竖向收干的分隔缝,可以被选中)。选中/hover 入口槽 → <b>展开层(托盘)</b>弹出启动图标行 —— 托盘本来就是"选中格的内容":活跃格显示窗口卡,入口槽显示未启动 App。启动行内点选 = 直接启动,<b>无任何提示弹窗</b>。方案 C(同排内联缩距)附在下面只作对比。</p>
+
+<fieldset>
+  <legend>参数</legend>
+  <div class="row">
+    <label>活跃 App 数</label><input id="na" type="range" min="3" max="14" value="8"><span class="val" id="va">8</span>
+    <label style="width:90px">未启动数</label><input id="nl" type="range" min="2" max="12" value="10"><span class="val" id="vl">10</span>
+    <label style="width:60px">外观</label>
+    <select id="ap"><option value="light">浅色</option><option value="dark">深色</option></select>
+    <label style="width:60px">状态</label>
+    <select id="st">
+      <option value="idle">常态(入口槽未选中)</option>
+      <option value="entry" selected>入口槽选中(托盘弹出启动行)</option>
+      <option value="inside">启动行内第 1 格选中</option>
+    </select>
+  </div>
+</fieldset>
+
+<div class="cap"><b>方案 E</b> —— 常态零增重;启动行住在托盘里,会换行,数量反转无压力</div>
+<div id="wrapE"></div>
+
+<div class="cap" style="margin-top:18px"><b>方案 C(对比,不推荐)</b> —— 同排内联:启动格缩距挤进同一行,单层薄,但宽度全吃 sessionCap</div>
+<div id="wrapC"></div>
+
+<script>
+const ACTIVE = [["M","#4a7dff"],["IJ","#1a1d29"],["G","#111318"],["C","#e8eaed","dark"],
+  ["S","#ff6a3d"],["DG","#e943b9"],["W","#2fc757"],["Z","#1f6ff0"],["T","#23b3c7"],["Q","#12b7a6"],["N","#e8b73a"],["X","#7a5cff"],["R","#ff5a4e"],["V","#5b8def"]];
+const LAUNCH = [["Fg","#a259ff","Figma"],["Sk","#f7b32b","Sketch"],["No","#f5f5f5","Notion","dark"],
+  ["Dk","#2496ed","Docker"],["Wp","#ff5a4e","Warp"],["Ob","#7c5cff","Obsidian"],["Ar","#ff6b81","Arc"],
+  ["Th","#4aa3ff","Things"],["Bd","#e0442e","Basecamp"],["Lk","#0a66c2","LINE"],["Pp","#67b5f9","Proxyman"],["Gh","#24292e","GitHub"]];
+let na=8, nl=10, appearance="light", state="entry";
+
+function el(cls, parent){ const d=document.createElement("div"); d.className=cls; if(parent) parent.appendChild(d); return d; }
+function tile(a, cls, parent){ const d=el(cls||"tile", parent); d.style.background=a[1];
+  if(a[3]==="dark"||a[1]==="#e8eaed"||a[1]==="#f5f5f5"){d.style.color="#1c1f24";d.style.border=".5px solid rgba(15,20,30,.12)"}
+  d.textContent=a[0]; return d; }
+
+function renderE(){
+  const wrap=document.getElementById("wrapE"); wrap.innerHTML="";
+  if(state!=="idle"){
+    const tray=el("tray "+appearance, wrap);
+    const tw=el("twrap", tray);
+    const grid=el("tgrid", tw);
+    const cols = Math.min(nl, Math.ceil(nl/Math.ceil(nl/6)));
+    grid.style.setProperty("--cols", cols);
+    LAUNCH.slice(0,nl).forEach((a,i)=>{ const c=el("tcard", grid);
+      if(state==="inside" && i===0) c.classList.add("selc");
+      const it=el("it", c); it.style.background=a[1];
+      if(a[3]==="dark"){it.style.color="#f5f5f5"} if(a[1]==="#f5f5f5"){it.style.color="#1c1f24";it.style.border=".5px solid rgba(15,20,30,.12)"}
+      it.textContent=a[0];
+      const nm=el("nm", c); nm.textContent=a[2]; });
+  }
+  const strip=el("strip "+appearance, wrap);
+  const row=el("icons", strip);
+  ACTIVE.slice(0,na).forEach(a=>{ const s=el("slot", row); tile(a,"",s);
+    const d=el("dot", s); });
+  const entry=el("slot entry"+(state==="entry"?" sel":""), row);
+  el("seamv", entry); const g=el("dockglyph", entry);
+}
+
+function renderC(){
+  const wrap=document.getElementById("wrapC"); wrap.innerHTML="";
+  const strip=el("strip "+appearance, wrap);
+  const row=el("icons", strip);
+  ACTIVE.slice(0,na).forEach(a=>{ const s=el("slot", row); tile(a,"",s); const d=el("dot",s); });
+  const seam=el("vseam", row);
+  LAUNCH.slice(0,nl).forEach((a,i)=>{ const s=el("slot mini", row); tile(a,"",s); });
+  const pitchA = na*(92+20)+2*30+12, pitchL = nl*(92*.72+10)+8;
+  const cap = Math.min(1.2, 1488/(pitchA+pitchL));
+  const w=el("warn", wrap);
+  w.textContent = "—— 8 活跃 + "+nl+" 未启动时,整块面板约缩到 "+Math.round(cap*100)+"%(1488pt 可用宽 ÷ 内容宽);活跃数越多压得越狠。";
+}
+
+function render(){
+  document.documentElement.style.setProperty("--puck", appearance==="dark"?"var(--puck-dark)":"var(--puck-light)");
+  renderE(); renderC();
+}
+document.getElementById("na").addEventListener("input",e=>{na=+e.target.value;document.getElementById("va").textContent=na;render()});
+document.getElementById("nl").addEventListener("input",e=>{nl=+e.target.value;document.getElementById("vl").textContent=nl;render()});
+document.getElementById("ap").addEventListener("change",e=>{appearance=e.target.value;render()});
+document.getElementById("st").addEventListener("change",e=>{state=e.target.value;render()});
+render();
+</script>
+</body>
+</html>

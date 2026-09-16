@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>入口槽实验台 2 · 点阵 / 网格:可见性与选中展开</title>
+<style>
+  :root{
+    --icon: 92px; --gap: 20px;
+    --ink:#1c1f24; --ink2:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 44px;background:#f6f7f9;color:var(--ink);
+       font:13px/1.5 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  h2{font-size:13px;margin:22px 0 2px}
+  .hint{color:var(--ink2);font-size:12px;margin:0 0 14px}
+  fieldset{border:1px solid #dfe3e8;border-radius:10px;padding:12px 14px;margin:0 0 16px;background:#fff}
+  legend{font-size:12px;color:var(--ink2);padding:0 6px}
+  label{color:var(--ink2);font-size:12px;display:flex;align-items:center;gap:6px}
+
+  .strip{border-radius:20px;padding:12px 22px;margin:8px 0 2px;position:relative;
+         display:inline-flex;align-items:center;justify-content:center;gap:var(--gap);
+         vertical-align:top; margin-right:14px}
+  .glassL{background:linear-gradient(180deg,#fbfcfd,#eef1f5);box-shadow:0 1px 0 #fff inset,0 8px 24px rgba(16,24,40,.10)}
+  .glassD{background:linear-gradient(180deg,#3a4048,#22262c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .white {background:#ffffff;box-shadow:0 0 0 1px #e3e6ea,0 8px 24px rgba(16,24,40,.08)}
+
+  .tile{width:var(--icon);height:var(--icon);border-radius:24px;flex:none;
+        display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;
+        box-shadow:0 4px 10px rgba(16,24,40,.18)}
+  .slot{width:64px;height:var(--icon);flex:none;position:relative;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;border-radius:15px}
+
+  /* 记号色 = 「窗数点」同族:浅 ink .55 / 深 white .72(浅玻璃上被日日验证的可见度) */
+  .glassL, .white {--mark: rgba(28,31,36,.55); --mark-h: rgba(28,31,36,.80); --accent:#0a84ff}
+  .glassD         {--mark: rgba(255,255,255,.72);--mark-h: rgba(255,255,255,.92);--accent:#3f9bff}
+  /* 纯白底上强调色略深一档,不然蓝点发飘 */
+  .white {--accent:#0069d9}
+
+  /* 凹槽垫底(开关):极淡一圈"槽",任何壁纸上记号都有落点 */
+  .groove .slot{background:rgba(15,20,30,.05);box-shadow:inset 0 0 0 .5px rgba(15,20,30,.07)}
+  .glassD.groove .slot, .strip.dark0.groove .slot{background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.07)}
+  .white.groove .slot{background:rgba(15,20,30,.04)}
+
+  .dots6{display:grid;grid-template-columns:repeat(2,3.5px);gap:9px 10px;transition:gap .18s}
+  .dots6 i{width:3.5px;height:3.5px;border-radius:50%;background:var(--mark);transition:all .16s}
+  .grid4{display:grid;grid-template-columns:repeat(2,9px);gap:8px;transition:gap .18s}
+  .grid4 i{width:9px;height:9px;border-radius:3px;background:var(--mark);transition:all .16s}
+  .slot:hover i{background:var(--mark-h)}
+
+  /* 选中态三副 */
+  .slot.s1::after{content:"";position:absolute;inset:5px 1px;border-radius:15px;
+        border:1px solid var(--rim);pointer-events:none}
+  .glassL,.white{--rim: rgba(28,31,36,.30)} .glassD{--rim: rgba(255,255,255,.32)}
+  .slot.s1 i{background:var(--mark-h)}
+
+  .slot.s2::after{content:"";position:absolute;inset:5px 1px;border-radius:15px;
+        border:1px solid color-mix(in srgb, var(--accent) 55%, transparent);pointer-events:none}
+  .slot.s2 i{background:var(--accent)}
+
+  .slot.s3 i{background:var(--accent)}
+  .slot.s3 .dots6{gap:14px 15px}
+  .slot.s3 .grid4{gap:13px}
+
+  .cap{font-size:11px;color:var(--ink2);text-align:center;margin-top:5px;min-width:64px}
+  .slots{display:flex;gap:10px;align-items:center}
+  .caption{font-size:12px;color:var(--ink2);margin:6px 0 0;max-width:760px}
+  .caption b{color:var(--ink)}
+</style>
+</head>
+<body>
+<h1>入口槽实验台 2 · 点阵 / 网格:可见性与选中展开</h1>
+<p class="hint">记号色并入「窗数点」同族(浅 ink .55 / 深 white .72 —— 浅玻璃上日日可见的那一档)。
+<b>每一条都给了"纯白底"</b>对照。第二部分的三个槽分别是:常态 / 选中①(描边+加深)/ 选中②(描边+强调色)/ 选中③(展开)。</p>
+
+<fieldset>
+  <legend>参数</legend>
+  <label><input type="checkbox" id="groove"> 记号下面垫"凹槽"(极淡的槽底,白底可见性的备选方案)</label>
+</fieldset>
+
+<h2>一 · 常态记号的可见性(玻璃浅 / 玻璃深 / 纯白)</h2>
+<div id="part1"></div>
+<p class="caption">判读:纯白条上两种记号是否站得住。<b>凹槽</b>是兜底手段——开了之后记号自带落点,白底/亮壁纸都不怕;代价是常态多一层几乎可见的形。</p>
+
+<h2>二 · 选中展开的三副面孔(每条槽:常态 → ① → ② → ③)</h2>
+<div id="part2"></div>
+<p class="caption"><b>①</b> 描边胶囊 + 记号加深(最克制,层级靠"描边");<b>②</b> 描边胶囊 + 记号变系统强调色(与芯片选中圆点同一语言,实现上跟随用户强调色);<b>③</b> <b>展开态</b>:点阵/网格的间距撑开 + 变强调色,不画胶囊 —— "展开"的隐喻本身当反馈,最轻。实现时三副都是<b>描边/记号级的动画</b>,主环托底不再滑进槽里。</p>
+
+<script>
+function el(cls, parent){ const d=document.createElement("div"); d.className=cls; if(parent) parent.appendChild(d); return d; }
+const APPS = [["G","#111318"],["IJ","#1a1d29"],["C","#e8eaed","dark"],["S","#ff6a3d"]];
+function tile(a, parent){ const t=el("tile", parent); t.style.background=a[1];
+  if(a[2]==="dark"){t.style.color="#1c1f24";t.style.border=".5px solid rgba(15,20,30,.12)"}
+  t.textContent=a[0]; }
+
+function dots6(parent){ const d=el("dots6", parent); for(let i=0;i<6;i++) d.appendChild(document.createElement("i")); }
+function grid4(parent){ const d=el("grid4", parent); for(let i=0;i<4;i++) d.appendChild(document.createElement("i")); }
+const MARKS = [["点阵", dots6], ["网格", grid4]];
+
+let groove=false;
+function applyGroove(){ document.querySelectorAll(".strip").forEach(s=>s.classList.toggle("groove", groove)); }
+
+// 第一部分:2 记号 × 3 背景
+const BGS = [["glassL","玻璃浅"],["glassD","玻璃深"],["white","纯白"]];
+function renderPart1(){
+  const root=document.getElementById("part1"); root.innerHTML="";
+  MARKS.forEach(([mk, build])=>{
+    const cap=el("cap", root); cap.style.textAlign="left"; cap.style.minWidth="unset";
+    cap.innerHTML="<b>"+mk+"</b> · 常态记号(窗数点同族)";
+    cap.style.margin="10px 0 2px";
+    BGS.forEach(([bg, label])=>{
+      const strip=el("strip "+bg, root);
+      APPS.slice(0,2).forEach(a=>tile(a,strip));
+      const slot=el("slot", strip); build(slot);
+      const c=el("cap", strip); c.textContent=label;
+    });
+  });
+}
+
+// 第二部分:2 记号 × 2 外观,一条里并排 4 个槽(常态/S1/S2/S3)
+function renderPart2(){
+  const root=document.getElementById("part2"); root.innerHTML="";
+  [["glassL","浅色玻璃"],["glassD","深色玻璃"]].forEach(([bg,label])=>{
+    MARKS.forEach(([mk, build])=>{
+      const strip=el("strip "+bg, root);
+      APPS.slice(0,1).forEach(a=>tile(a,strip));
+      const slots=el("slots", strip);
+      [["","常态"],["s1","①描边+加深"],["s2","②描边+强调色"],["s3","③展开"]].forEach(([cls,name])=>{
+        const w=el("", slots); w.style.display="flex"; w.style.flexDirection="column"; w.style.alignItems="center";
+        const slot=el("slot "+cls, w); build(slot);
+        const c=el("cap", w); c.textContent=name;
+      });
+      const c=el("cap", strip); c.innerHTML=label+" · <b>"+mk+"</b>";
+    });
+  });
+}
+document.getElementById("groove").addEventListener("change",e=>{groove=e.target.checked;applyGroove()});
+renderPart1(); renderPart2();
+</script>
+</body>
+</html>

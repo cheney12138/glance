@@ -10,6 +10,8 @@ import GlanceCore
 struct PreviewPanelView: View {
     @ObservedObject var controller: PanelController
     @ObservedObject var snapshotter: Snapshotter
+    /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
+    @AppStorage("panel.sheen") private var glow = true
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
@@ -17,7 +19,12 @@ struct PreviewPanelView: View {
         // **没有题头行**(2026-09-14 用户口径:"你把额头去掉我看看效果"):
         // App 名已由长条里选中的那个图标承担、窗口数由卡片张数承担 —— 那行只是把两件已知的事各写一遍,
         // 还占掉托盘顶部一整条高度。去掉后托盘 = 卡片 + 芯片
-        thumbGrid
+        //
+        // 托盘的**双内容**(方案 E):它承载"选中格的内容" —— 活跃格 → 窗口卡;入口槽 → 启动图标行。
+        // 两种内容共用同一套玻璃/卡壳/动效,切换是内容级的事,窗口与玻璃纹丝不动
+        Group {
+            if controller.entrySelected { launchGrid } else { thumbGrid }
+        }
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom)
@@ -100,6 +107,95 @@ struct PreviewPanelView: View {
         )
         .onHover { inside in if inside { controller.hoverWindow(i) } }
         .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
+    }
+
+    // MARK: - 启动行(方案 E v2:第二条主环)
+
+    /// 启动行 v2 —— v1 借了窗口卡的壳,被用户实评否决(「丑的要死」:196×122 的大灰卡
+    /// 里浮一枚小图标,空得难受)。v2 **整行复用主环的视觉语言**:同一图标尺寸、同一格距、
+    /// 同一枚托底胶囊、同一套选中态(放大 + 上浮 + 提亮)—— 托盘在这里就是第二条主环,
+    /// 割裂感从根上消掉。名字不显示(Dock 心智:认图标就够)
+    private var launchGrid: some View {
+        let (rows, cols) = controller.launchLayout(count: controller.launchables.count)
+        let rowsSafe = max(rows, 1)
+        let colsSafe = max(cols, 1)
+        return VStack(spacing: PanelMetrics.trayRowGap) {
+            ForEach(0..<rowsSafe, id: \.self) { r in
+                HStack(spacing: 0) {
+                    ForEach(r * colsSafe..<min(r * colsSafe + colsSafe, controller.launchables.count), id: \.self) { i in
+                        launchCell(i)
+                    }
+                }
+            }
+        }
+        // **不靠 .onHover**(实测会哑,见 controller.hoverLaunchAt 的病例):
+        // 与主环 IconCell **同一套**:每格一个 .onHover(见 launchCell)。
+        // (2026-09-16 两次更正:我先把"hover 会哑"误诊成 tracking area 的毛病、换成了
+        //  onContinuousHover;真凶其实是窗口不能成为 key(AppKit 只把鼠标事件派给 key window),
+        //  外加上我在 onContinuousHover 里挂的 NSLog 每秒上百次。两处都清楚了 ⇒ 回到与主环一致。)
+        // 与主环 iconStrip 同一手法:spacing 归零、格子自带间隙、两端负 padding 收回
+        .padding(.horizontal, -PanelMetrics.iconGap / 2)
+        .frame(maxWidth: .infinity)
+        // **帧拍兜底**(与 SheenOverlay 同一哲学):非 key 窗口的 hover 事件投递已经被实咬两次
+        // (先「哑」后「迟钝」),这里每帧问一次全局指针位置、自己算格子 —— 事件丢了也有帧拍。
+        // 只在启动行活着时存在(TimelineView 随本视图挂载/卸载);与逐格 onHover 并存,
+        // 两边写同一个 launchIndex,等值守卫保证不抖
+        .background(alignment: .topLeading) {
+            TimelineView(.animation) { _ in
+                Canvas { _, _ in controller.pollLaunchHover() }
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func launchCell(_ i: Int) -> some View {
+        let app = controller.launchables[i]
+        let selected = i == controller.launchIndex
+        return Image(nsImage: app.icon)
+            .resizable()
+            .renderingMode(.original)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
+            .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
+            .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
+            .scaleEffect(selected ? PanelMetrics.iconScale : 1)
+            .offset(y: selected ? -PanelMetrics.iconLift : 0)
+            .elevation(.icon, active: selected)   // 帧率优先:只有选中的那颗有投影(与主环同款)
+            .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+            // **不要托底了**(用户 2026-09-16 裁定):启动行只要"上浮"这一层反馈。
+            // 托盘里本来就是"悬停才展开的大预览",再加一枚托底 = 两套选中语言打在一起。
+            // (launchPuck 保留未用:它是"每格一枚"的旧方案,若将来又要,别再从零写)
+            .contentShape(Rectangle())
+            // 点 = 确认:启动并激活,面板即关(与主环"点一下 = 确认"同一手势)
+            // 点 = 启动这一格。**不经过 hoverLaunch** —— 见 controller.launchAt 的注释:
+            // 指针从入口槽(面板)走到托盘(另一个窗口)会把 entrySelected 清掉,
+            // 依赖 hover 记忆的点击会静默失灵(用户实报「那俩app也点不了」)。
+            // 与主环同一套:指针进格就选中(hoverLaunch 不再要求 entrySelected ——
+            // 指针跨窗口那一段会把它清掉,所以由 hover 自己把它补回来)
+            .onHover { inside in if inside { controller.hoverLaunch(i) } }
+            .onTapGesture { controller.launchAt(i) }
+            // **弹簧用托盘的 thumb(0.20/0.9),不用主环的 select(0.32/0.55)** ——
+            // 病例(2026-09-16 用户实评):横跨两格时 select 的回弹要 ~300ms 才落定,
+            // 读起来就是「切换选中很迟钝,不是立马选中的」。托盘内的选中一律 thumb 档
+            .animation(MotionPolicy.animation(PanelMotion.thumb), value: selected)
+    }
+
+    /// 启动行的托底胶囊:与主环 `puck` 同色同圆角同尺寸。每个格子自带一枚(选中显形),
+    /// 不做跨格滑动的单枚 puck —— 托盘会换行,跨行滑动没有可读的轨迹;入场/出场用同一条弹簧
+    @ViewBuilder
+    private func launchPuck(_ selected: Bool) -> some View {
+        if selected {
+            RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
+                .fill(PanelColors.puck)
+                .overlay(
+                    RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
+                        .strokeBorder(PanelColors.puckLip, lineWidth: 1)
+                        .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+                )
+                .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
+                .elevation(.puck)
+        }
     }
 }
 

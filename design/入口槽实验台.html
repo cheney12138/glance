@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>入口槽实验台 · 轻量高级的"门"</title>
+<style>
+  :root{
+    --icon: 92px; --gap: 20px;
+    --ink:#1c1f24; --ink2:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 44px;background:#f6f7f9;color:var(--ink);
+       font:13px/1.5 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  .hint{color:var(--ink2);font-size:12px;margin:0 0 16px}
+  fieldset{border:1px solid #dfe3e8;border-radius:10px;padding:12px 14px;margin:0 0 16px;background:#fff}
+  legend{font-size:12px;color:var(--ink2);padding:0 6px}
+  .row{display:flex;align-items:center;gap:14px;margin:6px 0;flex-wrap:wrap}
+  label{color:var(--ink2);font-size:12px;display:flex;align-items:center;gap:6px}
+
+  .strip{border-radius:20px;padding:12px 22px;margin:8px 0 2px;position:relative;
+         display:flex;align-items:center;justify-content:center;gap:var(--gap)}
+  .strip.light{background:linear-gradient(180deg,#fbfcfd,#eef1f5);box-shadow:0 1px 0 #fff inset,0 8px 24px rgba(16,24,40,.10)}
+  .strip.dark {background:linear-gradient(180deg,#3a4048,#22262c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .cap{font-size:12px;color:var(--ink2);margin:14px 0 2px}
+  .cap b{color:var(--ink)}
+
+  .tile{width:var(--icon);height:var(--icon);border-radius:24px;flex:none;
+        display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;
+        box-shadow:0 4px 10px rgba(16,24,40,.18)}
+  .slot{width:64px;height:var(--icon);flex:none;position:relative;cursor:default;
+        display:flex;align-items:center;justify-content:center}
+
+  /* —— 选中态的统一语言:描边胶囊(只描边、近乎不填充)+ 记号点亮 —— */
+  .slot::after{content:"";position:absolute;inset:6px 2px;border-radius:15px;
+        border:1px solid transparent;pointer-events:none}
+  .slot.sel::after{border-color:var(--rim);background:var(--rimfill)}
+  .strip{--rim: rgba(28,31,36,.26); --rimfill: rgba(255,255,255,.35)}
+  .strip.dark{--rim: rgba(255,255,255,.30); --rimfill: rgba(255,255,255,.06)}
+
+  /* A 点阵:2×3 拖把点(把手的通用记号,"这里还有") */
+  .dots6{display:grid;grid-template-columns:repeat(2,3.5px);gap:8px 9px}
+  .dots6 i{width:3.5px;height:3.5px;border-radius:50%;background:var(--mark);transition:all .16s}
+  .strip{--mark: rgba(28,31,36,.34)} .strip.dark{--mark: rgba(255,255,255,.38)}
+  .slot:hover .dots6 i{background:var(--mark-h)}
+  .strip{--mark-h: rgba(28,31,36,.60)} .strip.dark{--mark-h: rgba(255,255,255,.66)}
+  .slot.sel .dots6 i{background:var(--mark-h)}
+
+  /* B 竖三点 kebab */
+  .dots3{display:grid;grid-template-rows:repeat(3,3.5px);gap:8px}
+  .dots3 i{width:3.5px;height:3.5px;border-radius:50%;background:var(--mark);transition:all .16s}
+  .slot:hover .dots3 i{background:var(--mark-h)}
+  .slot.sel .dots3 i{background:var(--mark-h)}
+
+  /* C 呼吸缝:一根会呼吸的竖线(hover 长高,选中带一圈微光) */
+  .seam{width:1.5px;height:58px;border-radius:1px;background:var(--mark);transition:all .2s ease}
+  .slot:hover .seam{height:68px;background:var(--mark-h);box-shadow:0 0 10px rgba(255,255,255,.18)}
+  .slot.sel .seam{height:68px;background:var(--mark-h);box-shadow:0 0 12px rgba(255,255,255,.28)}
+
+  /* D 网格 ▦:2×2 圆角小方块(Launchpad 的"更多应用"隐喻) */
+  .grid4{display:grid;grid-template-columns:repeat(2,9px);gap:7px}
+  .grid4 i{width:9px;height:9px;border-radius:3px;background:var(--mark);transition:all .16s}
+  .slot:hover .grid4 i{background:var(--mark-h)}
+  .slot.sel .grid4 i{background:var(--mark-h)}
+
+  /* E 尖角 ›:一根细的 chevron("还有一页") */
+  .chev{width:12px;height:26px;transition:all .16s}
+  .slot:hover .chev{transform:translateX(2px)}
+  .slot.sel .chev{transform:translateX(2px)}
+
+  .state{font-size:11px;color:var(--ink2);text-align:center;margin-top:6px}
+</style>
+</head>
+<body>
+<h1>入口槽实验台 · 五种"门"的记号,一种统一的选择语言</h1>
+<p class="hint">选中的统一语言是<b>描边胶囊</b>(只描边、近透明填充)——不再是主环那枚实心托底滑过来(那就是你现在看到的灰块)。
+鼠标放上去 = hover 态;<b>点一下 = 钉住"选中态"</b>看久看细。所有变体都同时给浅色/深色两条。</p>
+
+<fieldset>
+  <legend>参数</legend>
+  <div class="row">
+    <label><input type="checkbox" id="allSel"> 全部钉成"选中态"(对比用)</label>
+  </div>
+</fieldset>
+
+<div id="root"></div>
+
+<script>
+const APPS = [["G","#111318"],["IJ","#1a1d29"],["C","#e8eaed","dark"],["S","#ff6a3d"]];
+
+function el(cls, parent){ const d=document.createElement("div"); d.className=cls; if(parent) parent.appendChild(d); return d; }
+function tile(a, parent){ const t=el("tile", parent); t.style.background=a[1];
+  if(a[2]==="dark"){t.style.color="#1c1f24";t.style.border=".5px solid rgba(15,20,30,.12)"}
+  t.textContent=a[0]; }
+
+function marks(cls, count){ const d=el(cls); for(let i=0;i<count;i++) d.appendChild(document.createElement("i")); return d; }
+function chev(){ const NS="http://www.w3.org/2000/svg";
+  const s=document.createElementNS(NS,"svg"); s.setAttribute("class","chev");
+  s.setAttribute("viewBox","0 0 12 26");
+  const p=document.createElementNS(NS,"path");
+  p.setAttribute("d","M2 2 L10 13 L2 24"); p.setAttribute("fill","none");
+  p.setAttribute("stroke","var(--mark)"); p.setAttribute("stroke-width","1.8");
+  p.setAttribute("stroke-linecap","round"); p.setAttribute("stroke-linejoin","round");
+  s.appendChild(p); return s; }
+
+const VARIANTS = [
+  {id:"A", name:"点阵(2×3 拖把点)",  build:p=>p.appendChild(marks("dots6",6))},
+  {id:"B", name:"竖三点(kebab)",      build:p=>p.appendChild(marks("dots3",3))},
+  {id:"C", name:"呼吸缝(会发光的线)", build:p=>p.appendChild(el("seam",p))},
+  {id:"D", name:"网格 ▦(更多应用)",  build:p=>p.appendChild(marks("grid4",4))},
+  {id:"E", name:"尖角 ›(还有一页)",  build:p=>p.appendChild(chev())},
+];
+
+let allSel=false;
+function render(){
+  document.getElementById("root").innerHTML="";
+  VARIANTS.forEach(v=>{
+    const cap=el("cap", document.getElementById("root"));
+    cap.innerHTML="<b>方案 "+v.id+"</b> — "+v.name;
+    [["light","浅色 · hover 看悬停 / 点击钉住选中"],["dark","深色"]].forEach(([ap,label])=>{
+      const strip=el("strip "+ap, document.getElementById("root"));
+      APPS.forEach(a=>tile(a,strip));
+      const slot=el("slot", strip);
+      v.build(slot);
+      const st=el("state", strip);
+      st.textContent = label;
+      slot.addEventListener("click",()=>slot.classList.toggle("sel"));
+      if(allSel) slot.classList.add("sel");
+    });
+  });
+}
+document.getElementById("allSel").addEventListener("change",e=>{allSel=e.target.checked;render()});
+render();
+</script>
+</body>
+</html>

@@ -199,6 +199,11 @@ enum PanelMetrics {
     static let shadowPadPop: CGFloat = 96
     /// 长条最小宽度:单 App 时不至于缩成一枚图标
     static var minStripWidth: CGFloat { k(280) }
+
+    // § 启动区入口槽(方案 E,design/启动区实验台.html 用户拍板 2026-09-16)
+    /// 入口槽宽 = 图标 × 0.72:比图标窄一档,才读得出"这是一道缝,不是一枚 App"
+    static var entrySlotWidth: CGFloat { icon * 0.72 }
+    /// 缝高 = 图标高 × 0.66:上下留白让它退到"记号"的层级,不抢图标
 }
 
 // MARK: - 色板(浅 / 深双值)
@@ -290,6 +295,11 @@ enum PanelColors {
     /// 上缘受光唇:浅色 .6 是"果冻感"的一半;深色**提到 .5** ——
     /// 深色托底是实色,受光唇是它唯一"玻璃感"的来源,弱了就变成一张塑料片
     static let puckLip = dynamic(white(0.6), white(0.5))
+    /// 入口槽分隔缝的**中段色**(两端收干的渐变由视图承担)。浅色暗、深色亮 —— 与发丝边同一族:
+    /// 它要读成"玻璃上的一道记号",不是"画上去的一条线"
+    /// 入口槽点阵在**透镜板上**的颜色(v4):板是亮的(浅=白 .62 / 深=slate 138),
+    /// 记号换深一档的墨色才压得住 —— 常态仍用 `dot`(窗数点同族,坐在玻璃上)
+    static let entryDotOnPlate = dynamic(ink(0.50), ink(0.50))
     /// 窗数点:浅色 ink .55(暗点,坐在亮玻璃上);深色白 .72 ——
     /// 旧版 .65 压在半透明玻璃上实得 L≈175,泛灰不清爽,深色的点必须更亮更纯
     static let dot = dynamic(ink(0.55), white(0.72))

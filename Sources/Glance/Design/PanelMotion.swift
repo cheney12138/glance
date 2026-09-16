@@ -85,10 +85,11 @@ enum PanelMotion {
     /// **入场动效**(上浮 / 承接上一格;唯一的使用点是 `PanelController` 把 `contentEntryRise` 归零那一发)。
     /// 比 `slide` 快一档 —— 它是"入场",不是"跟手",不该让人等。会话内的横滑仍用 `slide`。
     ///
-    /// 速度史:0.38(与 slide 同) → 0.28("上滑的速度稍微快一点") →
-    /// **0.20**(2026-09-15,幅度收成 17pt 之后,"这个上浮有点慢了")。
+    /// 速度史:0.38(与 slide 同) → 0.28("上滑的速度稍微快一点") → 0.20(2026-09-15,幅度收成 17pt 之后,
+    /// "这个上浮有点慢了") → **0.16**(2026-09-16 用户:「唤起面板 app 上浮的速度太慢了,加快一点」;
+    /// 同轮裁定**入口槽的滑入与它同速** —— 同一根弹簧,两处不会各走各的,见 PanelView.entrySlot)。
     /// 再要动就一次动一个数:`response` 越小越快、`dampingFraction` 越小回弹越明显。
-    static let entrance = Animation.spring(response: 0.20, dampingFraction: 0.62)
+    static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 }

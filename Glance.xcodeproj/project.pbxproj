@@ -16,6 +16,7 @@
 		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
 		5A0000000000000000000016 /* WindowEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000027 /* WindowEnumerator.swift */; };
 		5A0000000000000000000017 /* MruEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000028 /* MruEvidence.swift */; };
+		5A00000000000000000000E0 /* DockApps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000E1 /* DockApps.swift */; };
 		5A0000000000000000000019 /* Snapshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000030 /* Snapshotter.swift */; };
 		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
 		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
@@ -54,6 +55,7 @@
 		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
 		5A0000000000000000000027 /* WindowEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowEnumerator.swift; sourceTree = "<group>"; };
 		5A0000000000000000000028 /* MruEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MruEvidence.swift; sourceTree = "<group>"; };
+		5A00000000000000000000E1 /* DockApps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockApps.swift; sourceTree = "<group>"; };
 		5A0000000000000000000030 /* Snapshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshotter.swift; sourceTree = "<group>"; };
 		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
 		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 				AA0000000000000000000F08 /* AXWindowList.swift */,
 				AA0000000000000000000F06 /* ThumbnailRefresher.swift */,
 				5A0000000000000000000028 /* MruEvidence.swift */,
+				5A00000000000000000000E1 /* DockApps.swift */,
 				5A0000000000000000000030 /* Snapshotter.swift */,
 			);
 			path = Inventory;
@@ -309,6 +312,7 @@
 				AA0000000000000000000F07 /* AXWindowList.swift in Sources */,
 				AA0000000000000000000F05 /* ThumbnailRefresher.swift in Sources */,
 				5A0000000000000000000017 /* MruEvidence.swift in Sources */,
+				5A00000000000000000000E0 /* DockApps.swift in Sources */,
 				5A0000000000000000000019 /* Snapshotter.swift in Sources */,
 				5A0000000000000000000020 /* PanelController.swift in Sources */,
 				5A0000000000000000000044 /* PanelView.swift in Sources */,
