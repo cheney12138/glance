@@ -242,7 +242,15 @@ private struct WindowThumb<Overlay: View>: View {
                     .clipped()
                     .blur(radius: PanelMetrics.lightsBlur, opaque: true)
                     .mask(alignment: .top) {
-                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        LinearGradient(
+                              stops: [
+                                  .init(color: .black, location: 0.00),
+                                  .init(color: .black, location: 0.22),
+                                  .init(color: .black.opacity(0.55), location: 0.50),
+                                  .init(color: .black.opacity(0.22), location: 0.74),
+                                  .init(color: .clear, location: 1.00),
+                              ],
+                              startPoint: .top, endPoint: .bottom)
                             .frame(height: PanelMetrics.lightsFade)
                     }
                     .allowsHitTesting(false)
