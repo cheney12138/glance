@@ -38,6 +38,9 @@ struct GlassBackground: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
+        // (2026-09-16 掉帧排查曾在此放过 A/B 开关 `debug.noGlass` 换 NSVisualEffectView 对比:
+        //  结论是内建 ProMotion 屏的 60Hz 节奏与玻璃无关 —— 无玻璃照样 16.7ms P50,
+        //  开关按"验证完的开关不留代码"的规矩撤掉,结论记在 docs/debugging.md §18)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = cornerRadius
@@ -55,11 +58,27 @@ struct GlassBackground: NSViewRepresentable {
         return fallback
     }
 
-    /// 父 body 重渲染(换选中)就会进来一次 —— 只写真正会变的东西,别在这里做重活
+    final class Coordinator {
+        /// 上一次写入的 tint。为什么不直接比 `glass.tintColor`:getter 返回的对象不保证
+        /// 与写入的相等,存"自己写过的那份"才是可靠的对账依据
+        var lastTint: NSColor?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// 父 body 重渲染(换选中)就会进来一次 —— 只写真正会变的东西,别在这里做重活。
+    ///
+    /// ★ 2026-09-16 补 tint 的等值守卫(cornerRadius 早有,tintColor 漏了):
+    /// 入场弹簧经 `@Published` 驱动,两棵根视图逐帧重算,这里逐帧被进一次 ——
+    /// 旧版每次都**无条件**重写 tintColor(还每次新建一个动态 NSColor),
+    /// 若 AppKit 不做等值短路,玻璃层就被逐帧标记重渲染,给入场动画白白加一笔。
     func updateNSView(_ view: NSView, context: Context) {
         if #available(macOS 26.0, *), let glass = view as? NSGlassEffectView {
             if glass.cornerRadius != cornerRadius { glass.cornerRadius = cornerRadius }
-            glass.tintColor = Self.scrim(for: glass.effectiveAppearance)
+            let tint = Self.scrim(for: glass.effectiveAppearance)
+            if tint != context.coordinator.lastTint {
+                glass.tintColor = tint
+                context.coordinator.lastTint = tint
+            }
         }
     }
 }

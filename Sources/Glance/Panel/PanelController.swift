@@ -57,6 +57,9 @@ final class PanelController: ObservableObject {
     /// begin 的世代号:后台枚举回来时,若已开了新一局就丢掉旧结果(连按 ⌘Tab 的竞态)
     private var beginGeneration = 0
 
+    /// 其余组预截的推迟量 = 入场弹簧的沉降时间(为什么挪、显示组为什么不挪,见 `finishBegin` 里的那段注释)
+    private static let recaptureDelay: Double = 0.45
+
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
     var onSessionEnd: (() -> Void)?
 
@@ -214,10 +217,27 @@ final class PanelController: ObservableObject {
         // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
         let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
         let shownIDs = Set(shown.map(\.wid))
-        // 正在显示的那一组**强制重拍**(用户正看着它,要求此刻是准的);
-        // 其余组走缓存 —— 它们的图只用来保证"Tab 过去的第一帧有东西",不要求绝对新鲜
+        // 两批预截**分流**(2026-09-16 用户裁决:"针对当前唤起选中的 app 实时填充,别的走异步替换"):
+        //
+        //   · **显示组 = 立刻重拍**(用户正看着它,要求此刻是准的 —— 与 Tab 换选中的
+        //     "选中即重拍"是同一条契约)。它天然就小:按屏归属后一组通常 1–3 扇窗,
+        //     实测它的合并在 +80–150ms 落地、从未单独造成可见长帧。
+        //
+        //   · **其余组 = 入场弹簧沉降后(0.45s)再补**(它们只负责"Tab 过去第一帧有图",
+        //     缓存旧图本来就顶着)。这一批是掉帧的真身:拍图是 30–50ms/窗的 GPU/WindowServer
+        //     活、整批拍完才一次性回主线程合并(Snapshotter.merge),而合并是"一批图同时到"
+        //     的爆发 —— 病例:某局"其余组要拍 4 窗(曾拍到过)"在 +175ms 合并,那局 `[帧]`
+        //     max **140.7ms**;外接屏 App 多时一批 4–7 窗,全落在入场窗口里。
+        //
+        // 头 0.45s 里卡片显示缓存旧图(跨会话保活 + 上局剪枝),不会闪"截图中…"。
+        // 世代守卫:中途开了新一局就作废这一单,免得与新一局的预截白拍两遍;
+        // dismiss 自己会把 beginGeneration +1,所以"面板已关"也自动作废,不用另判 isVisible。
         Snapshotter.shared.precapture(shown, force: true)
-        Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
+        let shownGeneration = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.recaptureDelay) { [weak self] in
+            guard let self, shownGeneration == self.beginGeneration else { return }
+            Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
+        }
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         trace(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
         guard !groups.isEmpty else {
