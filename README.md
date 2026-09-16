@@ -48,6 +48,19 @@ never on a timer. The panel dismisses instantly on every exit path.
   no paid developer account.
 
 ## Download
+### Homebrew
+
+```sh
+brew trust cheney12138/tap      # once, if Homebrew asks
+brew install --cask cheney12138/tap/glance
+```
+
+**Homebrew does not bypass the quarantine step below.** Measured on Homebrew 7.0.1:
+the installed app *does* carry `com.apple.quarantine`, `--no-quarantine` no longer
+exists, and `HOMEBREW_NO_QUARANTINE` has no effect. So a first launch still needs
+the one-time step described in **Installing** — Homebrew only makes install and
+update bookkeeping easier.
+
 
 Signed builds are on the [Releases page](https://github.com/cheney12138/glance/releases/latest).
 Download `Glance-x.y.z.dmg`, drag `Glance.app` into **Applications**, then grant the two
