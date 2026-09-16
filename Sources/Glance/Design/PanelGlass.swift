@@ -151,7 +151,12 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
         super.scrollWheel(with: event)   // 不消费:保持"只旁观、不吞"的一贯做法
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
+    /// 非激活面板要声明它接受"第一下鼠标":AppKit 默认不把这颗 mouseDown 派发给非 key 窗口。
+    /// 这条不是为某个功能加的(拖拽删除已整条退回,见 ADR-0012),而是面板的一般性正确设置:
+    /// 我们永远不是 key window,任何需要"按下并持续跟踪"的交互都依赖它。来源:LumaRing 的 RingView 实证。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
         guard pad > 0 else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
         guard bounds.insetBy(dx: pad, dy: pad).contains(local) else { return nil }
