@@ -34,6 +34,8 @@ final class HotkeyTapCenter {
         /// (2026-09-15 分家:原先是同一个 case,导致两个键做同一件事)
         case cycleWindowPrev
         case cycleWindowNext
+        /// 数字键:直接选中当前 App 的第 N 扇窗(1-based 在这里转成 0-based)
+        case pickWindow(Int)
         case confirm          // ⌥ 释放:确认(聚焦选中窗)
         case cancel           // Esc:放弃
         case yieldToCapture   // 截图中按回车:关面板、不聚焦(回车的第一所有权在截图工具,见 CaptureSessionRule)
@@ -64,6 +66,15 @@ final class HotkeyTapCenter {
     private static let hotKeySignature = OSType(0x676C6E63) // 'glnc'
     private enum HotKeyId: UInt32 { case forward = 1, reverse = 2 }
 
+    /// 1…9:直接跳到**当前 App 的第 N 扇窗**(数字 = 跳,与 ` 的"走"并存,CONTEXT.md「走 / 跳」)。
+    /// **主键盘与小键盘都收**:用户原话"有时候不想用小数字键盘选窗口"——
+    /// 两种到达方式都要可用,别把口子封死(2026-09-15 的教训)。
+    /// 只在会话内生效:navTap 只在导航态挂着,平时数字键照旧打字。
+    private static let digitKeys: [Int64: Int] = [
+        0x12: 1, 0x13: 2, 0x14: 3, 0x15: 4, 0x17: 5, 0x16: 6, 0x1A: 7, 0x1C: 8, 0x19: 9,  // 主键盘
+        0x53: 1, 0x54: 2, 0x55: 3, 0x56: 4, 0x57: 5, 0x58: 6, 0x59: 7, 0x5B: 8, 0x5C: 9,  // 小键盘
+    ]
+
     private static let keyLeft: Int64 = 0x7B
     private static let keyRight: Int64 = 0x7C
     private static let keyEsc: Int64 = 0x35
@@ -73,10 +84,17 @@ final class HotkeyTapCenter {
     private static let keyM: Int64 = 0x2E
     private static let keyF: Int64 = 0x03
     private static let keyH: Int64 = 0x04
-    /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)
+    /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)+ 数字 1…9
     /// ⚠️ 唯一的例外是**截图会话里的回车**:那一发不吞(它是截图工具的"完成"),见 `handleReturn()`
+    ///
+    /// ⚠️ 数字**必须在这里登记**:`handleNavKey` 第一句就是
+    /// `guard Self.navKeys.contains(keyCode) else { return false }` —— 这是一道**前置闸门**,
+    /// 没登记就走不到后面的 switch(第一次加数字键时漏了这步,功能会**静默失效**:
+    /// 按 2 不选中,还把 "2" 放行给底下的 App)。
+    /// `Set([...])` 必须显式写:直接写数组字面量再 `.union` 会被推成 `[Int64]`(实测编译错)。
     private static let navKeys: Set<Int64> =
-        [keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave]
+        Set([keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave])
+            .union(digitKeys.keys)
     /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
     ///
     /// 为什么这个键值得单独说:它同时是 macOS **全局**的"同 App 窗口循环"(⌘`) ——
@@ -327,7 +345,9 @@ final class HotkeyTapCenter {
             guard Self.graveCyclesWindows else { return false }
             // ⇧` = 反向,与触发键的 ⇧ 反向约定一致
             emit(event.flags.contains(.maskShift) ? .cycleWindowPrev : .cycleWindowNext)
-        default: break
+        default:
+            if let n = Self.digitKeys[keyCode] { emit(.pickWindow(n - 1)); return true }
+            break
         }
         return true
     }
@@ -435,6 +455,7 @@ final class HotkeyTapCenter {
         case .lastGroup: return "→ → 跳到最右的 App"
         case .cycleWindowPrev: return "⇧` → 当前 App 上一个窗口"
         case .cycleWindowNext: return "` → 当前 App 下一个窗口"
+        case .pickWindow(let n): return "\(n + 1) → 直接选中第 \(n + 1) 扇窗"
         case .confirm: return "⌥ 释放 → 确认(T7 聚焦此处)"
         case .cancel: return "Esc → 放弃(面板关闭,不聚焦)"
         case .yieldToCapture: return "回车落在截图会话 → 只关面板、不聚焦(T32;这一颗不吞)"

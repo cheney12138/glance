@@ -100,6 +100,13 @@ final class PanelController: ObservableObject {
         case .lastGroup: jumpToGroupEdge(groups.count - 1)
         case .cycleWindowPrev: moveWindow(-1)   // ` 循环窗口(与 ←/→ 分家)
         case .cycleWindowNext: moveWindow(1)
+        case .pickWindow(let n):
+            // 只在"当前 App 的窗口范围"内生效:越界 = 什么都不做
+            // (跳到不存在的地方不该有副作用 —— 与"两端夹住、不环绕"同一个道理)
+            guard groups.indices.contains(appIndex),
+                  groups[appIndex].windows.indices.contains(n) else { return }
+            winIndex = n
+            trace("[T6] 窗口选中(键盘数字 \(n + 1)): \(groups[appIndex].windows[n].title)")
         case .confirm: confirmSelection()
         case .cancel: dismiss(reason: "放弃")
         // 截图会话里的回车(T32):面板退场、**不聚焦任何窗**。
