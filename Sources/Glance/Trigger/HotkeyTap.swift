@@ -471,3 +471,100 @@ private func hotKeyEventHandler(
     MainActor.assumeIsolated { center.handleHotKey(hotKeyID.id, pressed: pressed) }
     return noErr
 }
+
+// MARK: - 双击 ⌃ 把指针送到下一块屏幕
+
+/// 双击 ⌃ 把指针送到**下一块屏幕**（今天双屏场景 = 另一块屏，多屏自动循环 ✓）。
+///
+/// 为什么不是"注册一个热键"：⌘/⌃/⌥/⇧ 是**修饰键**，系统热键 API 只接受"修饰键 + 一个真实按键"，
+/// 单独一个 ⌃ 注册不了。所以换一种做法：**监听事件流**，只看不改 ——
+/// 两处监听都把事件**原样返回**（`return e`），一个字节都不吞，因此不可能影响 ⌃C、⌃↑、⌥Tab 等任何既有操作。
+///
+/// 要小心的不是"冲突"（双 ⌃ 不是 macOS 的系统快捷键），而是**误触发**：
+/// 一天要按几百次"⌃ + 别的键"。所以规则是 —— **两次干净的 ⌃ 之间只要夹了任何别的按键，立刻作废**。
+/// 于是 ⌃C、⌃↑、⌃Tab 永不触发；只有"干干净净连按两下 ⌃"才动。
+/// 最坏情况的代价也只是指针跳了一下，再双击一次就回来 —— 自纠正。
+///
+/// 放在这个文件里而不是新建文件：本工程的 pbxproj 用的是**显式文件引用**，
+/// 新建 .swift 必须同时在四处登记（PBXBuildFile / PBXFileReference / group / Sources phase），
+/// 漏一处就是 `cannot find 'X' in scope`。同一个 domain 的代码就近放，先避免这类机械风险。
+final class DoubleControlTap {
+    static let shared = DoubleControlTap()
+    private init() {}
+
+    /// 设置项。**默认关**：macOS 本身没有这个功能，按"新开关一律默认对齐 macOS"的规则应为关。
+    /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
+    static let defaultsKey = "pointer.doubleControlJumps"
+    private var enabled: Bool { UserDefaults.standard.bool(forKey: Self.defaultsKey) }
+
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+    private var lastCleanDown: CFAbsoluteTime?   // 上一次"干净地按下 ⌃"的时刻
+    private var dirty = false                    // 这一轮按住 ⌃ 期间有没有夹别的键
+    private var controlWasDown = false
+    private static let minGap: Double = 0.06     // 太快 ⇒ 同一次按住的抖动，不算双击
+    private static let maxGap: Double = 0.30     // 超过 ⇒ 不像"有意双击"（苹果 ~500ms 对修饰键太松）
+
+    func start() {
+        guard globalMonitor == nil else { return }   // 幂等：重复 start 不会挂两套监听
+        let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown]
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] e in
+            self?.handle(e)
+        }
+        // 我们自己的窗口在最前时，全局监听**看不到**事件（macOS 的设计）⇒ 补一个本地监听。
+        // 注意返回 e 而不是 nil：nil 会**吞掉**事件，那正是要绝对避免的事。
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in
+            self?.handle(e)
+            return e
+        }
+    }
+
+    private func handle(_ e: NSEvent) {
+        switch e.type {
+        case .keyDown:
+            dirty = true                       // 夹了别的按键 ⇒ 这一轮作废
+        case .flagsChanged:
+            // ⌘/⌥/⇧ 动过也算"夹了别的键"（fn / capsLock 常驻，不算）
+            if !e.modifierFlags.intersection([.command, .option, .shift]).isEmpty { dirty = true }
+            let controlDown = e.modifierFlags.contains(.control)
+            guard controlDown != controlWasDown else { return }   // 只认状态翻转
+            controlWasDown = controlDown
+            guard controlDown else { return }                     // 抬起：什么都不做
+            let now = CFAbsoluteTimeGetCurrent()
+            if let prev = lastCleanDown, now - prev >= Self.minGap, now - prev <= Self.maxGap, !dirty {
+                lastCleanDown = nil
+                dirty = false
+                if enabled { jumpToNextDisplay() }
+            } else {
+                lastCleanDown = now
+                dirty = false
+            }
+        default:
+            break
+        }
+    }
+
+    /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），
+    /// 而不是丢到角落 —— 指针像"平移"过去，这是体感的关键。
+    private func jumpToNextDisplay() {
+        guard NSEvent.pressedMouseButtons == 0 else { return }   // 拖拽途中不动（别把拖拽目标搞乱）
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 1 else { return }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return }
+
+        // 全程用 CoreGraphics 坐标系（原点在主屏**左上**）：指针位置与屏幕矩形同系，
+        // 就不需要 y 翻转 —— 少一次换算出错的机会（这类翻转是经典 bug 源）。
+        let cursor = CGEvent(source: nil)?.location ?? .zero
+        guard let from = ids.firstIndex(where: { CGDisplayBounds($0).contains(cursor) }) else { return }
+        let a = CGDisplayBounds(ids[from])
+        let b = CGDisplayBounds(ids[(from + 1) % ids.count])
+        // 夹到 2%–98%：永远不落在最边缘（贴边会蹭出 Dock / 触发别的边缘行为）
+        let rx = min(max((cursor.x - a.minX) / a.width, 0.02), 0.98)
+        let ry = min(max((cursor.y - a.minY) / a.height, 0.02), 0.98)
+        CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
+        CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
+        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (相对 %.0f%% / %.0f%%)",
+                     from + 1, (from + 1) % ids.count + 1, rx * 100, ry * 100))
+    }
+}

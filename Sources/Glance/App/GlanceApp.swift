@@ -68,6 +68,12 @@ struct GlanceApp: App {
                     ThumbnailRefresher.shared.start()
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+                    hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+// 双击 ⌃ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关,
+                    hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+// 开关 key: pointer.doubleControlJumps
+                    hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+DoubleControlTap.shared.start()
                     panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
                     if permissions.allGranted { hotkeys.start() }
                 }
