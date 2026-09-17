@@ -25,11 +25,31 @@ enum SingleInstanceGuard {
         // 用户只看到「Run 了但没反应」。写明是 /Applications 那份还是 DerivedData 那份,
         // 一眼就知道该退谁(两份 bundle id 相同,所以互相视为同一个 App)。
         let path = other.bundleURL?.path ?? "(路径未知)"
+
+        // **时间也要打出来**(2026-09-17 用户报"没修好"):
+        // 实测屏幕上那份是 **15 分钟前**的旧进程 —— Xcode 里按 ⌘R 起的新实例被这里挡掉、
+        // 静默退出,于是"测试"跑的是旧代码。而原来的提示只有**路径**没有**时间**,
+        // 日志里对不出这一点(我从这行旁边走过去两趟都没停 —— 有输出 ≠ 被读到)。
+        // 现在直接给判决:旧实例比本次构建还早 ⇒ 屏幕上那份不是你刚改的。
+        let stamp = DateFormatter()
+        stamp.dateFormat = "MM-dd HH:mm:ss"
+        let launchLine = "  旧实例起于: \(other.launchDate.map { stamp.string(from: $0) } ?? "(未知)")"
+        var buildLine = "  本次二进制构建于: (未知)"
+        if let exe = Bundle.main.executableURL,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: exe.path),
+           let mtime = attrs[.modificationDate] as? Date {
+            buildLine = "  本次二进制构建于: \(stamp.string(from: mtime))"
+            if let launched = other.launchDate, launched < mtime {
+                buildLine += "\n  ⚠️ 旧实例比本次构建还早 ⇒ 屏幕上跑的是**旧代码**,你刚改的东西没有上屏"
+            }
+        }
         print("""
         ────────────────────────────────────────────────
         [Glance] 已经有一个实例在跑(pid \(pid)):
           \(path)
         本次启动退出。
+        \(launchLine)
+        \(buildLine)
           两个 Glance 会抢同一组 ⌘Tab:先装触发层的那个收键,后到的那个照样画自己的面板 ——
           屏幕上会出现"两块面板叠在一起"的怪象(底色互相透、Esc 要按两次才关)。
           要换新构建:先退出旧实例(⌘Q,或 kill \(pid)),或在 Xcode 里 Stop 再 Run。
