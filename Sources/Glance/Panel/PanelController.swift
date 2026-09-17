@@ -621,7 +621,12 @@ final class PanelController: ObservableObject {
             : ""))
 
         // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
-        panel.alphaValue = 1
+        // ★★ 白光对策(不依赖"找出凶手",见 docs/白光排查记录.md):
+        // 窗口先以 **alpha 0** 上屏 ⇒ 合成器会把这一帧**真的合成一次**(含材质),
+        // 下一拍再拉到 1 ⇒ 用户看到的**第一帧**就是画好的内容,而不是"玻璃已上屏、内容还没到"。
+        // ⚠️ 这不是入场动效(没有被看见的渐变):0→1 只隔一拍(~16ms),
+        //    与"面板要已经在"这条纪律不冲突 —— 用户感知不到那一拍。
+        panel.alphaValue = 0
         setFrameIfNeeded(panel, target)
         // ★★ T91:**先画这一帧,再上屏** —— 顺序反了就是那道白光。
         //
@@ -635,7 +640,12 @@ final class PanelController: ObservableObject {
         panel.displayIfNeeded()
         if isTraceEnabled { probeContentReady(panel) }   // 🔬 白光排查:上屏前量一次内容
         panel.orderFrontRegardless()
-        if isTraceEnabled { probeShownFrames(panel) }   // 🔬 上屏**之后**连拍:这才是屏幕上真显示的东西
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let panel else { return }
+            panel.alphaValue = 1
+            // 🔬 连拍放在这里:拍的是"第一次被看见的那几帧",不是 alpha 0 的那几帧
+            if isTraceEnabled { self?.probeShownFrames(panel) }
+        }
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
         // **一次唤起的全部结算,一行**:语境屏 + App 数 + 按键→上屏(含枚举)。
