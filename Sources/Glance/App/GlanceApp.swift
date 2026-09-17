@@ -68,16 +68,20 @@ struct GlanceApp: App {
                     ThumbnailRefresher.shared.start()
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
-                    // 双击 ⌃ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
-                    // 开关 key: pointer.doubleControlJumps
-                    DoubleControlTap.shared.start()
+                    // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
+                    // 开关 key: pointer.doubleOptionJumps(触发键 2026-09-17 由 ⌃ 改 ⌥:与 IDEA 冲突)
+                    DoubleOptionTap.shared.start()
+                    // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
+                    // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
+                    ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }
+                    ThreeFingerTap.shared.start()
                     hotkeys.onScroll = { [weak panelController] e in panelController?.handleScrollEvent(e) }
                     panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
-                    if permissions.allGranted { hotkeys.start() }
+                    if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
                 .onChange(of: permissions.allGranted) { _, granted in
-                    if granted { hotkeys.start() }
+                    if granted { hotkeys.start(); scheduleWarmup() }
                 }
         }
         .menuBarExtraStyle(.menu)
@@ -113,4 +117,17 @@ struct GlanceApp: App {
 
     private func showPermissions() { showWindow(id: "permissions") }
     private func showSettings() { showWindow(id: "settings") }
+
+    /// 冷启动预热(T86):启动后空闲 2.5s 干两件没人看的事 ——
+    /// ① 语境屏枚举 + 预截一遍:把冷枚举管线(T85 实测 256ms:CGWindowList / AX 首连 / SCK 全是
+    ///    第一次)与空缓存整个暖掉,首局唤起直接吃热路径(实测上屏 353ms → 84ms);
+    /// ② 两块面板窗(NSPanel + SwiftUI hosting)先建好但不显示:首局"开窗 80ms"(T85 实测)
+    ///    不占唤起那一拍。
+    /// 权限齐了才发:预截没有屏幕录制权限只会白失败;权限中途补齐走 onChange 那条路,同样能到这。
+    private func scheduleWarmup() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [panelController] in
+            ThumbnailRefresher.shared.coldStartSweep()
+            panelController.prewarmPanels()
+        }
+    }
 }

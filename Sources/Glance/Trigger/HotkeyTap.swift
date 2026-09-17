@@ -118,6 +118,10 @@ final class HotkeyTapCenter {
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
 
+    /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
+    /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
+    private var pinnedSession = false
+
     // MARK: - 生命周期
 
     func start() {
@@ -173,7 +177,16 @@ final class HotkeyTapCenter {
     /// 键盘路径之外的会话终结(鼠标点卡片确认/面板外点击放弃等):面板控制器每次
     /// dismiss 必须调这个,否则钉住模式下状态机永远卡在 navigating,⌥Tab 再也唤不醒
     /// ——实机现形:鼠标确认后 switcher 永久失能
-    func endSession() { setState(.idle) }
+    func endSession() { pinnedSession = false; setState(.idle) }
+
+    /// 三指点按的入口:没有触发键的按下,所以直接进导航态。
+    /// 已在跑就不重开(手势抖动不产生第二局;面板窗口复用,重开只会把状态搅乱)。
+    func beginPinnedSession() {
+        guard state == .idle else { return }
+        pinnedSession = true
+        setState(.navigating)
+        emit(.begin)
+    }
 
     // MARK: - Carbon 热键(触发键)
 
@@ -316,7 +329,7 @@ final class HotkeyTapCenter {
         case (.navigating, false):
             // 钉住:松手不确认、不退出导航态——面板与它的"脑子"一起钉住,
             // 否则面板还在台上、状态机已经下班,Tabs/Esc 全漏给前台 App(实机现形)
-            if pinPanel { break }
+            if pinPanel || pinnedSession { break }
             setState(.idle)
             emit(.confirm)
         default:
@@ -517,39 +530,153 @@ private func hotKeyEventHandler(
     return noErr
 }
 
-// MARK: - 双击 ⌃ 把指针送到下一块屏幕
+// MARK: - 三指点按唤起面板(钉住,不散场)
 
-/// 双击 ⌃ 把指针送到**下一块屏幕**（今天双屏场景 = 另一块屏，多屏自动循环 ✓）。
+/// 三指点按 = 唤起面板,并且**这一局不散场**(没有键可松 ⇒ 一直留着,直到选一个/Esc/点外面)。
+///
+/// 为什么必须借私有框架:触控板的**原始触摸**不在 CGEvent 里 —— 三指点按既不是 `.gesture`,
+/// 也不是鼠标事件;系统把它当"查词/拖移"的手势自己消费掉了。能看到"现在几根手指、按了多久"的
+/// 唯一地方是 `/System/Library/PrivateFrameworks/MultitouchSupport.framework`
+/// (MiddleClick 一类工具同一条路)。
+///
+/// ⚠️ 本机**三指拖移是开着的**(`TrackpadThreeFingerDrag = 1`,2026-09-17 实测),所以判据必须
+/// 和拖移分得开。这里只用两条:**恰好三指** + **按下到抬起 ≤ 0.30s** —— 拖移天然要按住一段时间,
+/// 点按天然是一碰就走。
+/// 刻意**不看触摸坐标**:那个结构体的字段布局是反推来的,一旦猜错,位移永远算成离谱的大值,
+/// 结果是"这个功能永远不触发" ✗。少一个判据,换来一个不会因为布局猜错而死掉的探针。
+/// 代价:三指**快速**甩一下(拖移起手,<0.3s)会误开面板 —— 代价只是面板开了一下,点外面就散。
+///
+/// **失败即关门**:框架/符号/设备任一取不到 ⇒ 记一行日志、功能静默不可用,绝不拖垮 App。
+final class ThreeFingerTap {
+    static let shared = ThreeFingerTap()
+    private init() {}
+
+    /// 设置项。**默认关**(新开关一律默认对齐 macOS:macOS 没有这个功能)。
+    /// UserDefaults 直读 ⇒ 设置里一改立刻生效,不用重启(与 DoubleOptionTap 同一套约定)。
+    static let defaultsKey = "pointer.threeFingerTapPanel"
+    private var enabled: Bool { UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? false }
+
+    var onFire: (() -> Void)?
+
+    // MARK: 私有框架的接口(反推布局,只读 state 一个字段)
+
+    private struct MTPoint { var x: Float = 0; var y: Float = 0 }
+    private struct MTVector { var pos = MTPoint(); var vel = MTPoint() }
+    private struct Finger {
+        var frame: Int32 = 0
+        var timestamp: Double = 0
+        var identifier: Int32 = 0
+        var state: Int32 = 0        // 4 = 正在触摸
+        var fingerId: Int32 = 0
+        var handId: Int32 = 0
+        var normalized = MTVector()
+        var size: Float = 0
+        var zero1: Int32 = 0
+        var angle: Float = 0
+        var majorAxis: Float = 0
+        var minorAxis: Float = 0
+        var absolute = MTVector()
+        var zero2: Int32 = 0
+        var zero3: Int32 = 0
+    }
+
+    private typealias ContactCallback = @convention(c) (Int32, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
+
+    private var started = false
+    private var maxTouches = 0
+    private var beganAt: CFAbsoluteTime = 0
+    private static let maxDuration: Double = 0.30
+
+    func start() {
+        guard !started else { return }   // 幂等
+        started = true
+        let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
+        guard let lib = dlopen(path, RTLD_NOW),
+              let symList = dlsym(lib, "MTDeviceCreateList"),
+              let symRegister = dlsym(lib, "MTRegisterContactFrameCallback"),
+              let symStart = dlsym(lib, "MTDeviceStart") else {
+            glog("[三指点按] 取不到 MultitouchSupport ⇒ 该手势不可用(其余照常)")
+            return
+        }
+        typealias CreateList = @convention(c) () -> CFMutableArray?
+        typealias Register = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
+        typealias StartDevice = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
+        let createList = unsafeBitCast(symList, to: CreateList.self)
+        let register = unsafeBitCast(symRegister, to: Register.self)
+        let startDevice = unsafeBitCast(symStart, to: StartDevice.self)
+        guard let devices = createList() else {
+            glog("[三指点按] 拿不到触控设备 ⇒ 该手势不可用(其余照常)")
+            return
+        }
+        let count = CFArrayGetCount(devices)
+        for i in 0..<count {
+            guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
+            register(UnsafeMutableRawPointer(mutating: raw), ThreeFingerTap.contactFrame)
+            startDevice(UnsafeMutableRawPointer(mutating: raw), 0)
+        }
+        glog("[三指点按] 已上线(\(count) 个设备)· 开关 \(Self.defaultsKey) 现在是 \(enabled ? "开" : "关")")
+    }
+
+    /// C 回调:主线程之外也可能被调 ⇒ 只碰自己这几个标量,回调末尾回主线程才动作。
+    private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
+        let tap = ThreeFingerTap.shared
+        var touching = 0
+        if let data, nFingers > 0 {
+            for i in 0..<Int(nFingers) where data.assumingMemoryBound(to: Finger.self)[i].state == 4 { touching += 1 }
+        }
+        if touching > 0 {
+            if tap.maxTouches == 0 { tap.beganAt = CFAbsoluteTimeGetCurrent() }
+            tap.maxTouches = max(tap.maxTouches, touching)
+            return 0
+        }
+        // 全部抬起 ⇒ 给这一轮判卷
+        let maxTouches = tap.maxTouches
+        let held = CFAbsoluteTimeGetCurrent() - tap.beganAt
+        tap.maxTouches = 0
+        guard maxTouches == 3, held <= maxDuration else { return 0 }
+        DispatchQueue.main.async {
+            glog(String(format: "[三指点按] 三指 %.0fms → 唤起(钉住)", held * 1000))
+            if ThreeFingerTap.shared.enabled { ThreeFingerTap.shared.onFire?() }
+        }
+        return 0
+    }
+}
+
+// MARK: - 双击 ⌥ 把指针送到下一块屏幕
+
+/// 双击 ⌥ 把指针送到**下一块屏幕**（今天双屏场景 = 另一块屏，多屏自动循环 ✓）。
 ///
 /// 为什么不是"注册一个热键"：⌘/⌃/⌥/⇧ 是**修饰键**，系统热键 API 只接受"修饰键 + 一个真实按键"，
-/// 单独一个 ⌃ 注册不了。所以换一种做法：**监听事件流**，只看不改 ——
-/// 两处监听都把事件**原样返回**（`return e`），一个字节都不吞，因此不可能影响 ⌃C、⌃↑、⌥Tab 等任何既有操作。
+/// 单独一个 ⌥ 注册不了。所以换一种做法：**监听事件流**，只看不改 ——
+/// 两处监听都把事件**原样返回**（`return e`），一个字节都不吞，因此不可能影响 ⌥Tab、⌥⇧ 等任何既有操作。
 ///
-/// 要小心的不是"冲突"（双 ⌃ 不是 macOS 的系统快捷键），而是**误触发**：
-/// 一天要按几百次"⌃ + 别的键"。所以规则是 —— **两次干净的 ⌃ 之间只要夹了任何别的按键，立刻作废**。
-/// 于是 ⌃C、⌃↑、⌃Tab 永不触发；只有"干干净净连按两下 ⌃"才动。
+/// 触发键史:曾是双击 ⌃(2026-09-15)—— 用户实测与 IDEA 的 ⌃ 系快捷键打架,2026-09-17 改 ⌥。
+///
+/// 要小心的不是"冲突"（双 ⌥ 不是 macOS 的系统快捷键 —— 按住 ⌥ 出音标选单那是"按住",
+/// 只有一次 down,凑不出双击），而是**误触发**：
+/// 一天要按几百次"⌥ + 别的键"。所以规则是 —— **两次干净的 ⌥ 之间只要夹了任何别的按键，立刻作废**。
+/// 于是 ⌥ 组合键、⌥Tab(触发键自己也走 ⌥+键的路,被 dirty 拦住)永不误触发；只有"干干净净连按两下 ⌥"才动。
 /// 最坏情况的代价也只是指针跳了一下，再双击一次就回来 —— 自纠正。
 ///
 /// 放在这个文件里而不是新建文件：本工程的 pbxproj 用的是**显式文件引用**，
 /// 新建 .swift 必须同时在四处登记（PBXBuildFile / PBXFileReference / group / Sources phase），
 /// 漏一处就是 `cannot find 'X' in scope`。同一个 domain 的代码就近放，先避免这类机械风险。
-final class DoubleControlTap {
-    static let shared = DoubleControlTap()
+final class DoubleOptionTap {
+    static let shared = DoubleOptionTap()
     private init() {}
 
     /// 设置项。**默认关**：macOS 本身没有这个功能，按"新开关一律默认对齐 macOS"的规则应为关。
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
-    static let defaultsKey = "pointer.doubleControlJumps"
-    /// 移完指针是否**一并落焦**到那块屏台前的那扇窗(默认开:用户明确期望"过去就能打字")
-    /// 关掉它 = 只搬指针,不碰键盘(适用于"只是过去点一下"的场景)
-    static let landsFocusKey = "pointer.doubleControlLandsFocus"
+    /// key 随触发键换名(⌃→⌥),**不做旧值迁移**:功能默认关,丢一次开关状态无伤
+    /// (先例:panel.puckRiseFromBottom → panel.slideFromLastApp 也是不迁移)。
+    static let defaultsKey = "pointer.doubleOptionJumps"
     private var enabled: Bool { UserDefaults.standard.bool(forKey: Self.defaultsKey) }
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
-    private var lastCleanDown: CFAbsoluteTime?   // 上一次"干净地按下 ⌃"的时刻
-    private var dirty = false                    // 这一轮按住 ⌃ 期间有没有夹别的键
-    private var controlWasDown = false
+    private var lastCleanDown: CFAbsoluteTime?   // 上一次"干净地按下 ⌥"的时刻
+    private var dirty = false                    // 这一轮按住 ⌥ 期间有没有夹别的键
+    private var optionWasDown = false
     private static let minGap: Double = 0.06     // 太快 ⇒ 同一次按住的抖动，不算双击
     private static let maxGap: Double = 0.30     // 超过 ⇒ 不像"有意双击"（苹果 ~500ms 对修饰键太松）
 
@@ -572,12 +699,12 @@ final class DoubleControlTap {
         case .keyDown:
             dirty = true                       // 夹了别的按键 ⇒ 这一轮作废
         case .flagsChanged:
-            // ⌘/⌥/⇧ 动过也算"夹了别的键"（fn / capsLock 常驻，不算）
-            if !e.modifierFlags.intersection([.command, .option, .shift]).isEmpty { dirty = true }
-            let controlDown = e.modifierFlags.contains(.control)
-            guard controlDown != controlWasDown else { return }   // 只认状态翻转
-            controlWasDown = controlDown
-            guard controlDown else { return }                     // 抬起：什么都不做
+            // ⌘/⌃/⇧ 动过也算"夹了别的键"（fn / capsLock 常驻，不算；⌥ 自己是触发键，不算）
+            if !e.modifierFlags.intersection([.command, .control, .shift]).isEmpty { dirty = true }
+            let optionDown = e.modifierFlags.contains(.option)
+            guard optionDown != optionWasDown else { return }   // 只认状态翻转
+            optionWasDown = optionDown
+            guard optionDown else { return }                     // 抬起：什么都不做
             let now = CFAbsoluteTimeGetCurrent()
             if let prev = lastCleanDown, now - prev >= Self.minGap, now - prev <= Self.maxGap, !dirty {
                 lastCleanDown = nil
@@ -649,15 +776,16 @@ final class DoubleControlTap {
         CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
         CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
         // 把"工作上下文"一起搬过去:落焦到那块屏台前的那扇窗 ⇒ 过去就能直接打字。
+        // **落焦是跳屏的固定语义,没有"只搬指针"模式**(T87 v2 用户裁定:
+        // 「移动过去不落焦那移动的意义是什么」—— 子开关废除)。
         // 不算融合操作 —— 落点由那块屏自身决定,没有替用户做选择(ADR-0007 修正)。
         let targetID = ids[(from + 1) % ids.count]
         var landed = ""
-        let wantFocus = UserDefaults.standard.object(forKey: Self.landsFocusKey) as? Bool ?? true
-        if wantFocus, let w = landingWindow(on: targetID) {
+        if let w = landingWindow(on: targetID) {
             MainActor.assumeIsolated { WindowFocuser.focus(window: w) }   // 监听器在主线程,无需再跳
             landed = " · 落焦 \(w.ownerName)"
         }
-        print(String(format: "[指针] 双击 ⌃ → 屏 %d → 屏 %d (居中)%@",
+        print(String(format: "[指针] 双击 ⌥ → 屏 %d → 屏 %d (居中)%@",
                      from + 1, (from + 1) % ids.count + 1, landed))
     }
 }
