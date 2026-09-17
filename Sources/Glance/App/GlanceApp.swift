@@ -83,6 +83,10 @@ struct GlanceApp: App {
                     }
                     ThreeFingerTap.shared.start()
                     hotkeys.onScroll = { [weak panelController] e in panelController?.handleScrollEvent(e) }
+                    // T91 表一 ⑤:别处的键盘输入 ⇒ 钉住的那一局自己收("牛皮糖")
+                    hotkeys.onElsewhereInput = { [weak panelController] in
+                        panelController?.dismissForOutsideInput()
+                    }
                     panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
                     if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
                 }

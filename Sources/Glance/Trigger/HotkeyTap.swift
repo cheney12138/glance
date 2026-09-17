@@ -57,6 +57,9 @@ final class HotkeyTapCenter {
     /// 会话期间的滚动(由 navTap 转来)。面板是浮层 ⇒ 滚动**只该服务于面板**,
     /// 所以 navTap 那一发被吞掉,底下的 App 收不到。
     var onScroll: ((NSEvent) -> Void)?
+    /// T91 表一 ⑤:导航期里出现"**不是我们键**"的那一发 = 用户开始做别的事。
+    /// 面板那边据此收掉钉住的那一局(治"牛皮糖")。**只旁观,不吞键** —— 与 onScroll 同一纪律。
+    var onElsewhereInput: (() -> Void)?
     /// T7.5:⌘+左键点击(Quartz 全局坐标)。导航态里挂起(Q9-④)
     var onCmdClick: ((CGPoint) -> Void)?
 
@@ -368,7 +371,26 @@ final class HotkeyTapCenter {
             emit(event.flags.contains(.maskShift) ? .prev : .next)
             return true
         }
-        guard Self.navKeys.contains(keyCode) else { return false }
+        // ★★ 修饰键门禁(2026-09-17 病例,严重):导航键原来**只看 keycode** ——
+        // 于是用户在自己 App 里按 ⌃⌘W(他自己的热键)被我们当成「W = 关窗」,
+        // **把选中的那个窗杀了**;⌘W / ⌘Q / ⌘H / ⌘1… 同理,全会被抢。
+        // 用户原话:「qwer fh 都得是全匹配的快捷键才能生效」—— 说的就是这件事。
+        //
+        // 判据:除了**触发键本身那个修饰键**(只在"按住触发键"的那一局里才该出现)之外,
+        // 不许再夹 ⌘/⌃/⌥(⇧ 始终允许:我们自己的 ⇧` / ⇧Tab 要用它)。
+        // 夹了 ⇒ 这不是我们的键 ⇒ 原样交给 App;钉住的那一局还算"用户在做别的事"(表一 ⑤)。
+        let allowedMods: CGEventFlags = pinnedSession ? [] : config.modifierMask
+        let extraMods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate])
+        if !extraMods.subtracting(allowedMods).isEmpty {
+            if pinnedSession { onElsewhereInput?() }
+            return false   // 不吞:让 App 收到它自己的快捷键
+        }
+        guard Self.navKeys.contains(keyCode) else {
+            // T91 表一 ⑤:别的键 ⇒ 用户在做别的事。**只认钉住的局**:
+            // 按住触发键的那一局,松手本来就会结束(不该被一个无关键打断)。
+            if pinnedSession { onElsewhereInput?() }
+            return false   // 照旧放行,不吞
+        }
         // ★ 截图会话:整套导航键让权(T32)。放在 trace 之前 —— 这一支的整条路都与面板无关了
         if captureSessionTookOver(keyCode: keyCode) { return false }
         trace("navKey kc=\(keyCode)")
@@ -610,6 +632,32 @@ final class ThreeFingerTap {
 
     private typealias ContactCallback = @convention(c) (Int32, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
 
+    // MARK: T91 表二:手势的**位移**判据(先量后定,规格见 design/gesture-session-spec.md)
+    //
+    // 为什么要有它:2026-09-17 用户实测「四指**上下滑也会唤出环**」—— 判据里刻意没有坐标
+    // (怕反推的结构体布局猜错、整个探针当场死掉),代价就是"滑"和"点"分不开。
+    // 现在这个代价已经付过,改用位移判据;**阈值不猜,先量**:这一步只记账,不改行为。
+    //
+    // 同时量两套坐标(normalized 与 absolute)—— 反推布局若错,其中一套会给出荒唐值,
+    // 一眼就能看出来该信哪一套。
+    // ⚠️ 第一版量错了(记在这里,别再犯):量的是"所有触摸点的**包围盒**" —— 而轻点也有 3–4 根
+    // 手指**张在**触控板上,包围盒天生就大(实测 abs≈50–66 = 手指之间的张开距离),
+    // 于是"点"和"滑"分不开。正确的量是:**每根手指离开它落点时走了多远**(按 fingerId 跟踪)。
+    private var firstNorm: [Int32: MTPoint] = [:]
+    private var firstAbs: [Int32: MTPoint] = [:]
+    private var maxNormMove: Float = 0
+    /// T91 表二:**3 与 4 指都要过"位移"这一关**。阈值来自实测(2026-09-17):
+    ///   真轻点   norm≈0.002–0.007
+    ///   三指拖移 norm≈0.13–0.21    四指滑动 norm≈0.13–0.55
+    /// 中间那片空档很宽 ⇒ 取 0.08,对真轻点留了 **10 倍**余量。
+    ///
+    /// ⚠️ 病例(别再犯):第一版**只给四指**加,理由写的是"三指的横扫/竖扫在系统里都是关的"——
+    /// **漏查了一个键**:`TrackpadThreeFingerDrag = 1`(**三指拖移开着**,用户天天在用:拖窗、选字)。
+    /// 于是"拖窗"的那种快速三指(150–300ms、位移 0.13+)被我们判成了轻点 ⇒ 用户实报「三指滑动改坏了」。
+    /// 教训:查"系统占用了什么手势"时,要把**拖移(Drag)**和**轻扫(Swipe)**两类键都过一遍。
+    private static let maxMove: Float = 0.08
+    private var maxAbsMove: Float = 0
+
     private var started = false
     private var maxTouches = 0
     private var beganAt: CFAbsoluteTime = 0
@@ -651,16 +699,42 @@ final class ThreeFingerTap {
         let tap = ThreeFingerTap.shared
         var touching = 0
         if let data, nFingers > 0 {
-            for i in 0..<Int(nFingers) where data.assumingMemoryBound(to: Finger.self)[i].state == 4 { touching += 1 }
+            for i in 0..<Int(nFingers) {
+                let f = data.assumingMemoryBound(to: Finger.self)[i]
+                guard f.state == 4 else { continue }     // 4 = 正在触摸
+                touching += 1
+                // T91 表二:每根手指"离开落点走了多远"—— 取这一整次按压里的最大值。
+                // 点:≈0;滑:几十(absolute)/ 零点几(normalized)。两套坐标都记,互相印证。
+                let id = f.fingerId
+                if let p0 = tap.firstNorm[id] {
+                    let dx = Double(f.normalized.pos.x - p0.x), dy = Double(f.normalized.pos.y - p0.y)
+                    tap.maxNormMove = max(tap.maxNormMove, Float((dx * dx + dy * dy).squareRoot()))
+                } else {
+                    tap.firstNorm[id] = f.normalized.pos
+                }
+                if let p0 = tap.firstAbs[id] {
+                    let dx = Double(f.absolute.pos.x - p0.x), dy = Double(f.absolute.pos.y - p0.y)
+                    tap.maxAbsMove = max(tap.maxAbsMove, Float((dx * dx + dy * dy).squareRoot()))
+                } else {
+                    tap.firstAbs[id] = f.absolute.pos
+                }
+            }
         }
         if touching > 0 {
-            if tap.maxTouches == 0 { tap.beganAt = CFAbsoluteTimeGetCurrent() }
+            if tap.maxTouches == 0 {
+                tap.beganAt = CFAbsoluteTimeGetCurrent()
+                tap.firstNorm.removeAll(); tap.firstAbs.removeAll()
+                tap.maxNormMove = 0; tap.maxAbsMove = 0
+            }
             tap.maxTouches = max(tap.maxTouches, touching)
             return 0
         }
         // 全部抬起 ⇒ 给这一轮判卷
         let maxTouches = tap.maxTouches
         let held = CFAbsoluteTimeGetCurrent() - tap.beganAt
+        // 表二记账:归一化坐标的包围盒对角线 + 绝对坐标的(反推布局若错,两套会互相矛盾)
+        let nSpread = tap.maxNormMove
+        let aSpread = tap.maxAbsMove
         tap.maxTouches = 0
         // T91:3 与 4 指都归这里判卷,而且**按 maxTouches** —— 不按"抬手那一刻的手指数":
         // 四根手指不可能在同一帧落齐(先落 3 根、第 4 根 40ms 后才到是常态)⇒ 只看当前手指数
@@ -673,19 +747,29 @@ final class ThreeFingerTap {
             // (只在 ≥2 指时出声:一指的普通点按不该进账)
             if maxTouches >= 2 {
                 DispatchQueue.main.async {
-                    glog(String(format: "[指点按] %d 指 %.0fms → 不动作(只认 3/4 指,且 ≤%.0fms)",
-                                maxTouches, held * 1000, maxDuration * 1000))
+                    glog(String(format: "[指点按] %d 指 %.0fms 位移 norm=%.4f abs=%.1f → 不动作(只认 3/4 指,且 ≤%.0fms)",
+                                maxTouches, held * 1000, nSpread, aSpread, maxDuration * 1000))
                 }
+            }
+            return 0
+        }
+        // T91 表二:位移关 —— 滑动让给系统(三指拖移 / 四指调度中心·曝光·桌面)
+        if nSpread > ThreeFingerTap.maxMove {
+            DispatchQueue.main.async {
+                glog(String(format: "[指点按] %d 指 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
+                            maxTouches, nSpread, ThreeFingerTap.maxMove))
             }
             return 0
         }
         DispatchQueue.main.async {
             let tap = ThreeFingerTap.shared
             if maxTouches == 4 {
-                glog(String(format: "[指点按] 四指 %.0fms → 唤起并直接进未启动环(钉住)", held * 1000))
+                glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
+                            held * 1000, nSpread, aSpread))
                 if tap.enabledFour { tap.onFireFour?() }
             } else {
-                glog(String(format: "[指点按] 三指 %.0fms → 唤起(钉住)", held * 1000))
+                glog(String(format: "[指点按] 三指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
+                            held * 1000, nSpread, aSpread))
                 if tap.enabled { tap.onFire?() }
             }
         }

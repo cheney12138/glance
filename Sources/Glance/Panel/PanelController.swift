@@ -223,6 +223,7 @@ final class PanelController: ObservableObject {
     // MARK: - 触发层入口
 
     func handle(_ action: HotkeyTapCenter.Action) {
+        bumpIdle()
         switch action {
         case .begin: begin(reverse: false)
         case .beginReverse: begin(reverse: true)
@@ -255,6 +256,33 @@ final class PanelController: ObservableObject {
         case .toggleFullscreen: destructive(.fullscreen)
         case .hideApp: destructive(.hide)
         }
+    }
+
+    // MARK: - T91 表一 ④:闲置超时(治"牛皮糖")
+
+    /// 钉住的一局里 **3 秒没动静**就自己收。规格:`design/gesture-session-spec.md` 表一 ④。
+    ///
+    /// 用户原话:「三指/四指唤起的环, 只是在手指离开触摸板之后不会消失, 不代表有别的操作也不消失,
+    /// 成牛皮糖了」。⇒ 判据很朴素:**用户在不在动它**。
+    ///
+    /// ⚠️ 只在"**触发键已经松开**"的局里计时:按住 ⌘Tab 时用户停下来看一眼是常态,
+    /// 那不是"闲置",不该被收走。这个区分不需要问触发层 —— 直接看当前的修饰键。
+    private var idleWork: DispatchWorkItem?
+    private static let idleLimit: Double = 3.0
+
+    /// 任何"用户在动它"的动作都调它(键盘 / 指针 / 滚轮)。
+    private func bumpIdle() {
+        idleWork?.cancel()
+        idleWork = nil
+        let mods = NSEvent.modifierFlags
+        guard !mods.contains(.option), !mods.contains(.command) else { return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.isVisible else { return }
+            self.trace("[T91] 闲置 \(Int(Self.idleLimit))s 无操作 → 收面板")
+            self.dismiss(reason: "闲置超时")
+        }
+        idleWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleLimit, execute: w)
     }
 
     // MARK: - 生命周期
@@ -313,8 +341,18 @@ final class PanelController: ObservableObject {
         entrySelected = false
         launchIndex = nil
         if UserDefaults.standard.object(forKey: "panel.showLaunchables") as? Bool ?? true {
-            let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+            // ⚠️ 2026-09-17 病例:除了 bundle id,**把 bundle 的路径也放进"在跑"的集合**。
+            // 有些 Dock 常驻项取不到 bundleID(`DockApps.launchables` 里会退化成用 **path** 当 id),
+            // 那时"在跑"的集合里只有 id ⇒ 两边**永远对不上** ⇒ 明明在跑的 App 也被列成"未启动"。
+            // 用户实报:「app 全启动了, 但四指没有文案提示」—— 日志里正是 `未启动的 App(共 2 个)`。
+            let runningApps = NSWorkspace.shared.runningApplications
+            var running = Set(runningApps.compactMap(\.bundleIdentifier))
+            running.formUnion(runningApps.compactMap { $0.bundleURL?.path })
             launchables = DockAppsProvider.launchables(excluding: running)
+            // 诊断(只在真有名单时出声):把名字与 id 都打出来 —— 一眼能看出是谁、以及 id 退化没退化
+            if isTraceEnabled, !launchables.isEmpty {
+                trace("[T91] 未启动名单: " + launchables.map { "\($0.name)[\($0.id)]" }.joined(separator: " · "))
+            }
         } else {
             launchables = []
         }
@@ -643,6 +681,7 @@ final class PanelController: ObservableObject {
         DispatchQueue.main.async { [weak self, weak panel] in
             guard let panel else { return }
             panel.alphaValue = 1
+            self?.bumpIdle()          // 表一 ④:从"看得见"那一刻开始计时
             // 🔬 连拍放在这里:拍的是"第一次被看见的那几帧",不是 alpha 0 的那几帧
             if isTraceEnabled { self?.probeShownFrames(panel) }
         }
@@ -699,7 +738,17 @@ final class PanelController: ObservableObject {
     /// 曾经是"确认后留 0.45s 播涟漪、其余留 0.38s 播淡出"——那条设计的代价是**面板比动作多活一段**,
     /// 而切换器关闭时用户已经在看目标窗口了,再叠一层半透明就是在拖节奏。原生切换器也是啪一下就没。
     /// 代价:确认涟漪随之作废(它需要面板多留 0.45s 才看得见,与"立刻消失"互斥),`confirmPulse` 一并删。
+    /// T91 表一 ⑤:别处有输入(非面板按键 / 面板外点击)⇒ 钉住的那一局自己收。
+    /// 规格见 `design/gesture-session-spec.md` 表一 ⑤;理由写进日志,复盘时与"闲置超时"分得清。
+    func dismissForOutsideInput() {
+        guard isVisible else { return }
+        trace("[T91] 别处有输入 → 收面板(表一 ⑤)")
+        dismiss(reason: "别处输入")
+    }
+
     private func dismiss(reason: String) {
+        idleWork?.cancel()   // 散场就把表撤掉(免得迟到的那一发对着已关的面板说话)
+        idleWork = nil
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——
         // 不拦的话枚举回来会把面板在放弃之后又冒出来
         beginGeneration &+= 1
@@ -1206,6 +1255,7 @@ final class PanelController: ObservableObject {
     /// 两条细节照抄 LumaRing 实测经验:惯性滚动不算一次操作;节流(一次滑动会送几十个事件)。
     /// 吞事件的部分在 navTap —— 这里只管"要不要动选中"。
     func handleScrollEvent(_ e: NSEvent) {
+        bumpIdle()
         guard panel?.isVisible == true else { return }   // 双保险:面板不在就什么都不做
         // 设置开关(默认开)。用 object(forKey:) 取,而不是 bool(forKey:) —— 后者的
         // "没写过"和"写成 false"是同一个值,默认值就没法表达(与 switch.advanceOnOpen 同一处理)。
@@ -1381,6 +1431,7 @@ final class PanelController: ObservableObject {
 
     /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"
     func hoverApp(_ i: Int) {
+        bumpIdle()
         // T91:换环后 strip 里装的是"未启动的 App" —— 同一格上的 hover 归 launchIndex,
         // 不能落到主环的 appIndex 上(那会把一套看不见的选中改掉)
         if entrySelected {
@@ -1539,6 +1590,7 @@ final class PanelController: ObservableObject {
     }
 
     func hoverWindow(_ i: Int) {
+        bumpIdle()
         guard i != winIndex else { return } // 同一格的重复 hover(指针每像素都发声)不进账
         // **到达**与**接受**分两行记:这一行证明"hover 事件到了",下一行证明"我们认了"。
         // 两行之间的时间差 = 我们这边的处理耗时;两行都晚 = 事件本身就投递晚了(窗口/层级/系统侧)
