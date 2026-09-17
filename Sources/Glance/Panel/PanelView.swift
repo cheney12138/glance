@@ -73,9 +73,10 @@ struct PanelView: View {
             }
 
             iconStrip
-                .padding(.horizontal, PanelMetrics.rowPadX)
                 // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
-                // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)
+                // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)。
+                // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
+                // 这层只管竖直,不然左右各叠一层就是双重边距
                 .padding(.vertical, PanelMetrics.rowPadY)
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
@@ -103,60 +104,67 @@ struct PanelView: View {
     // MARK: - 图标层
 
     private var iconStrip: some View {
-        // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),两端再负 padding 收回来 ——
-        // 这样格与格之间没有"鼠标划过却什么都不选中"的死区。间隙放大到 ~24 之后,
-        // 死区宽达格子的 30%,指针横扫面板会明显发木。
+        // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),App 区两端再负 padding 收回来 ——
+        // 这样格与格之间没有"鼠标划过却什么都不选中"的死区。
+        // T89 v2:负 padding **只属于 App 区**(内层 HStack)—— 它原本吃在整条上,
+        // 会把尾格的右半格也吃掉,点阵到玻璃边变成 rowPadX+半格,比线到两边宽出一档
+        // (用户实拍「左右不对称」)。右缘留白也改成 iconGap:尾部节奏三点同距
+        // (App→线 = 线→点 = 点→玻璃边 = iconGap)。
         HStack(spacing: 0) {
-            ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
-                IconCell(
-                    group: group,
-                    // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
-                    // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
-                    selected: i == controller.appIndex && !controller.entrySelected,
-                    // 开局第一帧/animation 关掉时给 nil:窗口是复用的,上一局的选中会在新一局开局时
-                    // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
-                    motion: controller.selectionAnimation(PanelMotion.select)
-                )
-                .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
-                // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
-                // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
-                // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
-                //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的";
-                // ③ 幅度 = `entryFloatDistance`(选中图标自己的上浮量):读作"轻轻浮上来",不是"钻出来"
-                .offset(y: i == controller.appIndex && !controller.entrySelected ? controller.contentEntryRise : 0)
-                .contentShape(Rectangle())
-                .onHover { inside in if inside { controller.hoverApp(i) } }
-                // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
-                .onTapGesture {
-                    if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
+            HStack(spacing: 0) {
+                ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
+                    IconCell(
+                        group: group,
+                        // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
+                        // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
+                        selected: i == controller.appIndex && !controller.entrySelected,
+                        // 开局第一帧/animation 关掉时给 nil:窗口是复用的,上一局的选中会在新一局开局时
+                        // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
+                        motion: controller.selectionAnimation(PanelMotion.select)
+                    )
+                    .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                    // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
+                    // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
+                    // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
+                    //    其余的只是被取消选中 —— 只滑托底而图标已经就位,读起来就是"两个动作各走各的";
+                    // ③ 幅度 = `entryFloatDistance`(选中图标自己的上浮量):读作"轻轻浮上来",不是"钻出来"
+                    .offset(y: i == controller.appIndex && !controller.entrySelected ? controller.contentEntryRise : 0)
+                    .contentShape(Rectangle())
+                    .onHover { inside in if inside { controller.hoverApp(i) } }
+                    // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
+                    .onTapGesture {
+                        if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
+                    }
                 }
             }
-            // 启动区(v11):**分割线 + 入口槽** —— 分割线负责"区与区之间"(macOS 原生语),
-            // 入口槽负责"这里还有一区"(v9 淡座点阵,但占一整格与普通 App 同节奏)。
-            // v10 的教训记牢:分割线是**加在**入口槽前面的,不是替掉它
+            .padding(.horizontal, -PanelMetrics.iconGap / 2) // App 区首格左、末格右各收回半个间隙
+            // 启动区(v11 分割线 + 入口槽 → **T89 合并为一整格尾格**):
+            // 线到两边等距、点阵到玻璃边同距(尾部三点同距 = iconGap);
+            // 整格 = 悬停/点击目标,原来分割线上那条"指针划过什么都不选中"的死区一并消失
             if !controller.launchables.isEmpty {
-                entrySeparator
-                    .frame(width: PanelMetrics.iconGap, height: PanelMetrics.icon)
-                    .allowsHitTesting(false)
-                entrySlot
-                    .frame(width: PanelMetrics.entrySlotWidth + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                entryTail
+                    .frame(width: PanelMetrics.entryTailWidth, height: PanelMetrics.icon)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside {
                             controller.hoverEntry()
                         } else {
-                            // 离开槽 = 挂"悬停回退单"(迟滞 0.3s):指针没进托盘就回退到主环选中
+                            // 离开启动区 = 挂"悬停回退单"(迟滞 0.12s):指针没回主环就回退
                             controller.scheduleEntryRevert()
                         }
                     }
-                    // 点入口槽 = 选中(托盘弹启动行);已选中再点 = no-op(等用户进到某格)
+                    // 点启动区 = 选中(托盘弹启动行);已选中再点 = no-op(等用户进到某格)
                     .onTapGesture { if !controller.entrySelected { controller.hoverEntry() } }
             }
         }
-        .padding(.horizontal, -PanelMetrics.iconGap / 2) // 首格左、末格右各收回半个间隙
         // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
         // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
+        // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),
+        // 不是玻璃边。水平内边距收在这层:左 rowPadX;右随启动区变 —— 有尾格时 = iconGap
+        // (尾部三点同距),没有时 = rowPadX 与左缘对称
         .background(alignment: .leading) { puck.allowsHitTesting(false) }
+        .padding(.leading, PanelMetrics.rowPadX)
+        .padding(.trailing, controller.launchables.isEmpty ? PanelMetrics.rowPadX : PanelMetrics.iconGap)
     }
 
     /// 滑动托底:宽 = 图标宽,上下各出 8px;换选中时整枚胶囊弹过去(位移+宽度同曲线)
@@ -203,14 +211,17 @@ struct PanelView: View {
         CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
     }
 
-    /// 启动区 = **分割线 + 入口槽**两件套(v11,用户裁定"只是让你加个分割线,不是让你把
-    /// 入口删了"—— v10 误读成替换,已纠正)。
-    ///
-    ///   · 分割线:macOS 原生语,浅黑/深白(`entrySeparator`),一根发丝线表达"区与区之间",
-    ///     占一个 gap 宽的格子,两端各得半个 gap,与左右元素等距;
-    ///   · 入口槽:v9 淡座点阵原样回归(幽灵贴淡座 α .30 + 3×3 点阵,选中点亮),
-    ///     但格子从 `entrySlotWidth+gap` 扩成**一整格**(icon + iconGap)—— 挤的病根就是
-    ///     槽比格子窄,壳被逼得溢进邻居的间隙;现在间距有保证,不再挤。
+    private var entryTail: some View {
+        HStack(spacing: 0) {
+            // 前距 = 半格:App 格子自己已带尾半格,两段相加 = 整格 iconGap,与后距同宽
+            Color.clear.frame(width: PanelMetrics.iconGap / 2)
+            entrySeparator
+            Color.clear.frame(width: PanelMetrics.iconGap)
+            entrySlot
+        }
+    }
+
+    /// 分割线:macOS 原生语,浅黑/深白,一根发丝线表达"区与区之间"
     private var entrySeparator: some View {
         RoundedRectangle(cornerRadius: PanelMetrics.hairline / 2, style: .continuous)
             .fill(PanelColors.entrySeparator)
@@ -235,7 +246,9 @@ struct PanelView: View {
                 }
             }
         }
-        .frame(height: PanelMetrics.icon)
+        // **宽度也锁死**(T89):不锁的话 HStack 把剩余空间全塞给它(弹性视图吃 proposal),
+        // 可见点阵在超宽 frame 里居中,两侧各多出 ~2.7pt 的"隐形松动",三点同距被破坏
+        .frame(width: PanelMetrics.entryDot * 3.5, height: PanelMetrics.icon)
         .scaleEffect(sel ? 1.18 : 1)
         .animation(MotionPolicy.animation(PanelMotion.entrance), value: sel)
         .allowsHitTesting(false)

@@ -118,8 +118,19 @@ enum PanelMetrics {
     static var dotLift: CGFloat { iconLift - selectionOverflow }
     // § 预览托盘
     /// 2026-09-14 用户实评"预览窗口太小":128×64 → 196×122(≈16:10,看得清窗口里写了什么)
-    static var thumbW: CGFloat { k(196) }
-    static var shotH: CGFloat { k(122) } // 截图区
+    /// T88 起卡宽**随窗比例自适应**:`thumbW` 退役,宽度走 `thumbWidth(aspect:)`
+    /// (196 = 122 × 1.61,恰好是旧定尺的等效值 —— 比例正常的横窗宽度几乎不变)
+    static var shotH: CGFloat { k(122) } // 截图区(高度恒定,宽度变)
+    /// 卡宽下/上限(基准 pt,过 k() 前夹):防极端竖条/横幅把一行撑爆或缩成纸条
+    static let thumbMinW: CGFloat = 96
+    static let thumbMaxW: CGFloat = 264
+
+    /// 卡宽 = 高 × 窗口比例(122 = `shotH` 的基准,同源勿各写各的),夹限后过会期缩放。
+    /// 卡片比例与截图比例由此**按构造相等** —— `fill` 不再裁内容,竖窗(微信登录窗那种
+    /// 自绘窗)不再塞在横卡里留大灰边(2026-09-17 用户实拍病例)
+    static func thumbWidth(aspect: CGFloat) -> CGFloat {
+        k(min(max(122 * max(aspect, 0.2), thumbMinW), thumbMaxW))
+    }
     // § 卡面压色(方案 D:统一底色 + 低透明度截图,`design/卡面实验台.html` 对照图拍板 2026-09-16)
     /// 非选中卡的**截图不透明度**(选中/悬停 = 1,恢复原样)。0.30 = 实验台默认值:
     /// 底色接管卡面,内容只留"结构"可辨(侧栏 / 终端网格 / 标签页)——"认窗"靠结构,
@@ -205,7 +216,11 @@ enum PanelMetrics {
     /// 入口槽占格宽(v18,用户裁定「APP 到竖线、竖线到入口的间距 ≈ 两个 APP 之间的间距,
     /// 可以稍微宽一点点」):= 点阵记号宽(3.5×entryDot)+ 一个 gap + 4pt 余量。
     /// 这样 App→竖线 ≈ gap、竖线→点阵 ≈ gap+2,与主环节奏同族,不再出现大空档
-    static var entrySlotWidth: CGFloat { entryDot * 3.5 + iconGap + k(4) }
+    /// 启动区**尾格**(T89):分割线 + 点阵合成一整格。宽度账:
+    /// [半格][线][整格][点阵] —— App 格子的尾半格 + 前半格 = 线→点 = 整格 = 点阵→玻璃边
+    /// (外层 trailing padding 给),**尾部三点同距 = iconGap**。
+    /// (v2 曾把前距写成整格:与 App 格子的尾半格叠加,App→线比其余两段大 4.6pt)
+    static var entryTailWidth: CGFloat { iconGap * 1.5 + hairline + entryDot * 3.5 }
     /// **幽灵贴圆角**(T84):走 macOS 图标的比例(≈22.5%) ——
     /// 幽灵贴(托盘启动行的壳)的立身之本是"读起来是一枚 app 图标形状的壳"
     static var ghostTileRadius: CGFloat { icon * 0.225 }

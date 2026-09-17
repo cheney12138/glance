@@ -71,7 +71,9 @@ struct PreviewPanelView: View {
     /// 不是 7+1);末行少几张时**左对齐留空**,不拉伸、不居中 —— 居中的话卡片间距会随
     /// 末行张数变,左右扫视时每一行的节凑都不一样。
     private var thumbGrid: some View {
-        let (rows, cols) = controller.trayLayout(count: windows.count)
+        // 卡宽随窗比例(T88):布局按每张卡的实际宽算,不再假定定尺
+        let widths = windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }
+        let (rows, cols) = controller.trayLayout(widths: widths)
         let rowsSafe = max(rows, 1)
         let colsSafe = max(cols, 1)
         return VStack(spacing: PanelMetrics.trayRowGap) {
@@ -312,6 +314,17 @@ private struct WindowThumb<Overlay: View>: View {
         PanelLayout.title(WindowTitle.display(raw: record.title, bundleID: bundleID))
     }
 
+    /// 本卡的宽度:随窗比例自适应(T88,见 `PanelMetrics.thumbWidth`)。
+    /// 卡片、模糊层、芯片、文字截断宽全走这一个值 —— 一卡一宽,不许各算各的。
+    /// 优先用**截图自己的比例**:透明衬边裁切(T88 v2)后内容会比窗框瘦一圈,
+    /// 所见即所得;无图(占位中)退回窗框比例,图落地那一刻宽度微调一次,与图同帧出现
+    private var cardW: CGFloat {
+        if let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return PanelMetrics.thumbWidth(aspect: CGFloat(cg.width) / CGFloat(cg.height))
+        }
+        return PanelMetrics.thumbWidth(aspect: record.aspect)
+    }
+
     var body: some View {
         // 卡片与芯片**分离**:环、浮起、阴影都只长在卡片上,芯片是卡片之外的一枚胶囊
         // (用户口径:"不跟预览窗耦合" —— 所以选中态的各种形变不会拖着芯片一起动)
@@ -319,7 +332,7 @@ private struct WindowThumb<Overlay: View>: View {
             card
             chip
         }
-        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.thumbH)
+        .frame(width: cardW, height: PanelMetrics.thumbH)
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
@@ -345,7 +358,7 @@ private struct WindowThumb<Overlay: View>: View {
                     .foregroundStyle(PanelColors.txt2)
             }
         }
-        .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
+        .frame(width: cardW, height: PanelMetrics.shotH)
         .clipped()
         // 「座」= **毛玻璃的渐变**:把这张截图自己再画一份、模糊掉,再用纵向渐变遮成"上糊下清"。
         // 三版才走到这里,记下来免得重走:
@@ -358,7 +371,7 @@ private struct WindowThumb<Overlay: View>: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: PanelMetrics.thumbW, height: PanelMetrics.shotH)
+                    .frame(width: cardW, height: PanelMetrics.shotH)
                     .clipped()
                     .blur(radius: PanelMetrics.lightsBlur, opaque: true)
                     // 毛玻璃条随底图一起压色:它就是这张截图自己,底图压了它不压,顶部会浮出一截"实"的
@@ -412,7 +425,7 @@ private struct WindowThumb<Overlay: View>: View {
                 .truncationMode(.middle)
         }
             // 文字宽度上限里要扣掉圆点与间距,否则整枚芯片会超出卡片宽
-            .frame(maxWidth: PanelMetrics.thumbW - 18 - PanelMetrics.chipDot - 5)
+            .frame(maxWidth: cardW - 18 - PanelMetrics.chipDot - 5)
             .padding(.horizontal, 9)
             .padding(.vertical, 2)
             .background(Capsule(style: .continuous).fill(PanelColors.chipBg))

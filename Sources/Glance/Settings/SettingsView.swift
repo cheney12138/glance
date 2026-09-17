@@ -206,10 +206,10 @@ struct ShortcutPane: View {
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
     @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
-    /// 双击 ⌃ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)
-    @AppStorage("pointer.doubleControlJumps") private var doubleControlJumps = false
-    /// 移动后是否顺手把键盘也带过去(默认开)
-    @AppStorage("pointer.doubleControlLandsFocus") private var doubleControlLandsFocus = true
+    /// 双击 ⌥ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)。
+    /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
+    /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
+    @AppStorage("pointer.doubleOptionJumps") private var doubleOptionJumps = false
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
     @AppStorage("switch.scrollMovesSelection") private var scrollMovesSelection = true
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
@@ -219,13 +219,9 @@ struct ShortcutPane: View {
     var body: some View {
         Group {
             SettingsGroup(label: "触发") {
-            SettingsRow(title: "双击 ⌃ 指针跳到另一块屏",
+            SettingsRow(title: "双击 ⌥ 指针跳到另一块屏",
                         desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
-                BeamSwitch(isOn: $doubleControlJumps)
-            }
-            SettingsRow(title: "顺带把键盘也带过去",
-                        desc: "关掉后只移指针，不动键盘。") {
-                BeamSwitch(isOn: $doubleControlLandsFocus)
+                BeamSwitch(isOn: $doubleOptionJumps)
             }
             SettingsRow(title: "滚动切换应用") {
                 BeamSwitch(isOn: $scrollMovesSelection)

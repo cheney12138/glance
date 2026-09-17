@@ -69,6 +69,35 @@ final class Snapshotter: ObservableObject {
         Task { await failedOnce.reset() } // 窗口列表变了,失败记录重来(权限也可能刚修好)
     }
 
+    /// 全量保活剪枝(T87 v3):按**系统当前所有在屏窗** reap,而不是只按面板的语境屏。
+    ///
+    /// 为什么要改:面板是单屏语境的,但用户会**换屏** —— 旧剪枝在每次开局把别屏窗的图
+    /// 全扔了,于是"外接 → 内建"一换屏,内建全空,卡片闪"截图中…"(2026-09-17 用户实测)。
+    /// sweep 明明拍过那些窗,是剪枝亲手扔的。
+    ///
+    /// 为什么可以**整个挪后台**:死窗的缓存条目本来就不会被展示(窗不在本局枚举里,
+    /// 就没有那张卡片),开局剪枝真正服务的只有两件 —— ① 内存回收;② 作废打到死窗上的
+    /// 在途批次。两件都不要求同步。这里的存活清单用 bare CGWindowList(**不过 AX 准入**,
+    /// 毫秒级):多保一张"AX 不认的幽灵窗"的图只是几 MB 内存,会在它关闭时被正常 reap。
+    func reapAlive() {
+        Task.detached(priority: .userInitiated) {
+            guard let infos = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]] else { return }
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+            var alive: Set<CGWindowID> = []
+            for info in infos {
+                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                      let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0
+                else { continue }
+                alive.insert(wid)
+            }
+            let aliveSet = alive // 值捕获:别把 var 提进并发闭包(Swift 6 会拒)
+            await MainActor.run { self.prune(keeping: aliveSet) }
+        }
+    }
+
     /// 同一扇窗的失败只报第一次(访达等 SCK 截不了的窗会屡败屡试;现拍风暴期曾刷屏)
     private let failedOnce = FailureLog()
 
@@ -80,7 +109,9 @@ final class Snapshotter: ObservableObject {
     /// `attempt` 是回填重试的轮次:没拍到的窗隔一会儿再试,上限 3 轮。
     /// 照 AltTab 的口径——**UI 先出来、缩略图异步补**,而不是"没拍到就永远空着":
     /// 实测"截图中…"绝大多数是**瞬时**失败(窗口刚创建、正在动画、SCK 忙),不是永久失败。
-    /// `force` = 无视缓存与 TTL,一律重拍。
+    /// `force` = 无视缓存与新鲜度,一律重拍。
+    /// `maxAge` = 自定义新鲜度(秒),nil 用 `cacheTTL`。**失焦拍**(T86)给 2s:
+    /// 2s 内拍过的(快速来回切)不重复拍,又不像 60s TTL 那样把"刚切走"当"还很新"。
     ///
     /// 用在**用户正在看的那一组**上(面板里选中的那个 App、激活的那个 App):
     /// 应用**内部**的画面变化(换主题、切文件、编辑内容)系统**不发任何事件** ——
@@ -88,7 +119,7 @@ final class Snapshotter: ObservableObject {
     /// 唯一能抓住它的时机就是"这一组被显示出来"的这一刻。
     /// 病例(2026-09-15):用户把 IDE 换成浅色主题,唤起两次卡片仍是深色
     /// —— 上一版给缓存加了 60s TTL,把这条"显示即重拍"也一起跳过了。
-    func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false) {
+    func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil) {
         guard !windows.isEmpty else { return }
         // **缓存命中就不重拍**(2026-09-15 修):以前这里把整批目标原样丢给 ScreenCaptureKit,
         // 于是每次唤起都在后台重拍十几扇窗(每扇 26–52ms 的 GPU/WindowServer 活)——
@@ -110,7 +141,7 @@ final class Snapshotter: ObservableObject {
                 if everCaptured.contains(w.wid) { missLost += 1 }   // 拍到过却没留下来 = 真丢了
                 return true
             }
-            if now - (cacheAt[w.wid] ?? 0) > Self.cacheTTL { missExpired += 1; return true }  // 太老
+            if now - (cacheAt[w.wid] ?? 0) > (maxAge ?? Self.cacheTTL) { missExpired += 1; return true }  // 太老
             return false
         }
         guard !stale.isEmpty else {
@@ -118,76 +149,120 @@ final class Snapshotter: ObservableObject {
             //  缺图那一侧仍然无条件上报,见下面的 else)
             return
         }
-        let windows = stale
+        let batch = stale
         let current = session
         Task.detached(priority: .userInitiated) { [weak self] in
-            let (images, missing) = await Self.capture(windows, failedOnce: self?.failedOnce)
             guard let self else { return }
+            // **逐窗拍、逐张回主**(T86):整批拍完一次性合并 = 一批图同时到的爆发,
+            // 是 T76 之前掉帧的真身(整批合并曾量到 140.7ms 长帧)。现在每拍完一张就回主
+            // 落一张账,单次合并不到 1ms,十张图分十拍落地,不再有可观测的合并峰值。
+            var missing: [WindowRecord] = []
+            var captured = 0
+            do {
+                let content = try await shareable.current()
+                let byID = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
+                for w in batch {
+                    if Task.isCancelled { break }
+                    guard let scWindow = byID[w.wid] else {
+                        missing.append(w)
+                        await self.failedOnce.noteOnce(w.wid, "[T5] \(w.ownerName) wid=\(w.wid) 不在 SCShareableContent 清单里,待回填")
+                        continue
+                    }
+                    let (image, reason) = await Self.captureImage(of: scWindow, w)
+                    guard let image else {
+                        missing.append(w)
+                        await self.failedOnce.noteOnce(w.wid, "[T5] \(w.ownerName) wid=\(w.wid) 截屏失败: \(reason ?? "未知")(待回填)")
+                        continue
+                    }
+                    captured += 1
+                    let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                    await self.publish(wid: w.wid, image: nsImage, batch: current, first: captured == 1, batchSize: batch.count)
+                }
+            } catch {
+                await self.failedOnce.note("[T5] SCShareableContent 获取失败: \(error.localizedDescription)(屏幕录制权限?)")
+                missing = batch
+            }
             if isTraceEnabled {
                 // 规模计数:掉帧若随"外接屏 App 多"来,这一行是第一个证人 ——
-                // 它会告诉我们**这一局实际拍了多少扇窗**(缓存命中后本该远小于窗口总数)
+                // 它会告诉我们**这一批实际拍了多少扇窗**(缓存命中后本该远小于窗口总数)
                 let why = force ? "强制"
                     : "无图 \(missNoEntry)\(missLost > 0 ? "(其中 \(missLost) 曾拍到过)" : "") / 过期 \(missExpired)"
-                print("[T5] 预截 要拍 \(windows.count) 窗(\(why))→ 回填 \(images.count) 窗"
+                print("[T5] 预截 要拍 \(batch.count) 窗(\(why))→ 回填 \(captured) 窗"
                       + (missing.isEmpty ? "" : "(缺 \(missing.count),第 \(attempt) 轮)"))
             } else if !missing.isEmpty {
                 // 没拍到就**不打折地报**,不靠 GLANCE_TRACE:面板上空一个卡片就是用户看得见的毛病,
                 // 日志必须自己说清是"没拍到"还是"清单里没有"(之前就因为静默吃了一次盲改的苦)
-                print("[T5] 预截缺 \(missing.count)/\(windows.count) 窗(第 \(attempt) 轮):"
+                print("[T5] 预截缺 \(missing.count)/\(batch.count) 窗(第 \(attempt) 轮):"
                       + missing.map { "\($0.ownerName)#\($0.wid)" }.joined(separator: ", "))
-            }
-            if !images.isEmpty {
-                await MainActor.run {
-                    // 只挡"上一局的图":本会期里飞在半路的批次一律允许回填
-                    guard current == self.session else { return }
-                    let now = CFAbsoluteTimeGetCurrent()
-                    self.cache.merge(images) { _, new in new }
-                    // "曾经拍到过"的账:prune 时不清,用来区分下面两种"无图"——
-                    //   从来没拍到过(SCK 不给 / 键不匹配)vs 拍到过但没留下来(丢了)
-                    self.everCaptured.formUnion(images.keys)
-                    // 首图上屏时刻(相对按键):trace 下单独一行。窗口多 → 这一批图多 →
-                    // 主线程合并 + SwiftUI 重绘的代价全在这一刻,正是"体感掉帧"的嫌疑人
-                    SessionMarks.noteFirstThumb(images.count)
-                    for id in images.keys { self.cacheAt[id] = now }
-                }
             }
             guard !missing.isEmpty, attempt < 3 else { return }
             try? await Task.sleep(nanoseconds: UInt64(250_000_000) * UInt64(attempt))
+            let pending = missing // 值捕获:别把 var 提进并发闭包(Swift 6 会拒)
             await MainActor.run {
                 guard current == self.session else { return }
-                self.precapture(missing, attempt: attempt + 1)
+                self.precapture(pending, attempt: attempt + 1, force: force, maxAge: maxAge)
             }
         }
     }
 
-    /// 重活全在这里:全系统窗枚举 + 逐窗截图。**不在主 actor 上**,可后台跑
-    private nonisolated static func capture(_ windows: [WindowRecord],
-                                            failedOnce: FailureLog?) async -> ([CGWindowID: NSImage], [WindowRecord]) {
-        var out: [CGWindowID: NSImage] = [:]
-        var missing: [WindowRecord] = []
-        do {
-            let content = try await shareable.current()
-            let byID = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
-            for w in windows {
-                if Task.isCancelled { break }
-                guard let scWindow = byID[w.wid] else {
-                    missing.append(w)
-                    await failedOnce?.noteOnce(w.wid, "[T5] \(w.ownerName) wid=\(w.wid) 不在 SCShareableContent 清单里,待回填")
-                    continue
+    /// 单张图落账(主线程)。`batch` = 发单时的会期号,只挡"上一局的图":
+    /// 本会期里飞在半路的批次一律允许回填。
+    @MainActor
+    private func publish(wid: CGWindowID, image: NSImage, batch: Int, first: Bool, batchSize: Int) {
+        guard batch == session else { return }
+        cache[wid] = image
+        // "曾经拍到过"的账:prune 时不清,用来区分两种"无图"——
+        //   从来没拍到过(SCK 不给 / 键不匹配)vs 拍到过但没留下来(丢了)
+        everCaptured.insert(wid)
+        cacheAt[wid] = CFAbsoluteTimeGetCurrent()
+        // 首图上屏时刻(相对按键):trace 下单独一行。逐张合并后它量的是
+        // 第一张图落地的时刻,比旧的整批合并时刻更贴近用户第一次看见图的那一拍
+        if first { SessionMarks.noteFirstThumb(batchSize) }
+    }
+
+    /// **透明衬边裁切**(T88 v2):自绘窗(微信登录窗那类)的窗体 backing 常比可见内容大 ——
+    /// 系统影子已被 `ignoreShadows` 关掉,但 App 自己画在窗里的透明圈(圆角外圈/自绘影)还在,
+    /// 内容贴左上、右下留白,卡底色从透明区透出来(2026-09-17 用户实拍)。
+    ///
+    /// 做法:把图 8× 缩采样画进 alpha-only 位图,找"含接近不透明像素"的行列包围盒,按盒裁原图。
+    /// 设计三条:
+    ///   · 普通窗口四边都有不透明内容 ⇒ 包围盒 = 全图,原样返回(唯一开销是一次缩采样);
+    ///   · 阈值取 96:窗口内容边缘是全不透明(255),烤进图里的软影远低于此 —— 行列里有
+    ///     任何一个近不透明像素就算内容,所以抗锯齿的圆角边不会被误裁;
+    ///   · 一切失败路径(画不出/全透明/包围盒即全图)一律返回原图 —— 宁可有边,不裁错。
+    private nonisolated static func trimTransparentEdges(_ image: CGImage) -> CGImage {
+        let w = image.width, h = image.height
+        guard w > 16, h > 16 else { return image }
+        let stride = 8
+        let sw = w / stride, sh = h / stride
+        // RGBA 位图(不用 alphaOnly:Swift 绑定的 space 参数不收 nil),读每采样点的 alpha 字节
+        guard sw > 0, sh > 0, let ctx = CGContext(
+            data: nil, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return image }
+        ctx.interpolationQuality = CGInterpolationQuality.medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+        guard let buf = ctx.data else { return image }
+        let data = buf.bindMemory(to: UInt8.self, capacity: sw * sh * 4)
+        var minX = sw, minY = sh, maxX = -1, maxY = -1
+        for y in 0..<sh {
+            for x in 0..<sw {
+                if data[(y * sw + x) * 4 + 3] > 96 {
+                    if x < minX { minX = x }; if x > maxX { maxX = x }
+                    if y < minY { minY = y }; if y > maxY { maxY = y }
                 }
-                let (image, reason) = await captureImage(of: scWindow, w)
-                guard let image else {
-                    missing.append(w)
-                    await failedOnce?.noteOnce(w.wid, "[T5] \(w.ownerName) wid=\(w.wid) 截屏失败: \(reason ?? "未知")(待回填)")
-                    continue
-                }
-                out[w.wid] = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
             }
-        } catch {
-            await failedOnce?.note("[T5] SCShareableContent 获取失败: \(error.localizedDescription)(屏幕录制权限?)")
-            return (out, windows)
         }
-        return (out, missing)
+        guard maxX >= minX, maxY >= minY else { return image }
+        // 位图内存行 0 = 图的顶行(上下文按 CG 坐标画、内存按图像行序排),
+        // 与 `cropping(to:)` 的左上原点同系,直接乘步长换算
+        let rect = CGRect(x: minX * stride, y: minY * stride,
+                          width: min(w, (maxX - minX + 1) * stride),
+                          height: min(h, (maxY - minY + 1) * stride))
+        guard rect.width < CGFloat(w) || rect.height < CGFloat(h),
+              let cropped = image.cropping(to: rect) else { return image }
+        return cropped
     }
 
     /// 单窗抓图。
@@ -210,6 +285,11 @@ final class Snapshotter: ObservableObject {
             config.width = pxW
             config.height = pxH
             config.showsCursor = false
+            // **不拍影子**(T88):默认把窗口阴影一起拍进画面 —— 那是一圈**透明像素**,
+            // 撑大了画面、缩小的内容浮在中间,卡底色从透明区透出来 = 微信登录窗那种
+            // 自绘窗四圈"大灰边"(2026-09-17 用户实拍)。关掉后画面 = 窗口本体,
+            // 与出图比例推导用的 `bounds` 口径一致,fill 裁切也不再吃空边
+            config.ignoreShadows = true
             return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
                 // **超时兜底**(2026-09-14 实机病):SCK 的回调**可能永远不回来** ——
                 // 而 withCheckedContinuation 会一直等,于是整批拍图卡在第一个窗上:
@@ -220,8 +300,10 @@ final class Snapshotter: ObservableObject {
                     guard once.claim() else { return }
                     if let error {
                         cont.resume(returning: (nil, error.localizedDescription))
+                    } else if let img = output?.sdrImage {
+                        cont.resume(returning: (Self.trimTransparentEdges(img), nil))
                     } else {
-                        cont.resume(returning: (output?.sdrImage, nil))
+                        cont.resume(returning: (nil, nil))
                     }
                 }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) {
@@ -237,7 +319,8 @@ final class Snapshotter: ObservableObject {
         config.showsCursor = false
         config.scalesToFit = true
         do {
-            return (try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config), nil)
+            let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            return (Self.trimTransparentEdges(img), nil)
         } catch {
             return (nil, error.localizedDescription)
         }

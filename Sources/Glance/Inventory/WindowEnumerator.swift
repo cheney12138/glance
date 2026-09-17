@@ -7,6 +7,10 @@ struct WindowRecord {
     let ownerName: String
     let title: String
     let bounds: CGRect
+
+    /// 窗口宽高比(横窗 >1,竖窗 <1)。卡片自适应宽度(T88)与出图高度推导共用这一个口径 ——
+    /// 两边各算各的必然漂(截图的高就是按它推的)。
+    var aspect: CGFloat { bounds.width / max(bounds.height, 1) }
 }
 
 /// 一个 App 与其本屏窗的聚合(CONTEXT.md「本屏窗」)。
@@ -26,6 +30,19 @@ struct AppGroup {
 /// 文件级:枚举在后台线程跑,碰不到 actor 状态。
 private let ghostLogLock = NSLock()
 nonisolated(unsafe) private var seenGhostLines: Set<String> = []
+
+/// **无窗应用的"善后期"豁免**(T90):⌘Q 之后、`didTerminate` 之前的善后期,窗已关、进程还在,
+/// "无窗应用"分支会把这种 App 当成合法成员挂上条带尾部(用户实拍:⌘Q 退出后在尾部"诈尸"
+/// 一次,再唤起又消失)。NSWorkspace **没有"将要退出"的通知可订**(只有 did 系列,那时已死透),
+/// 所以用**窗口消失的时限**替代:每次枚举记下"哪些 pid 此刻还有窗";一个 pid 距上次有窗不足
+/// `windowlessProbation` 秒,视为"窗刚消失、进程多半在善后",这一局不进面板;超过时限仍是
+/// "无窗 + 常规策略"才是真·无窗应用(T15 语义不变,只是晚 ~10s 入列)。锁 + 文件级全局:
+/// 与幽灵窗日志同一套跨线程模式(枚举跑后台)。
+private let windowedSeenLock = NSLock()
+nonisolated(unsafe) private var lastWindowedAt: [pid_t: CFAbsoluteTime] = [:]
+/// 无窗应用的善后期(T90):窗消失后这么多秒内,不把该 pid 当成无窗应用挂上面板
+/// (⌘Q 的进程善后期通常几秒;大型的 IntelliJ 系可能更久,超过时限的"诈尸"只能放行)
+private let windowlessProbation: CFAbsoluteTime = 10
 
 @MainActor
 enum WindowEnumerator {
@@ -96,6 +113,14 @@ enum WindowEnumerator {
 
         // 归属过滤:只留本屏窗
         let records = axFiltered.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
+        // 记"谁此刻还有窗"(T90 无窗善后期豁免的账本;顺带裁掉 10 分钟没露面的旧账)
+        let seenNow = CFAbsoluteTimeGetCurrent()
+        windowedSeenLock.lock()
+        for r in records { lastWindowedAt[r.pid] = seenNow }
+        if lastWindowedAt.count > 300 {
+            lastWindowedAt = lastWindowedAt.filter { seenNow - $0.value < 600 }
+        }
+        windowedSeenLock.unlock()
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
             // **系统权限弹窗过滤**(2026-09-15 用户报:"要权限的时候那个系统弹窗也被识别到,没有 app 图标,
@@ -129,12 +154,18 @@ enum WindowEnumerator {
         // 判断面是 candidates(已通过幽灵窗启发式的全系统可见窗),不是本屏 records
         let hasWindowPIDs = Set(candidates.map(\.pid))
         let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
+        let probeNow = CFAbsoluteTimeGetCurrent()
         for app in NSWorkspace.shared.runningApplications {
             guard app.activationPolicy == .regular,
                   app.processIdentifier != ownPID,
                   !hasWindowPIDs.contains(app.processIdentifier),
                   !excludedSystemApps.contains(app.bundleIdentifier ?? ""),
                   !app.isTerminated else { continue }
+            // **善后期豁免**(T90):刚失去窗口的 pid 先观察 10s —— 窗刚关、进程还在善后的
+            // App 别急着当成无窗应用挂出来(⌘Q 后的"诈尸");超过时限仍无窗才是真·无窗应用
+            if let seen = lastWindowedAt[app.processIdentifier], probeNow - seen < windowlessProbation {
+                continue
+            }
             byPID[app.processIdentifier] = AppGroup(
                 pid: app.processIdentifier,
                 appName: app.localizedName ?? "(未知应用)",

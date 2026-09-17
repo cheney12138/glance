@@ -23,6 +23,8 @@ final class ThumbnailRefresher {
     private var lastScreenSignature: String = ""
     /// 同一个 App 的刷新节流(快速连续切换时别重复抓)
     private var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
+    /// 上一次被激活的 App pid(= 在下一次激活发生时刚刚失焦的那个)。见 `handleActivation` 的失焦拍
+    private var lastActivatedPID: pid_t?
 
     func start() {
         guard observers.isEmpty else { return }
@@ -59,6 +61,14 @@ final class ThumbnailRefresher {
               !app.isTerminated else { return }
         let pid = app.processIdentifier
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+        // **失焦拍**(T86):本次激活把谁挤下了台,谁就是刚被切走的那个 —— 它的画面停在
+        // 用户离开的那一刻(最鲜),而它恰好是下一次唤起面板的"显示组"(唤起即切换落在上一个 App)。
+        // 之前只有"激活拍":App 上台那刻拍一次,之后用户用多久图就旧多久 —— 当前 App 的图
+        // 永远停在"它上台的那一刻",这是保温体系最后的盲区(T85 账:唤起的显示组 = 上一个 App)。
+        // 先记账再走节流:被节流的那次切换,被切走的 App 只上台了不到 1s,它的激活拍还很新,
+        // 失焦拍本来也拍不了几下 —— 账不能丢,不然下下局的"上一个 App"就认错了人。
+        let deactivated = lastActivatedPID
+        lastActivatedPID = pid
         let now = CFAbsoluteTimeGetCurrent()
         if let last = lastRefreshAt[pid], now - last < 1.0 { return }
         lastRefreshAt[pid] = now
@@ -67,13 +77,63 @@ final class ThumbnailRefresher {
         guard let screen = CursorScreenAnchor.cursorScreen else { return }
         Task.detached(priority: .utility) {
             let groups = WindowEnumerator.rawGroups(on: screen)
-            guard let group = groups.first(where: { $0.pid == pid }), !group.windows.isEmpty else { return }
-            if isTraceEnabled {
-                glog("[保温] \(group.appName) 激活 → 拍它 \(group.windows.count) 窗")
+            if let group = groups.first(where: { $0.pid == pid }), !group.windows.isEmpty {
+                if isTraceEnabled {
+                    glog("[保温] \(group.appName) 激活 → 拍它 \(group.windows.count) 窗")
+                }
+                // 激活即重拍(force):刚切过去的那个 App 画面最可能刚变过(换了主题/文件/内容)
+                await Snapshotter.shared.precapture(group.windows, force: true)
             }
-            // 激活即重拍(force):刚切过去的那个 App 画面最可能刚变过(换了主题/文件/内容)
-            await Snapshotter.shared.precapture(group.windows, force: true)
+            // 失焦拍(maxAge 2s):刚切走的那个 App 补一张 —— 2s 内拍过的(快速来回切)不重复。
+            // 它不在这块屏上时(跨屏切换)枚举里找不到,交给开局 0.45s 补拍兜底
+            if let prev = deactivated, prev != pid,
+               let group = groups.first(where: { $0.pid == prev }), !group.windows.isEmpty {
+                await Snapshotter.shared.precapture(group.windows, maxAge: 2.0)
+            }
         }
+    }
+
+    // MARK: - 语境屏保温 sweep(T86)
+
+    /// 冷启动预拍只发一次:onAppear 在 SwiftUI 里可能不止跑一遍,重复 sweep = 全量白拍一遍
+    private var didColdStartSweep = false
+
+    /// 把**每一块屏**都枚举一遍,所有本屏窗交给预截(TTL 过滤,谁的图新谁不拍)。
+    ///
+    /// 为什么全屏:T87 v3 修掉"开局剪枝扔别屏窗"之后(screenshot → `Snapshotter.reapAlive`),
+    /// 别屏窗的图**留得住**了 —— 用户会换屏,全屏 sweep 让每一块屏的缓存都是热的,
+    /// 换屏唤起不再闪"截图中…"(2026-09-17 用户实测病例:启动时光标在外接,
+    /// 切到内建唤起 = 全空)。T86 首轮"只扫光标屏"的裁定随保活修正一并作废,
+    /// 当时它治的"拍了就被扔"病根在剪枝,不在 sweep。
+    ///
+    /// 两个挂载点:
+    ///   · **冷启动**(GlanceApp 启动后空闲 2.5s 调)—— T85 实测账:首局唤起上屏 353ms,
+    ///     其中冷枚举 256ms(CGWindowList / AX 首连 / SCK 全是第一次)+ 缓存全空。
+    ///     sweep 把这套管线在没人看的时候整个暖一遍,首局唤起直接吃热路径;
+    ///   · **关面板后**(PanelController.teardownPanel 调)—— 刚关面板时屏幕上就是用户
+    ///     刚看到的内容,此刻拍的图对下一次唤起 100% 新鲜,下次唤起的 0.45s 补拍基本空转。
+    func sweepAllScreens(reason: String) {
+        Task.detached(priority: .utility) {
+            let beganAt = CFAbsoluteTimeGetCurrent()
+            // rawGroups 的归属判定保证一扇窗只属于一块屏:按屏枚举天然不重不漏
+            var windows: [WindowRecord] = []
+            for screen in NSScreen.screens {
+                windows.append(contentsOf: WindowEnumerator.rawGroups(on: screen).flatMap(\.windows))
+            }
+            guard !windows.isEmpty else { return }
+            if isTraceEnabled {
+                let ms = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
+                glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
+            }
+            await Snapshotter.shared.precapture(windows)
+        }
+    }
+
+    /// 冷启动专用入口:一次性闸 + sweep
+    func coldStartSweep() {
+        guard !didColdStartSweep else { return }
+        didColdStartSweep = true
+        sweepAllScreens(reason: "冷启动预拍")
     }
 
     /// 屏幕清单指纹:displayID + 尺寸 + 缩放。"屏没变"时它一定相等。
