@@ -30,6 +30,11 @@ final class HotkeyTapCenter {
         case prev             // ⇧Tab:图标层前移
         case firstGroup      // ←:跳到**最左**的 App
         case lastGroup       // →:跳到**最右**的 App
+        /// ↓:把**整个环**换成"未启动的 App"(T91)。是**内容替换**,不是多长一行 ——
+        /// 用户口径:「我想的是完全覆盖掉诶, 不是 2 行的概念」。
+        case enterLaunchRing
+        /// ↑:换回"已启动的 App 组"。与 ↓ 成对(有进有出,不用 Esc 也能回来)
+        case leaveLaunchRing
         /// ` 循环窗口:在**当前 App 的窗口之间**循环 —— 与 ←/→ 是两件事
         /// (2026-09-15 分家:原先是同一个 case,导致两个键做同一件事)
         case cycleWindowPrev
@@ -80,6 +85,12 @@ final class HotkeyTapCenter {
 
     private static let keyLeft: Int64 = 0x7B
     private static let keyRight: Int64 = 0x7C
+
+    /// ↓ / ↑(T91):**换环**。环里装的东西整体换掉 —— 下 = 未启动的 App,上 = 已启动的 App 组。
+    /// 这两个键在导航期本来是空档(`←/→` 是首/末 App)。放进 navKeys = 会话期被我们吞掉,
+    /// 底下的 App 收不到 —— 与其它导航键同一个约定。
+    private static let keyDown: Int64 = 0x7D
+    private static let keyUp: Int64 = 0x7E
     private static let keyEsc: Int64 = 0x35
     private static let keyReturn: Int64 = 0x24
     private static let keyQ: Int64 = 0x0C
@@ -96,7 +107,7 @@ final class HotkeyTapCenter {
     /// 按 2 不选中,还把 "2" 放行给底下的 App)。
     /// `Set([...])` 必须显式写:直接写数组字面量再 `.union` 会被推成 `[Int64]`(实测编译错)。
     private static let navKeys: Set<Int64> =
-        Set([keyLeft, keyRight, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave])
+        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave])
             .union(digitKeys.keys)
     /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
     ///
@@ -371,6 +382,8 @@ final class HotkeyTapCenter {
         case Self.keyH: emit(.hideApp)
         case Self.keyLeft: emit(.firstGroup)
         case Self.keyRight: emit(.lastGroup)
+        case Self.keyDown: emit(.enterLaunchRing)   // ↓ 换环:未启动的 App
+        case Self.keyUp: emit(.leaveLaunchRing)    // ↑ 换回:已启动的 App 组
         case Self.keyGrave:
             // 开关关着就**放行**(return false = 不吞),让系统那条 ⌘` 照旧工作
             guard Self.graveCyclesWindows else { return false }
@@ -495,6 +508,8 @@ final class HotkeyTapCenter {
         case .minimizeWindow: return "M → 最小化选中窗(T12)"
         case .toggleFullscreen: return "F → 全屏切换(T29)"
         case .hideApp: return "H → 隐藏 App(T29)"
+        case .enterLaunchRing: return "↓ → 换环:把环换成未启动的 App(T91)"
+        case .leaveLaunchRing: return "↑ → 换环:换回已启动的 App 组(T91)"
         }
     }
 }
@@ -547,6 +562,9 @@ private func hotKeyEventHandler(
 /// 代价:三指**快速**甩一下(拖移起手,<0.3s)会误开面板 —— 代价只是面板开了一下,点外面就散。
 ///
 /// **失败即关门**:框架/符号/设备任一取不到 ⇒ 记一行日志、功能静默不可用,绝不拖垮 App。
+/// 历史名字:它最早只认三指;T91 起 **3 与 4 指都归它判卷** ——
+/// 按 maxTouches(这一整次按压里出现过的最大手指数)分派:3 = 唤起,4 = 唤起并直接进未启动环。
+/// (改名的收益抵不过这轮的风险 ⇒ 名字保留,但这里写明它的真实职责。)
 final class ThreeFingerTap {
     static let shared = ThreeFingerTap()
     private init() {}
@@ -556,7 +574,17 @@ final class ThreeFingerTap {
     static let defaultsKey = "pointer.threeFingerTapPanel"
     private var enabled: Bool { UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? false }
 
+    /// 四指轻点(T91)= **直接进未启动环**。与三指那条同一条纪律:**默认关**
+    /// (默认对齐 macOS:macOS 没有这个功能),而且**区分"没写过"与"写成 false"** ——
+    /// `object(forKey:) as? Bool ?? false`:取不到 = 没写过 = 关,取到 false = 用户关掉了。
+    /// (本机实测:系统没有占用"四指轻点"—— `TrackpadFourFingerTapGesture` 这个键根本不存在;
+    ///  四指只有横扫/竖扫/捏合。见 design/入口槽-底部形态实验台.html 的记账。)
+    static let defaultsKeyFour = "pointer.fourFingerTapLaunchRing"
+    private var enabledFour: Bool { UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? false }
+
     var onFire: (() -> Void)?
+    /// 四指的落点:唤起 + 直接切到未启动环。接线在 GlanceApp,与 onFire 并排
+    var onFireFour: (() -> Void)?
 
     // MARK: 私有框架的接口(反推布局,只读 state 一个字段)
 
@@ -595,7 +623,7 @@ final class ThreeFingerTap {
               let symList = dlsym(lib, "MTDeviceCreateList"),
               let symRegister = dlsym(lib, "MTRegisterContactFrameCallback"),
               let symStart = dlsym(lib, "MTDeviceStart") else {
-            glog("[三指点按] 取不到 MultitouchSupport ⇒ 该手势不可用(其余照常)")
+            glog("[指点按] 取不到 MultitouchSupport ⇒ 该手势不可用(其余照常)")
             return
         }
         typealias CreateList = @convention(c) () -> CFMutableArray?
@@ -605,7 +633,7 @@ final class ThreeFingerTap {
         let register = unsafeBitCast(symRegister, to: Register.self)
         let startDevice = unsafeBitCast(symStart, to: StartDevice.self)
         guard let devices = createList() else {
-            glog("[三指点按] 拿不到触控设备 ⇒ 该手势不可用(其余照常)")
+            glog("[指点按] 拿不到触控设备 ⇒ 该手势不可用(其余照常)")
             return
         }
         let count = CFArrayGetCount(devices)
@@ -614,7 +642,8 @@ final class ThreeFingerTap {
             register(UnsafeMutableRawPointer(mutating: raw), ThreeFingerTap.contactFrame)
             startDevice(UnsafeMutableRawPointer(mutating: raw), 0)
         }
-        glog("[三指点按] 已上线(\(count) 个设备)· 开关 \(Self.defaultsKey) 现在是 \(enabled ? "开" : "关")")
+        glog("[指点按] 已上线(\(count) 个设备)· 三指=\(enabled ? "开" : "关")(\(Self.defaultsKey))"
+             + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
     /// C 回调:主线程之外也可能被调 ⇒ 只碰自己这几个标量,回调末尾回主线程才动作。
@@ -633,10 +662,32 @@ final class ThreeFingerTap {
         let maxTouches = tap.maxTouches
         let held = CFAbsoluteTimeGetCurrent() - tap.beganAt
         tap.maxTouches = 0
-        guard maxTouches == 3, held <= maxDuration else { return 0 }
+        // T91:3 与 4 指都归这里判卷,而且**按 maxTouches** —— 不按"抬手那一刻的手指数":
+        // 四根手指不可能在同一帧落齐(先落 3 根、第 4 根 40ms 后才到是常态)⇒ 只看当前手指数
+        // 会把"四指慢落"误判成三指点按。取整次按压的最大值,顺带把这条竞态一起解决。
+        // 其它手指数(1/2/5)一概不动作 —— 5 指顺手避开"捏合 = 启动台"。
+        guard (maxTouches == 3 || maxTouches == 4), held <= maxDuration else {
+            // ★ **不匹配也要留账**(纪律:要能分辨"0 是干净"还是"0 是没看见")。
+            // 病例:用户实报「四指还是没好」,而日志里**一条都没有** ⇒ 无法分辨
+            // "压根没触发"与"触发了但手指数被判成 5"。这一行把每次按压的真实手指数说出来。
+            // (只在 ≥2 指时出声:一指的普通点按不该进账)
+            if maxTouches >= 2 {
+                DispatchQueue.main.async {
+                    glog(String(format: "[指点按] %d 指 %.0fms → 不动作(只认 3/4 指,且 ≤%.0fms)",
+                                maxTouches, held * 1000, maxDuration * 1000))
+                }
+            }
+            return 0
+        }
         DispatchQueue.main.async {
-            glog(String(format: "[三指点按] 三指 %.0fms → 唤起(钉住)", held * 1000))
-            if ThreeFingerTap.shared.enabled { ThreeFingerTap.shared.onFire?() }
+            let tap = ThreeFingerTap.shared
+            if maxTouches == 4 {
+                glog(String(format: "[指点按] 四指 %.0fms → 唤起并直接进未启动环(钉住)", held * 1000))
+                if tap.enabledFour { tap.onFireFour?() }
+            } else {
+                glog(String(format: "[指点按] 三指 %.0fms → 唤起(钉住)", held * 1000))
+                if tap.enabled { tap.onFire?() }
+            }
         }
         return 0
     }

@@ -72,7 +72,24 @@
 </head>
 <body>
 <h1>入口槽 · 底部形态实验台 v2</h1>
-<p class="sub" style="color:#cfe08a"><b>2026-09-17 拍板：选 A（长胶囊 / home 条）。</b>B、C 两个退化形态当场否掉（用户：「别的都太诡异了」）。<br>
+<p class="sub" style="color:#e0837a"><b>2026-09-17 之后作废：长条形态全部退回（用户：「不要这个长条形态了, 太厚重了」「都撤回吧」）。</b>
+代码已回到提交 <code>811a26f</code> 的状态（环尾点阵那一版），工作区干净。下面 A 的记录只作历史。<br>
+<b>新形态（已拍板，未落地）：入口不是看得见的东西，而是 <code>↓</code> 键 —— 按下就把环里的内容换成"未启动的 App"。</b></p>
+
+<div style="background:#20242b;border:1px solid #2f343d;border-radius:12px;padding:14px 18px;margin:0 0 18px;line-height:1.9">
+<b>新形态 · 落地路线（照着做，不要重新设计）</b><br>
+① <b>模型</b>：一局只有一件"环"。<code>↓</code> = 环里从「已启动的 App 组」换成「未启动的 App」；<code>↑</code> = 换回来。<b>是内容替换，不是多长一行</b>（用户原话：「完全覆盖掉，不是 2 行的概念」）。<br>
+② <b>删掉环尾那枚记号</b>（竖线 + 2×3 点阵）：入口靠键，不再靠显眼的占位；条尾 padding 恢复恒为 rowPadX。<br>
+③ <b>两套尺寸</b>，开局各算一次：<code>contentSize(ring:)</code> / <code>contentSize(launch:)</code>。用户裁定「肯定计算两套尺寸效果会更好」——"少则后面全空着、多则挤图标"都不接受。<br>
+④ <b>对齐</b>：数量少时**靠左**（与主环第一格对齐，读作"环短了"），不居中。<br>
+⑤ <b>动效</b>：内容交叉淡入 ~90ms；<b>玻璃本身只改宽窄，不淡不挪</b>；尺寸变化与内容替换**同一拍**完成（算尺寸 → setFrame → 换内容 → 一次 resyncSelectionUnderPointer）。<br>
+⑥ <b>不掉帧</b>：先做**瞬时**尺寸变化（不可能掉帧）；若觉得跳，再改 <code>setFrame(display:true, animate:true)</code>，并且**用已有 <code>[帧]</code> 探针量 P95 与长帧占比**，不靠感觉。<br>
+⑦ <b>ADR-0006 修法</b>：把"一局之内尺寸不变"改成"尺寸只在**用户显式换环**时改变，且必须与内容替换同拍；禁止在指针/选中移动过程中改尺寸"——原来的病照旧禁，新形态获得许可。<br>
+⑧ <b>落地要改的地方</b>：<code>HotkeyTap.handleNavKey</code>（`↓`/`↑` 现在是空档，需要新增 Action 并放行）→ <code>HotkeyTapCenter.emit</code> → <code>PanelController.handle(_:)</code> → 新增 <code>enterLaunchRing()/leaveLaunchRing()</code> → <code>PanelView</code> 的 strip 按当前环取内容（<b>托底与上浮沿用主环那套</b>，因为现在是同一个环）。<br>
+⑨ ⚠️ 已知必踩的坑：面板改尺寸会触发 <code>resyncSelectionUnderPointer()</code>；换环期间**不许**让它把选中算飞 —— 换完内容只补一次。
+</div>
+
+<p class="sub" style="color:#8b9199">B、C 两个退化形态当场否掉（用户：「别的都太诡异了」）。<br>
 定型参数：条长 <b>54pt</b> · 条厚 <b>5pt</b> · 圆角 2.5（= 厚/2，全圆头）· **离窗口计数的距离 10pt** · 未选中不透明度 <b>.35</b>（选中 1.0）· 面板到启动行的缝 <b>8pt</b>。<br>
 与窗口计数的冲突用三条一起解决：① 距离 ≥10pt（计数离图标只有 2pt）② 宽 54pt vs 计数短杠 9pt ③ 位置居中在整条下方，不跟某一格对齐。</p>
 <p class="sub">三种入口候选 <b>A 长胶囊（home 条）· B 2×3 点阵（你 T84 那枚，搬下来）· C 三个点（…）</b>，都画在<b>窗口计数法下面</b> —— 这次计数是真的画出来了，能直接看冲突。</p>
