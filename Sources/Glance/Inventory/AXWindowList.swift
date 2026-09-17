@@ -48,8 +48,39 @@ enum AXWindowList {
             let isMain = (bool(window, kAXMainAttribute) ?? false)
             let title = string(window, kAXTitleAttribute) ?? ""
             let standard = subrole == kAXStandardWindowSubrole
+            // ⚠️ 2026-09-17 收窄:模态对话框**不进面板**。
+            //
+            // 病例(用户实报):"关不掉的时候这个窗口" —— App 的「Confirm Exit / 确定退出吗?」
+            // 是一扇有标题的 AXDialog,按下面这条老规矩被收了进来,于是它在面板里成了一张卡:
+            // 点它的红叉 ⇒ 我们发 AX close ⇒ **模态框根本关不掉** ⇒ 1 秒后它又回来
+            // (日志 `[T12] 关闭被拒(窗还在) … 放回列表`,来回好几次)。
+            // 模态框贴在 App 前面、点不到别处也切不走,收进切换器没有意义;它也不是"幽灵窗"
+            // (下面那条 `dialogWithTitle` 本来是为了挡幽灵窗的,顺带把模态框放进来了)。
+            //
+            // 判据用 `AXModal`(系统自己标出来的模态位)而不是"标题像不像确认框" —— 不猜文案。
+            // 无标题对话框的规矩不动(拿不准的照样不收);非模态对话框(AXDialog + 非模态)照旧收。
+            let modalValue = bool(window, kAXModalAttribute)
             let dialogWithTitle = subrole == kAXDialogSubrole && !title.isEmpty
-            if standard || isMain || dialogWithTitle {
+                && !(modalValue ?? false)
+            // ⭐ 判据落在"**有没有关闭按钮**"上(2026-09-17,当日第三次才找对)。
+            //
+            // 两条错路都记在这里,免得后人再走:
+            //   ① 按 `AXModal` 收窄 ⇒ 无效。不是属性取不到,而是**用在的地方不对**:
+            //      诊断证实「Confirm Exit」压根不是 AXDialog(它走 standard/main 进来),
+            //      任何 subrole 系判据都碰不到它。
+            //   ② 想按 subrole 一刀切掉对话框 ⇒ 会误杀:同一天的诊断打出 Ghostty 的**真窗**
+            //      也是 subrole=AXDialog(标题 "train_test – unhandled…"),而 `dialogWithTitle`
+            //      这条老规矩本来就是为它存在的 —— 不能删。
+            //
+            // 真正的分界是:**这扇窗能不能被关掉**。NSAlert 一类的确认框只有 Cancel/Exit,
+            // 没有关闭按钮;真窗都有(诊断里 AXCloseButton 是实打实的 AXUIElement)。
+            // 而面板承诺了 W = 关窗 ⇒ 一扇关不掉的窗待在面板里,按 W 只会得到
+            // "它消失了又回来" —— 正是用户实报的那个现象。
+            // 用**存在性**判定(取不到 == 没有),不写 `?? false` 那种"取不到当 false"的含糊处理。
+            var closeRef: CFTypeRef?
+            let hasCloseButton = AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString,
+                                                              &closeRef) == .success && closeRef != nil
+            if (standard || isMain || dialogWithTitle) && hasCloseButton {
                 admitted.insert(wid)
             } else {
                 rejected[wid] = "subrole=\(subrole ?? "-") main=\(isMain) title=\"\(title)\""

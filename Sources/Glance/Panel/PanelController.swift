@@ -57,7 +57,8 @@ final class PanelController: ObservableObject {
     /// begin 的世代号:后台枚举回来时,若已开了新一局就丢掉旧结果(连按 ⌘Tab 的竞态)
     private var beginGeneration = 0
 
-    /// 其余组预截的推迟量 = 入场弹簧的沉降时间(为什么挪、显示组为什么不挪,见 `finishBegin` 里的那段注释)
+    /// 预截补拍的推迟量 = 入场弹簧的沉降时间。T86 起**整单都挪**:唤起零拍,所有补拍
+    /// (显示组 force + 其余组 TTL)都发生在沉降之后 —— 见 `finishBegin` 的那段注释
     private static let recaptureDelay: Double = 0.45
 
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
@@ -185,6 +186,32 @@ final class PanelController: ObservableObject {
     /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
     private var hiddenPIDs: Set<pid_t> = []
 
+    /// 本局已被我们**退出**的 App(pid)。
+    ///
+    /// 和 hiddenPIDs 是**同一个病,换了个动作**:系统的 AX 窗口表在进程死透之前
+    /// 那 0.2–0.3s 里仍然报得出它的窗,而 `mergeRefreshed` 对"重枚举里新出现的 App"
+    /// 的处理是**挂到尾部**(不插队)—— 于是刚被处决的 App 在环尾复活。
+    ///
+    /// 病例(2026-09-16,用户实报):"cmd q 退出 app, 此时面板还没关闭, 就又出现在尾部了,
+    /// 重新唤起面板后不再出现。" 日志一字不差:
+    ///     [T12] 退出应用: zoom.us
+    ///     [T12] 本地先摘: 8 个 App / 12 窗 → 7 个 App / 11 窗
+    ///     [处决后] 7 个 App,选中 [2/7] 大象          ← 对了
+    ///     [处决后] 8 个 App,选中 [2/8] 大象          ← 0.7s 后那次重枚举把它捞了回来
+    ///     [T12] 处决后顺序 [… | DataGrip | zoom.us]   ← 复活的它挂在**末位**
+    /// "重新唤起就没了"也对得上:新一局重新枚举,那时进程真的死透了 —— 所以这条记忆
+    /// 只活一局(begin 里清空),不跨局。
+    private var quitPIDs: Set<pid_t> = []
+
+    /// 本局已被我们**关掉/最小化**的窗(CGWindowID),等着复核。
+    ///
+    /// 病例(2026-09-17,用户实报):"点击关闭之后, 面板没关闭, 就又出现了."
+    /// 日志一字不差:`[T12] 关闭窗口: DataGrip — Confirm Exit` → `本地先摘 17 窗 → 16 窗`
+    /// → 0.2s 后 `[处决后顺序]` 它又回来了,来回三次。
+    /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
+    /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
+    private var purgedWIDs: Set<CGWindowID> = []
+
     // MARK: - 触发层入口
 
     func handle(_ action: HotkeyTapCenter.Action) {
@@ -238,6 +265,8 @@ final class PanelController: ObservableObject {
         }
         contextScreen = screen
         hiddenPIDs.removeAll() // 新一局:以系统现在的真实状态为准,清掉上一局的隐藏记忆
+        quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
+        purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
         beginGeneration &+= 1
         let generation = beginGeneration
         // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
@@ -319,32 +348,37 @@ final class PanelController: ObservableObject {
         winIndex = 0
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
         // 不再先闪一下"截图中…"。AltTab 也是这个路子 —— 缓存保活 + 后台刷新。
+        // T87 v3 起剪枝改 `reapAlive()`(后台、全量保活):死窗条目本就不会被展示,
+        // 同步剪枝真正服务的是内存与在途批次作废,都不需要同步;顺手修掉
+        // "开局把别屏窗的图全扔了 ⇒ 换屏唤起闪『截图中…』"(用户实测病例)。
         let allWindows = groups.flatMap { $0.windows }
-        Snapshotter.shared.prune(keeping: Set(allWindows.map(\.wid)))
+        Snapshotter.shared.reapAlive()
         // **正在显示的那一组排最前面**:卡片要等的就是它那一张。
         // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
         let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
         let shownIDs = Set(shown.map(\.wid))
-        // 两批预截**分流**(2026-09-16 用户裁决:"针对当前唤起选中的 app 实时填充,别的走异步替换"):
+        // 两批预截**分流**(2026-09-16 用户裁决:"针对当前唤起选中的 app 实时填充,别的走异步替换")
+        // → **T86 升级为"唤起零拍"**(用户裁决:"拍图跟唤起面板渲染能彻底做成异步的吗"):
         //
-        //   · **显示组 = 立刻重拍**(用户正看着它,要求此刻是准的 —— 与 Tab 换选中的
-        //     "选中即重拍"是同一条契约)。它天然就小:按屏归属后一组通常 1–3 扇窗,
-        //     实测它的合并在 +80–150ms 落地、从未单独造成可见长帧。
+        //   · 开局**不发任何拍照单**:缓存的图(跨会话保活 + 关面板预拍 + 失焦预拍供着)
+        //     第一帧直接上屏。T85 账:冷局首图 +416ms 全落在入场动画里;热局这条 force 单
+        //     也是白拍 —— 图已在缓存,新图盖上肉眼看不出变化,反而多一次重绘。
         //
-        //   · **其余组 = 入场弹簧沉降后(0.45s)再补**(它们只负责"Tab 过去第一帧有图",
-        //     缓存旧图本来就顶着)。这一批是掉帧的真身:拍图是 30–50ms/窗的 GPU/WindowServer
-        //     活、整批拍完才一次性回主线程合并(Snapshotter.merge),而合并是"一批图同时到"
-        //     的爆发 —— 病例:某局"其余组要拍 4 窗(曾拍到过)"在 +175ms 合并,那局 `[帧]`
-        //     max **140.7ms**;外接屏 App 多时一批 4–7 窗,全落在入场窗口里。
+        //   · "显示即重拍"契约**整体挪到 +0.45s**(入场弹簧沉降之后),只挪时机不砍:
+        //     其余组照旧 TTL 补拍;显示组照旧 force 重拍 —— 应用内部的变化(换主题/切文件)
+        //     系统不发事件,仍要在"被显示"后抓一次,只是晚 0.45s,与"其余组"同一待遇。
         //
-        // 头 0.45s 里卡片显示缓存旧图(跨会话保活 + 上局剪枝),不会闪"截图中…"。
+        //   · 头 0.45s 里卡片显示缓存旧图(跨会话保活 + 上局剪枝),不会闪"截图中…"。
+        //     缓存缺失的窗(冷启动 sweep 没赶上/新开的窗)逐张回填(Snapshotter 已改
+        //     逐张回主,单次合并 <1ms,不再有整批合并的爆发)。
+        //
         // 世代守卫:中途开了新一局就作废这一单,免得与新一局的预截白拍两遍;
         // dismiss 自己会把 beginGeneration +1,所以"面板已关"也自动作废,不用另判 isVisible。
-        Snapshotter.shared.precapture(shown, force: true)
         let shownGeneration = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.recaptureDelay) { [weak self] in
             guard let self, shownGeneration == self.beginGeneration else { return }
             Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
+            Snapshotter.shared.precapture(shown, force: true)
         }
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         trace(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
@@ -426,17 +460,22 @@ final class PanelController: ObservableObject {
         PanelMetrics.sessionCap = saved
 
         var cap = availW / max(stripBase, 1)
+        var worstAspects: [CGFloat] = []
         var worstN = 0
         var worstScale = CGFloat.greatestFiniteMagnitude
         for g in groups where !g.windows.isEmpty {
-            let fit = trayFitScale(count: g.windows.count).scale
+            let fit = trayFitScale(aspects: g.windows.map(\.aspect)).scale
             cap = min(cap, fit)
-            if fit < worstScale { worstScale = fit; worstN = g.windows.count }
+            if fit < worstScale {
+                worstScale = fit
+                worstN = g.windows.count
+                worstAspects = g.windows.map(\.aspect)
+            }
         }
         PanelMetrics.sessionCap = cap
         // 行/列要在**收紧之后**再算:列数取的是当前尺寸下能放几张,
         // 收紧前算出来的会是上一局的尺寸(日志里就会看到对不上的行 × 列)
-        let worstLayout = trayLayout(count: worstN)
+        let worstLayout = trayLayout(widths: worstAspects.map { PanelMetrics.thumbWidth(aspect: $0) })
         // **只在档位变化时打**:同一台机器上它几乎每局一样,重印就是噪音;变了一定要看
         if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
         Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)
@@ -457,26 +496,44 @@ final class PanelController: ObservableObject {
     /// 为什么不固定"一行摆完":一行摆完意味着窗数一多就一路缩到看不清(12 窗 → 57%)。
     /// 为什么不固定"两行":6 窗明明一行放得下,分两行是把能用 113% 的一局压到 98% —— 白牺牲。
     /// 所以是**取最大可用尺寸**,行数只是它的副产品。
-    private func trayFitScale(count n: Int) -> (scale: CGFloat, rows: Int, cols: Int) {
-        guard n > 0 else { return (.greatestFiniteMagnitude, 0, 0) }
+    private func trayFitScale(aspects: [CGFloat]) -> (scale: CGFloat, rows: Int, cols: Int) {
+        guard !aspects.isEmpty else { return (.greatestFiniteMagnitude, 0, 0) }
         let saved = PanelMetrics.sessionCap
         PanelMetrics.sessionCap = .greatestFiniteMagnitude
         let s = PanelMetrics.scale
-        // 每行/每列在 1.0 倍下的占位(含间隙;末尾那一份间隙要减掉,所以 pad 里是减不是加)
-        let cardW = (PanelMetrics.thumbW + PanelMetrics.thumbGap) / s
+        // 每行/每列在 1.0 倍下的占位(含间隙;末尾那一份间隙要减掉,所以 pad 里是减不是加)。
+        // 卡宽随窗比例(T88):**必须在 ∞ 窗口内**由 aspect 推基准宽 —— 传入现成的宽
+        // 会带着上一局的缩放,除回 s 也救不回来(k 是在取值那一刻生效的)
+        let baseWidths = aspects.map { PanelMetrics.thumbWidth(aspect: $0) }
         let padW = (PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap) / s
         let rowH = (PanelMetrics.thumbH + PanelMetrics.trayRowGap) / s
         let padH = (PanelMetrics.trayPadTop + PanelMetrics.trayPadBottom - PanelMetrics.trayRowGap) / s
         PanelMetrics.sessionCap = saved
 
-        var best = (scale: CGFloat(0), rows: 1, cols: n)
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            let fit = min(trayRoomW / (CGFloat(c) * cardW + padW),
+        var best = (scale: CGFloat(0), rows: 1, cols: aspects.count)
+        for r in 1...min(aspects.count, PanelMetrics.trayMaxRows) {
+            let c = (aspects.count + r - 1) / r
+            let fit = min(trayRoomW / (Self.maxRowWidth(baseWidths, rows: r, cols: c) + padW),
                           trayRoomH / (CGFloat(r) * rowH + padH))
             if fit > best.scale { best = (fit, r, c) }
         }
         return best
+    }
+
+    /// 给定行数与"按数量均分"的列数下,最宽那行的卡宽合计(含行内间隙,不含托盘内边)。
+    /// 分布必须与 thumbGrid 的 HStack 完全一致(按数量均分、末行左对齐)—— 两处各算各的必然漂。
+    /// 间隙取**取值那一刻**的 `thumbGap`:∞ 窗口内调用得基准值,正常 cap 下调用得缩放值,
+    /// 与传入的 widths 口径自动一致
+    private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
+        var widest: CGFloat = 0
+        for r in 0..<rows {
+            let start = r * cols
+            let end = min(start + cols, widths.count)
+            guard start < end else { continue }
+            let w = widths[start..<end].reduce(0, +) + CGFloat(end - start - 1) * PanelMetrics.thumbGap
+            widest = max(widest, w)
+        }
+        return widest
     }
 
     /// 托盘的行 × 列 —— **唯一来源**:视图排网格与 `previewContentSize` 都取它。
@@ -489,13 +546,17 @@ final class PanelController: ObservableObject {
     /// `c × 卡宽 == 可用宽` 是这里的常态输入 —— 纯浮点下这一步会随机掉一个
     /// (15 窗 / 2 行:8 列正好 1464.0pt,算出来 7 列 → 行数 2 变 3 → 托盘**竖向**溢出)。
     /// 0.5pt 肉眼不可见,但足以让"刚好放得下"稳定成立。
-    func trayLayout(count n: Int) -> (rows: Int, cols: Int) {
-        guard n > 0 else { return (0, 1) }
-        let cardW = PanelMetrics.thumbW + PanelMetrics.thumbGap
+    ///
+    /// T88:卡宽随窗比例后不再有"每行等宽"的省事 —— 传入**缩放后的**每张卡宽
+    /// (调用方在当前 cap 下用 `PanelMetrics.thumbWidth(aspect:)` 算好),
+    /// 行数判定用"该分布下最宽那行"(`maxRowWidth`,分布与视图的 HStack 一致)
+    func trayLayout(widths ws: [CGFloat]) -> (rows: Int, cols: Int) {
+        guard !ws.isEmpty else { return (0, 1) }
+        let n = ws.count
         let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap
         for r in 1...min(n, PanelMetrics.trayMaxRows) {
             let c = (n + r - 1) / r
-            if CGFloat(c) * cardW + padW <= trayRoomW + 0.5 { return (r, c) }
+            if Self.maxRowWidth(ws, rows: r, cols: c) + padW <= trayRoomW + 0.5 { return (r, c) }
         }
         // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
         // (由调用方按"内容居中 + 两端对称地切"兜底)也不往上堆成一面墙
@@ -640,6 +701,13 @@ final class PanelController: ObservableObject {
         panelOpenPoint = nil
         teardown = nil
         onSessionEnd?()
+        // **关面板预拍**(T86):窗一拆完,把当前屏幕状态全量拍一遍(TTL 过滤,谁新谁不拍)。
+        // 此刻屏幕上就是用户刚看到的内容,拍的图对下一次唤起 100% 新鲜 —— 下次唤起第一帧
+        // 全走缓存。延 0.25s 让拆窗收尾先落地;面板若已重开(快速连按)则跳过,新一局有自己的节奏
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.isVisible else { return }
+            ThumbnailRefresher.shared.sweepAllScreens(reason: "关面板预拍")
+        }
     }
 
     /// contextScreen 可视区正中出现(自家窗口的锚定纪律与引导窗一致)
@@ -655,9 +723,9 @@ final class PanelController: ObservableObject {
         let nApps = CGFloat(max(groups.count, 1))
         var w = nApps * PanelMetrics.icon + max(nApps - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
         if launchSectionEnabled {
-            // v14:分割线(一个 gap 格)+ 入口槽(压缩窄格 entrySlotWidth+gap,比 App 小一档)
-            w += PanelMetrics.iconGap
-                + PanelMetrics.entrySlotWidth + PanelMetrics.iconGap
+            // T89 v2:尾格(分割线 + 点阵)+ 右缘留白 = iconGap(尾部三点同距;
+            // 左缘仍是 rowPadX)。与 PanelView 的 .padding(.leading rowPadX/.trailing iconGap) 同源
+            w += PanelMetrics.entryTailWidth + PanelMetrics.iconGap
         }
         return NSSize(width: max(w, PanelMetrics.minStripWidth),
                       height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
@@ -673,6 +741,14 @@ final class PanelController: ObservableObject {
     }
 
     // MARK: - 面板本体
+
+    /// 面板窗预热(T86):两块玻璃(NSPanel + SwiftUI hosting)在启动后建好但不 orderFront ——
+    /// 首局唤起的"开窗 80.4ms"(T85 实测)是两块窗的首次构建,在这里花掉就不占唤起那一拍。
+    /// 只构建不显示:borderless + nonactivatingPanel,不 orderFront 就没有任何可见副作用。
+    func prewarmPanels() {
+        buildPanelIfNeeded()
+        buildPreviewPanelIfNeeded()
+    }
 
     private func buildPanelIfNeeded() {
         guard panel == nil else { return }
@@ -720,9 +796,19 @@ final class PanelController: ObservableObject {
 
     /// 托盘内容尺寸 = 题头行 + 一排 128 缩略图 + 内边(16/18/14)。
     /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源。
-    /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组
+    /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组。
+    /// T88:卡宽随窗比例,尺寸按每张卡的实际宽算(不再有 count × 定尺的省事)
     func previewContentSize(for group: AppGroup?) -> NSSize {
-        previewContentSize(cards: group?.windows.count ?? 0)
+        guard let group, !group.windows.isEmpty else { return .zero }
+        let widths = group.windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }
+        let (rows, cols) = trayLayout(widths: widths)
+        let r = CGFloat(max(rows, 1))
+        return NSSize(
+            width: Self.maxRowWidth(widths, rows: rows, cols: cols) + PanelMetrics.trayPadX * 2,
+            height: PanelMetrics.trayPadTop
+                + r * PanelMetrics.thumbH + max(r - 1, 0) * PanelMetrics.trayRowGap
+                + PanelMetrics.trayPadBottom
+        )
     }
 
     /// 启动行(方案 E v2)的托盘尺寸:**主环的图标节距**(icon + iconGap),不是窗口卡的壳 ——
@@ -753,23 +839,6 @@ final class PanelController: ObservableObject {
         }
         let r = min(n, PanelMetrics.trayMaxRows)
         return (r, (n + r - 1) / r)
-    }
-
-    private func previewContentSize(cards n: Int) -> NSSize {
-        guard n > 0 else { return .zero }
-        // 一行摆不下就换行:宽度按**实际列数**算(不是总窗数),高度按行数叠加。
-        // 行/列只从 `trayLayout` 出 —— 与 PreviewPanelView 的网格同源,不许各算各的
-        let (rows, cols) = trayLayout(count: n)
-        let c = CGFloat(cols)
-        let r = CGFloat(max(rows, 1))
-        return NSSize(
-            width: c * PanelMetrics.thumbW + max(c - 1, 0) * PanelMetrics.thumbGap
-                + PanelMetrics.trayPadX * 2,
-            // 题头行已去掉,高度里也不再留它
-            height: PanelMetrics.trayPadTop
-                + r * PanelMetrics.thumbH + max(r - 1, 0) * PanelMetrics.trayRowGap
-                + PanelMetrics.trayPadBottom
-        )
     }
 
     /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
@@ -897,9 +966,24 @@ final class PanelController: ObservableObject {
         let x = p.x - glass.minX - PanelMetrics.trayPadX
         let y = p.y - glass.minY - PanelMetrics.trayPadBottom
         guard x >= 0, y >= 0, y <= PanelMetrics.thumbH else { return }
-        let pitch = PanelMetrics.thumbW + PanelMetrics.thumbGap
-        let i = Int(x / pitch)
-        guard i >= 0, i < count, x - CGFloat(i) * pitch <= PanelMetrics.thumbW else { return }
+        // T88:卡宽随窗比例,定尺节距退役 —— 按**每张卡的实际宽**走查命中。
+        // 启动行格子 = icon+iconGap、spacing 0(与 launchCell 的 frame 同源);
+        // 窗口卡间距 = thumbGap(与 thumbGrid 的 HStack 同源)
+        let widths: [CGFloat]; let gap: CGFloat
+        if entrySelected {
+            widths = Array(repeating: PanelMetrics.icon + PanelMetrics.iconGap, count: count)
+            gap = 0
+        } else if let g = currentGroup {
+            widths = g.windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }
+            gap = PanelMetrics.thumbGap
+        } else { return }
+        var cursor: CGFloat = 0
+        var hit: Int?
+        for (i, w) in widths.enumerated() {
+            if x < cursor + w { hit = i; break }
+            cursor += w + gap
+        }
+        guard let i = hit else { return }
         if entrySelected {
             guard i != launchIndex else { return }
             launchIndex = i
@@ -1258,14 +1342,18 @@ final class PanelController: ObservableObject {
         switch op {
         case .quit:
             glog("[T12] 退出应用: \(g.appName)")
+            quitPIDs.insert(g.pid) // 先记后杀:0.18s 后那次重枚举不许把它捞回来(见 quitPIDs 的病例)
             WindowFocuser.quitApp(pid: g.pid)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
+            verifyQuit(pid: g.pid, name: g.appName, group: g, restoreAt: appIndex) // 0.9s 后问进程:真死了没?
         case .close:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             glog("[T12] 关闭窗口: \(g.appName) — \(w.title)")
             WindowFocuser.close(window: w)
+            purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
+            verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
         case .minimize:
@@ -1273,6 +1361,8 @@ final class PanelController: ObservableObject {
             let w = g.windows[winIndex]
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
+            purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
+            verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
         case .fullscreen:
@@ -1303,6 +1393,70 @@ final class PanelController: ObservableObject {
             print("[T12] 缩放(Z): \(g.appName) — \(w.title)")
             WindowFocuser.zoom(window: w)
             // 缩放不改列表:窗还在同一格,只是尺寸剧变 —— 不重枚举,面板继续陪
+        }
+    }
+
+    /// 退出的**复核**(2026-09-17,用户实报"割裂"):判生死,权威不是窗口表,是**进程**。
+    ///
+    /// 病例:微信收到退出请求会弹「Confirm Exit / 确定退出吗?」—— **进程根本不死**。
+    /// 而"先摘"是乐观的(为了让面板当帧就对),`quitPIDs` 又专门压住那次重枚举 ⇒
+    /// 结果面板说"没了"、屏幕上它还好好开着;再唤起一局它又回来了 —— 同一件事两种说法。
+    ///
+    /// 所以 0.9s 后问 `NSRunningApplication.isTerminated`:
+    ///   · 已经不在了 / 已终止 ⇒ 真的退出,记忆可以撤了(它只活一局,但没必要留着挡路);
+    ///   · **还在跑** ⇒ 退出被拒(多半是弹了确认框)⇒ 我们的"先摘"是错的,**撤回**。
+    /// 0.9s 是给"真的要死"的进程留的宽限 —— 那段时间里它已经 isTerminated 了。
+    /// 已知边界:极慢退出的 App(存盘对话框停留 > 0.9s)会被误判成"被拒"而放回来一次;
+    /// 那一局里它直到下一次动作才消失。宁可这样,也不接受"面板说谎"。
+    /// 关窗/最小化的**复核**(2026-09-17,与 `verifyQuit` 同一套,成对存在)。
+    ///
+    /// 「先摘」是为了面板当帧就对;但**摘了必须复核**,否则面板会说谎 ——
+    /// App 的确认框(modal alert)根本关不掉,摘了就变成"它消失了又回来"的来回跳。
+    /// 0.9s 后重枚举一次:真没了 ⇒ 摘除成立;还在 ⇒ 撤回(放回**原位**,并且保持选中)。
+    private func verifyPurged(wid: CGWindowID, name: String, group: AppGroup) {
+        let generation = beginGeneration
+        let restoreAt = appIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+            guard let self, self.beginGeneration == generation else { return }
+            guard self.purgedWIDs.contains(wid) else { return }
+            self.purgedWIDs.remove(wid)   // 复核这次之后,真相由系统说了算
+            guard self.isVisible, let screen = self.contextScreen else { return }
+            Task.detached(priority: .userInitiated) {
+                let raw = WindowEnumerator.rawGroups(on: screen)
+                await MainActor.run {
+                    guard self.isVisible, self.beginGeneration == generation else { return }
+                    let stillThere = raw.contains { $0.windows.contains { $0.wid == wid } }
+                    if stillThere {
+                        glog("[T12] 关闭被拒(窗还在): \(name) → 放回列表")
+                        var next = self.groups
+                        if !next.contains(where: { $0.pid == group.pid }) {
+                            next.insert(group, at: min(max(0, restoreAt), next.count))
+                            self.applyList(next, keepPID: group.pid, keepWin: 0)
+                        } else {
+                            self.applyRefreshed(raw, keepPID: group.pid, keepWin: 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func verifyQuit(pid: pid_t, name: String, group: AppGroup, restoreAt index: Int) {
+        let generation = beginGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+            guard let self, self.beginGeneration == generation else { return }
+            let app = NSRunningApplication(processIdentifier: pid)
+            guard app != nil, app?.isTerminated == false else {
+                self.quitPIDs.remove(pid) // 真死了
+                return
+            }
+            glog("[T12] 退出被拒(仍在运行): \(name) → 放回列表")
+            self.quitPIDs.remove(pid)
+            guard self.isVisible else { return }
+            // 放回**原位**:它在用户心里本来就在那格。挂到尾部又是一次"跳",而这次跳是我们自己造的。
+            var next = self.groups
+            next.insert(group, at: min(max(0, index), next.count))
+            self.applyList(next, keepPID: pid, keepWin: 0)
         }
     }
 
@@ -1351,12 +1505,23 @@ final class PanelController: ObservableObject {
                 merged.append(AppGroup(pid: old.pid, appName: old.appName,
                                        bundleID: old.bundleID, windows: []))
             } else if let f = byPID[old.pid] {
-                merged.append(f) // 位置不动,只换内容(窗多了少了都还在这格)
+                // 位置不动,只换内容(窗多了少了都还在这格)。但**我们刚摘掉的窗**要按住,
+                // 否则 0.2s 后它诈尸回来一次(见 purgedWIDs 的病例)
+                let kept = f.windows.filter { !purgedWIDs.contains($0.wid) }
+                if kept.isEmpty { continue }                       // 整组都被摘了:这一组先不进
+                merged.append(kept.count == f.windows.count ? f
+                              : AppGroup(pid: f.pid, appName: f.appName,
+                                         bundleID: f.bundleID, windows: kept))
             }
             // 不在 fresh 里 = 这个 App 真的没了(退出)→ 丢掉
         }
-        for g in fresh where !seen.contains(g.pid) && !hiddenPIDs.contains(g.pid) {
-            merged.append(g) // 本局中途新出现的 App 挂到**尾部**:不插队,免得又跳一次
+        for g in fresh where !seen.contains(g.pid)
+            && !hiddenPIDs.contains(g.pid) && !quitPIDs.contains(g.pid) {
+            let kept = g.windows.filter { !purgedWIDs.contains($0.wid) }
+            guard !kept.isEmpty else { continue }
+            // 本局中途新出现的 App 挂到**尾部**:不插队,免得又跳一次
+            merged.append(kept.count == g.windows.count ? g
+                          : AppGroup(pid: g.pid, appName: g.appName, bundleID: g.bundleID, windows: kept))
         }
         return merged
     }
@@ -1376,8 +1541,8 @@ final class PanelController: ObservableObject {
         let windowCount = fresh[appIndex].windows.count
         winIndex = min(keepWin, max(windowCount - 1, 0))
         // 列表变了 → 截图重拍。同样**剪枝不清场**:别的窗的图还有效,只有被处决那扇会被剪掉
-        let live = Set(groups.flatMap { $0.windows }.map(\.wid))
-        Snapshotter.shared.prune(keeping: live)
+        // (T87 v3 起交给 `reapAlive()`:后台全量保活,被处决的窗在系统清单里消失即被 reap)
+        Snapshotter.shared.reapAlive()
         let shown = groups.first?.windows ?? []
         let shownIDs = Set(shown.map(\.wid))
         Snapshotter.shared.precapture(shown, force: true)
