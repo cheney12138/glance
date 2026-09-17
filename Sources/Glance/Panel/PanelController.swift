@@ -267,6 +267,27 @@ final class PanelController: ObservableObject {
     ///
     /// ⚠️ 只在"**触发键已经松开**"的局里计时:按住 ⌘Tab 时用户停下来看一眼是常态,
     /// 那不是"闲置",不该被收走。这个区分不需要问触发层 —— 直接看当前的修饰键。
+    // MARK: - T91 表三(v2):没有未启动的 App 时,说一句话
+
+    /// **改走长条自己的玻璃**(不再是托盘):托盘的窗口尺寸是**一局的不变量**(按整局最大布局开),
+    /// 上一版为了显示这句话去动它 ⇒ 内容尺寸与窗口尺寸两本账打架 ⇒ AppKit Update Constraints
+    /// 布局递归 ⇒ 连触发层一起被带走(日志:「已归还原生热键」)。
+    /// 长条这边只要 `.overlay` 一句文字,**不碰任何尺寸** ⇒ 结构上不可能再出那个问题。
+    /// 记录:`design/gesture-session-spec.md` 表三。
+    @Published private(set) var hintText: String?
+    private var hintWork: DispatchWorkItem?
+
+    private func showHint(_ text: String) {
+        hintWork?.cancel()
+        withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { hintText = text }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.hintText = nil }
+        }
+        hintWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: w)   // 用户裁定:1 秒
+    }
+
     private var idleWork: DispatchWorkItem?
     private static let idleLimit: Double = 3.0
 
@@ -653,7 +674,11 @@ final class PanelController: ObservableObject {
         let willSlide = MotionPolicy.slideFromLastApp
             && lastLandedIndex != nil && lastLandedIndex != appIndex
         selectionArmed = willSlide                          // 要滑才上膛,否则第一帧定死
-        contentEntryRise = MotionPolicy.entryFloatDistance   // 上浮:两种情形都有
+        // ⚡ 2026-09-17 用户裁定:「不要动画了, 直接一步到位吧。唤起面板就展示上浮之后的结果」。
+        // 起点幅度给 **0** ⇒ 图标(上浮后的位置)/托底/托盘**第一帧就在终点**,入场动效整段消失。
+        // 这也正是这个仓库最早的口径(见 PanelView 顶部注释:「⌘Tab 是效率动作, 面板要"已经在"」)——
+        // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
+        contentEntryRise = 0   // 不再是 entryFloatDistance
         trace("[T6] 入场:上浮" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
@@ -747,6 +772,7 @@ final class PanelController: ObservableObject {
     }
 
     private func dismiss(reason: String) {
+        hintWork?.cancel(); hintWork = nil; hintText = nil
         idleWork?.cancel()   // 散场就把表撤掉(免得迟到的那一发对着已关的面板说话)
         idleWork = nil
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——
@@ -1495,14 +1521,21 @@ final class PanelController: ObservableObject {
         // `finishBegin` 里才装上的。那时这里 isEmpty ⇒ 静默 return ⇒ 面板照常显示主环,
         // 用户读到的是"四指没生效"。症状像没接线,其实是**时序**。
         guard !launchables.isEmpty else {
-            pendingLaunchRing = true
-            pendingLaunchAt = CFAbsoluteTimeGetCurrent()
-            trace("[T91] 换环意图已记下(名单还没到:枚举在后台跑)")
+            // ⚠️ 2026-09-17 修(用户实报「倒是展示了, 但是别给启动环同时唤起来了呀」)。
+            // 这里**绝不能**再把意图置成 true —— 日志原样:
+            //   兑现换环意图(等了 72ms,未启动的 App 共 0 个)
+            //   换环意图已记下(名单还没到:枚举在后台跑)   ← 又武装一次 ⇒ 每局都会再来换环
+            // 没有可换之物 ⇒ 意图到此为止:**消费掉**就走。
+            pendingLaunchRing = false
+            showHint("没有未启动的 App")
+            trace("[T91] 没有未启动的 App ⇒ 不换环(意图已消费)")
             return
         }
         entrySelected = true
         launchIndex = nil
-        trace("[T91] 换环 → 未启动的 App(共 \(launchables.count) 个)")
+        // 名单连名字一起打:一句话分清"到底换没换、换成了谁"(用户报"还是唤起来了"时,
+        // 只有"共 N 个"是分不清的 —— 这条让报告能对号入座)
+        trace("[T91] 换环 → 未启动的 App(共 \(launchables.count) 个): \(launchables.map(\.name).joined(separator: " · "))")
         applyRingSwap()
     }
     

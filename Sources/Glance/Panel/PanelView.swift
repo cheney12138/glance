@@ -73,6 +73,20 @@ struct PanelView: View {
             }
 
             iconStrip
+                // T91 表三:没有未启动的 App ⇒ 在这一条**自己身上**说一句(1 秒,淡入淡出)。
+                // 用 overlay:一个字都不参与布局 ⇒ 长条的尺寸账不受影响(上一版动托盘尺寸 ⇒ 崩)。
+                .overlay {
+                    if let hint = controller.hintText {
+                        Text(hint)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.8))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
+                }
                 // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
                 // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)。
                 // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——

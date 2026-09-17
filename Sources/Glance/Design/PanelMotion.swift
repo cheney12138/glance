@@ -79,9 +79,14 @@ enum PanelMotion {
     /// 开局落位的上膛延迟:跨过 SwiftUI 的首次提交,之后才上膛
     static let entryDelay: Double = 0.06
     /// 图标选中(demo .app-icon 的 .32s):response 越小越"脆",dampingFraction 越小回弹越明显
-    static let select = Animation.spring(response: 0.32, dampingFraction: 0.55)
+    /// ⚡ 2026-09-17 提速(用户口径:「选中即切换…有一个上浮动画, 速度加快」→ 澄清:是**想让它更快**):
+    /// 0.32/0.55 → **0.22/0.60**。指哪一格,那一格的上浮与托底都更快到位。
+    /// ⚠️ 它必须与下面的 `slide` **同一档速度**:托底与选中的图标是同一次 withAnimation 的两个面,
+    /// 只调一个就会出现"图标先到、托底后到"(README 的动效口径:两者永远同步)。
+    static let select = Animation.spring(response: 0.22, dampingFraction: 0.60)
     /// puck 滑移(demo .puck 的 .38s):阻尼比图标大一点,托底不抖
-    static let slide = Animation.spring(response: 0.38, dampingFraction: 0.62)
+    /// 与 `select` 同步提速:0.38/0.62 → **0.26/0.66**(见上面 select 的注释,两者必须同一档)
+    static let slide = Animation.spring(response: 0.26, dampingFraction: 0.66)
     /// **入场动效**(上浮 / 承接上一格;唯一的使用点是 `PanelController` 把 `contentEntryRise` 归零那一发)。
     /// 比 `slide` 快一档 —— 它是"入场",不是"跟手",不该让人等。会话内的横滑仍用 `slide`。
     ///
@@ -89,6 +94,15 @@ enum PanelMotion {
     /// "这个上浮有点慢了") → **0.16**(2026-09-16 用户:「唤起面板 app 上浮的速度太慢了,加快一点」;
     /// 同轮裁定**入口槽的滑入与它同速** —— 同一根弹簧,两处不会各走各的,见 PanelView.entrySlot)。
     /// 再要动就一次动一个数:`response` 越小越快、`dampingFraction` 越小回弹越明显。
+    /// ⚡ 2026-09-17 再提速(用户口径:「cmd tab 唤起的时候, 默认选中第二个, 然后它会有个上浮,
+    /// 这个速度加快」):0.16 → **0.11**。
+    /// 速度史:0.38(与 slide 同) → 0.28(「上滑的速度稍微快一点」) → 0.20(幅度收成 17pt 之后)
+    ///        → 0.16 → **0.11**(2026-09-17)
+    // ⚡️ 2026-09-17 极端值试验:用户对 0.16→0.08 的差别**感觉不到** ⇒ 先走到"几乎瞬时",
+    // 用来验证"这个旋钮到底管不管那一段"。若极端值也没变化 ⇒ 管的不是它,去查别的层
+    // (日志里 `[T6] 入场:…` 那行会说清这一局演了哪几层)。
+    /// ⚠️ 2026-09-17:入场"上浮"已整段取消(起点幅度给 0,见 PanelController.showPanel)⇒
+    /// 这一档现在**没有主环的用武之地**(留着给别处/以后)。值回退到取消前的那一档。
     static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
