@@ -633,7 +633,9 @@ final class PanelController: ObservableObject {
         // 代价是几毫秒(本来就要画),换来"上屏即完整"。
         panel.contentView?.layoutSubtreeIfNeeded()
         panel.displayIfNeeded()
+        if isTraceEnabled { probeContentReady(panel) }   // 🔬 白光排查:上屏前量一次内容
         panel.orderFrontRegardless()
+        if isTraceEnabled { probeShownFrames(panel) }   // 🔬 上屏**之后**连拍:这才是屏幕上真显示的东西
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
         // **一次唤起的全部结算,一行**:语境屏 + App 数 + 按键→上屏(含枚举)。
@@ -767,6 +769,90 @@ final class PanelController: ObservableObject {
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
         return NSSize(width: max(w, PanelMetrics.minStripWidth),
                       height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+    }
+
+    /// 🔬 首帧探针(T91「一道白光」排查)——只回答一个问题:**上屏那一刻,我们的内容画上去了没有。**
+    ///
+    /// 为什么需要它:这件事已经被三种方法试过都抓不到 ——
+    ///   ① `[帧]` 帧率探针:它量的是"卡不卡",而白光**不卡**(`长帧 0(0%)`);
+    ///   ② 肉眼+描述:只能描述现象("一排 app 上一条闪光"),定不到代码;
+    ///   ③ `screencapture` 连拍:单次调用 200ms+,**追不上 16ms 的一帧**。
+    ///
+    /// 所以换一种问法:**不问"屏幕上闪过什么",问"我们交给屏幕的那一帧里有没有东西"**。
+    /// 把当前 contentView 直接画进一张位图,量**顶部那条带**(图标上沿所在处,白光就闪在那里)的
+    /// 平均亮度与标准差:
+    ///   · mean 高 + σ 很小 ⇒ 那是一片**空的浅色**(内容还没画上 ⇒ 病在我们自己);
+    ///   · σ 明显大      ⇒ 图标已经画上去了(病在合成器/材质那一帧 ⇒ 要去那边查)。
+    ///
+    /// 写在 `isTraceEnabled` 闸后:常态零开销。
+    /// 🔬 上屏后连拍(2026-09-17 第四版,也是唯一有机会抓住"16ms 那一帧"的做法)。
+    ///
+    /// 前三版都错在**同一件事**上:量的是**图层**,不是**屏幕** ——
+    /// 上屏前 SwiftUI 的内容还没提交进图层 ⇒ `cacheDisplay` / `layer.render` 每次都量到全 0
+    /// (那是"没看见",不是"干净");动态色那版则证明颜色两次一样(不是它)。
+    ///
+    /// 这一版:上屏**之后**,用 `CGWindowListCreateImage` 取**我们自己的窗口**
+    /// —— 与缩略图管线同一条路,权限早就有,拿到的是**合成器真正显示的东西**。
+    /// 连抓 12 帧(每 4ms,覆盖上屏后 ~48ms)⇒ 屏幕上真闪过一条亮带,必然落在其中某一帧里。
+    private func probeShownFrames(_ panel: NSPanel) {
+        let wid = CGWindowID(panel.windowNumber)
+        guard wid != 0 else { return }
+        for i in 0..<12 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.004) {
+                guard let img = CGWindowListCreateImage(.null, .optionIncludingWindow, wid,
+                                                        [.boundsIgnoreFraming, .bestResolution]) else {
+                    glog("[上屏探针] #\(i) 取不到图")
+                    return
+                }
+                glog("[上屏探针] #\(i) " + Self.bandStats(img))
+            }
+        }
+    }
+
+    /// 取图片**顶部 15% 条带**的 mean/max(0…1)。白光就闪在图标那一排的上沿。
+    private static func bandStats(_ img: CGImage) -> String {
+        let w = 320, h = 64
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return "ctx 失败" }
+        let iw = CGFloat(img.width), ih = CGFloat(img.height)
+        let bandH = max(ih * 0.15, 1)
+        ctx.scaleBy(x: CGFloat(w) / iw, y: CGFloat(h) / bandH)
+        ctx.translateBy(x: 0, y: -(ih - bandH))
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: iw, height: ih))
+        guard let data = ctx.data else { return "无数据" }
+        let p = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var sum = 0.0, mx = 0.0
+        for i in stride(from: 0, to: w * h * 4, by: 4) {
+            let l = (0.299 * Double(p[i]) + 0.587 * Double(p[i + 1]) + 0.114 * Double(p[i + 2])) / 255.0
+            sum += l; mx = max(mx, l)
+        }
+        return String(format: "mean=%.3f max=%.3f", sum / Double(w * h), mx)
+    }
+
+    private func probeContentReady(_ panel: NSPanel) {
+        // 为什么改量**颜色本身**(2026-09-17,第三版探针):
+        //   位图快照这条路已经走过两遍都瞎了 —— `cacheDisplay` 与 `layer.render` 在上屏前都拿到全 0,
+        //   因为 SwiftUI 的内容那一刻**还没提交进图层**。那是"没看见",不是"干净"。
+        //   而白光的假设是**颜色解析**:`glassLip`(玻璃边那道"软的受光唇")是**动态色**,
+        //   浅色/深色各一套;进程起来后的**第一帧**里窗口外观还没落定 ⇒ 可能按**深色**解析 ⇒
+        //   沿整条边一道亮线(用户原话:「一排 app 上很明显的一条闪光」);下一帧浅色生效 ⇒ 线消失。
+        //   所以直接把这个值在**当前绘图外观**下解析出来打日志:第一次 vs 第二次,数值说话。
+        var parts: [String] = []
+        panel.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let pairs: [(String, Color)] = [("lip", PanelColors.glassLip),
+                                            ("top", PanelColors.glassTopEdge),
+                                            ("inner", PanelColors.glassInner)]
+            for (name, color) in pairs {
+                let c = NSColor(color).usingColorSpace(.sRGB)
+                parts.append(String(format: "%@=%.2f/%.2f/%.2f@%.2f", name,
+                                    c?.redComponent ?? -1, c?.greenComponent ?? -1,
+                                    c?.blueComponent ?? -1, c?.alphaComponent ?? -1))
+            }
+        }
+        glog("[首帧探针] 动态色 @"
+             + (panel.effectiveAppearance.name == .darkAqua ? "dark" : "light")
+             + "  " + parts.joined(separator: "  "))
     }
 
     /// 窗口尺寸 = 内容 + 阴影呼吸区(四周 shadowPadStrip)。
