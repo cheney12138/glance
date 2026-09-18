@@ -50,7 +50,14 @@ struct PanelView: View {
 
     var body: some View {
         ZStack {
-            GlassBackground(cornerRadius: PanelMetrics.rPanel)
+            // 说话时:同一块玻璃,形状变成胶囊(芯片样式) —— 材质不变,只改形状。
+            // 圆角 = 玻璃高的一半(真胶囊)。⚠️ 别在这里减 shadowPadStrip:hintContentSize
+            // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
+            // 上一版减了,算出负圆角喂给 NSGlassEffectView,玻璃形状当场失真
+            // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
+            GlassBackground(cornerRadius: controller.hintText == nil
+                            ? PanelMetrics.rPanel
+                            : PanelMetrics.hintContentSize.height / 2)
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
@@ -73,28 +80,50 @@ struct PanelView: View {
             }
 
             iconStrip
-                // T91 表三:没有未启动的 App ⇒ 在这一条**自己身上**说一句(1 秒,淡入淡出)。
-                // 用 overlay:一个字都不参与布局 ⇒ 长条的尺寸账不受影响(上一版动托盘尺寸 ⇒ 崩)。
-                .overlay {
-                    if let hint = controller.hintText {
-                        Text(hint)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.primary.opacity(0.8))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .transition(.opacity)
-                            .allowsHitTesting(false)
-                    }
-                }
                 // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
                 // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)。
                 // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
                 // 这层只管竖直,不然左右各叠一层就是双重边距
                 .padding(.vertical, PanelMetrics.rowPadY)
+                // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
+                // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
+                .opacity(controller.hintText == nil ? 1 : 0)
+                // 模型 C 跨段过渡:identity 换新触发 transition;方向随行进
+                // (Tab = 内容左滑、⇧Tab = 右滑、↓/↑ 跳段 = 淡切),动画事务由 setSegment 的
+                // withAnimation 提供 —— 与窗口(AppKit)那边的 0.22s easeInOut 同一根曲线
+                .id(controller.entrySelected)
+                .transition(segmentTransition)
+
+            // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
+            // 上一轮把尺寸和形状做了、**文字漏了** —— 于是"芯片出来了, 没文案"。
+            // v2(2026-09-18「太大太重」):12pt regular + 14/6 内边距,配 168×36 的玻璃
+            // (尺寸在 PanelMetrics.hintContentSize,别在这里另立一本)
+            if let hint = controller.hintText {
+                Text(hint)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
+        // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
+        // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
+        // 段头只负责交代两件事:这是什么、怎么回去。
+        .overlay(alignment: .bottom) {
+            if controller.entrySelected {
+                Text("未启动的 App · ↑ 返回 / Tab 继续")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(PanelColors.txt2)
+                    .opacity(0.9)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 4)
+                    .allowsHitTesting(false)
+            }
+        }
         // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
         .glassEdge(cornerRadius: PanelMetrics.rPanel)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
@@ -120,11 +149,33 @@ struct PanelView: View {
         //
         // 结论:**视图不该再藏一层**。窗口在屏幕上 = 内容就可见。
         // (将来若真要做退场淡出,请用窗口的 alphaValue,别回到这里。)
-        .elevation(.strip)
+        // 投影:长条用 .strip;芯片(说话局)换 .puck —— .strip 的深色 α .62 是大面板的配重,
+        // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
+        // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
+        .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
+        // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
+        // 居中玻璃)—— 根视图尺寸依赖提议、提议依赖尺寸 ⇒ AppKit Update Constraints 布局递归
+        // FAULT(2026-09-18 实机崩溃,本仓库此病第三次现形)。段变形的居中问题已在窗口侧解决。
     }
 
     // MARK: - 图标层
+
+    /// 跨段过渡的方向(模型 C,见 `PanelController.SegmentTravel`)。
+    /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
+    /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
+    private var segmentTransition: AnyTransition {
+        switch controller.segmentTravel {
+        case .forward:
+            return .asymmetric(insertion: .opacity.combined(with: .offset(x: 14)),
+                               removal: .opacity.combined(with: .offset(x: -14)))
+        case .backward:
+            return .asymmetric(insertion: .opacity.combined(with: .offset(x: -14)),
+                               removal: .opacity.combined(with: .offset(x: 14)))
+        case .direct:
+            return .opacity
+        }
+    }
 
     private var iconStrip: some View {
         // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),App 区两端再负 padding 收回来 ——
@@ -177,6 +228,10 @@ struct PanelView: View {
         .background(alignment: .leading) { puck.allowsHitTesting(false) }
         .padding(.leading, PanelMetrics.rowPadX)
         .padding(.trailing, PanelMetrics.rowPadX)   // T91:尾格撤了 ⇒ 右缘与左缘对称
+        // 主环 hover 的兜底轮询不挂在这里:TimelineView(.animation) 在静态窗口上**不跳帧**
+        // (macOS 不给静止窗口排帧,"每帧"实际只是"有视图更新的那几拍"),兜不住
+        // "界面静止、指针开始动"的那一刻 —— 帧拍已由控制器里的 60Hz 定时器统一驱动
+        // (PanelController.startHoverPolling,主环 + 托盘一份账)。
     }
 
     /// 换环后(strip 里装的是"未启动的 App")的格子。

@@ -51,8 +51,21 @@ final class ThumbnailRefresher {
             }
         })
         lastScreenSignature = Self.screenSignature()
+        schedulePeriodicSweep()
         if isTraceEnabled {
-            glog("[保温] 已上线:App 激活 → 抓它的窗;显示器变化 → 整块缓存作废")
+            glog("[保温] 已上线:App 激活 → 抓它的窗;显示器变化 → 整块缓存作废;开窗拍 → 5s 轻扫")
+        }
+    }
+
+    /// **开窗拍**(2026-09-18 用户:「所有 app 都需要这个钩子,不是只对 glance」):
+    /// 任何 App 新开的窗,不该等用户下一次唤起面板才第一次被拍。macOS 没有"别家开新窗"
+    /// 的通知,就用**低频轻扫**兜住 —— 与关面板预拍同一条路:sweepAllScreens 全量走 TTL
+    /// 过滤(谁新谁不拍),没有新窗、没有过期时**一枚快门都不发生**;枚举在后台毫秒级,
+    /// 常驻成本可忽略。Glance 自己的设置窗另有一个 0.6s 的即时钩子(开窗即拍,不等扫)。
+    private func schedulePeriodicSweep() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.sweepAllScreens(reason: "开窗拍")
+            self?.schedulePeriodicSweep()
         }
     }
 

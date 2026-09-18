@@ -48,6 +48,8 @@ struct SettingsView: View {
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
     @AppStorage("panel.showLaunchables") private var showLaunchables = true
+    /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
+    @AppStorage("panel.tabEntersLaunchSection") private var tabEntersLaunchSection = true
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
     @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
@@ -140,9 +142,13 @@ struct SettingsView: View {
                     BeamSwitch(isOn: $pinPanel)
                 }
                 SettingsRow(title: "展示 Dock 常驻应用",
-                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。",
-                            hairline: false) {
+                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
                     BeamSwitch(isOn: $showLaunchables)
+                }
+                SettingsRow(title: "Tab 进入未启动区",
+                            desc: "关闭后使用 ↓ 键进入。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $tabEntersLaunchSection)
                 }
             }
 
@@ -169,10 +175,26 @@ struct SettingsView: View {
 
     private var aboutPane: some View {
         Group {
-            SettingsGroup(label: "版本信息") {
-                SettingsRow(title: "名称") { RowValue("Glance") }
-                SettingsRow(title: "版本", hairline: false) { RowValue(bundle("CFBundleShortVersionString")) }
+            // 品牌头(2026-09-18 用户:「面板就没有 glance 的图标」—— 设置页通篇没有 App 图标,
+            // CodeIsland 有,惯例缺失):图标直接取 NSApplication 的实际图标(与 Finder/Dock 同源,
+            // 换 AppIcon 资产时这里自动跟)。名称与版本并进这枚头 —— 原「版本信息」两行文字
+            // 被它完全复述,按文案纪律第 1 条删除
+            HStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Glance")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("版本 \(bundle("CFBundleShortVersionString"))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
+            .padding(.bottom, 14)   // 左缘与 SettingsGroup 的组标题胶囊/行标题同线(都从 contentPadX 起步)
             SettingsGroup(label: "权限") {
                 SettingsRow(title: "辅助功能", desc: "用于读取与聚焦窗口。缺失时切换器无法工作。") {
                     PermissionBadge(granted: permissions.accessibilityGranted)

@@ -211,22 +211,20 @@ enum PanelMetrics {
     /// 长条最小宽度:单 App 时不至于缩成一枚图标
     static var minStripWidth: CGFloat { k(280) }
 
-    // § 启动区(v11):**分割线 + 入口槽**两件套。分割线占一个 gap 格;
-    // 入口槽 v18 定稿:占格收到"两段各约一个 App 间距"(用户口径:可以稍微宽一点点)
-    /// 入口槽占格宽(v18,用户裁定「APP 到竖线、竖线到入口的间距 ≈ 两个 APP 之间的间距,
-    /// 可以稍微宽一点点」):= 点阵记号宽(3.5×entryDot)+ 一个 gap + 4pt 余量。
-    /// 这样 App→竖线 ≈ gap、竖线→点阵 ≈ gap+2,与主环节奏同族,不再出现大空档
-    /// 启动区**尾格**(T89):分割线 + 点阵合成一整格。宽度账:
-    /// [半格][线][整格][点阵] —— App 格子的尾半格 + 前半格 = 线→点 = 整格 = 点阵→玻璃边
-    /// (外层 trailing padding 给),**尾部三点同距 = iconGap**。
-    /// (v2 曾把前距写成整格:与 App 格子的尾半格叠加,App→线比其余两段大 4.6pt)
-    static var entryTailWidth: CGFloat { iconGap * 1.5 + hairline + entryDot * 3.5 }
+    /// T91 表三那枚芯片的**玻璃**尺寸(说话局长条窗口里装的全部内容)。
+    /// v2(2026-09-18 用户实评「太大太重」):240×52 是长条量级的配重,套在一句 12pt 的
+    /// 话上就是一块板 ⇒ 收到 168×36(面积约砍半),文字/内边距见 PanelView 的胶囊。
+    /// ⚠️ 口径必须只有一本:这是**玻璃**的账,窗口 = 它 + 2 × shadowPadStrip(见 paddedSize);
+    /// 胶囊圆角 = height / 2(见 PanelView 的 GlassBackground)。上一版一边拿它当玻璃、
+    /// 一边拿它当窗口去减呼吸区 ⇒ 算出**负圆角**;更早一版内容按 240 算、窗口按"整局最大"算
+    /// ⇒ AppKit Update Constraints 布局递归(触发层被带走)。两本账只许留一本。
+    static let hintContentSize = NSSize(width: 168, height: 36)
+
+    // § 启动区(历史):v11 的"分割线 + 入口槽"与 T89 尾格均已随双环模型 C 撤除
+    // (hover 误触病例 + ADR-0013);活下来的只有托盘/启动段共用的幽灵壳度量(下面 ghostTileRadius)。
     /// **幽灵贴圆角**(T84):走 macOS 图标的比例(≈22.5%) ——
-    /// 幽灵贴(托盘启动行的壳)的立身之本是"读起来是一枚 app 图标形状的壳"
+    /// 幽灵贴(启动段的壳)的立身之本是"读起来是一枚 app 图标形状的壳"
     static var ghostTileRadius: CGFloat { icon * 0.225 }
-    /// 点阵的**点径**(v9):比窗数点大一档 —— 窗数点是"记账",笔画要轻;
-    /// 这里是"把手记号",要独自撑起整个启动区的入口,太细就"空"了
-    static var entryDot: CGFloat { dot * 1.3 }
 }
 
 // MARK: - 色板(浅 / 深双值)
@@ -331,10 +329,6 @@ enum PanelColors {
     /// 瓷贴发丝边(v14):浅色暗发丝收形;**深色透明** —— 白色受光唇/亮边让瓷贴读起来
     /// 像一枚 App 窗口(用户裁定去掉),深色的"这是入口"由底色差自己交代
     static let ghostTileBorder = dynamic(ink(0.10), NSColor.clear)
-    /// 点阵点的**微渐变**(v12):顶亮底沉,一粒点也有了受光方向 ——
-    /// 平涂的灰点是多边形教具,受光的点才是"元件"。深色反向:顶更亮的白
-    static let entryDotTop = dynamic(ink(0.70), white(0.88))
-    static let entryDotBottom = dynamic(ink(0.38), white(0.52))
     /// 窗数点:浅色 ink .55(暗点,坐在亮玻璃上);深色白 .72 ——
     /// 旧版 .65 压在半透明玻璃上实得 L≈175,泛灰不清爽,深色的点必须更亮更纯
     static let dot = dynamic(ink(0.55), white(0.72))

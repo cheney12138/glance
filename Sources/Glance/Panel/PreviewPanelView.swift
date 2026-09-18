@@ -23,6 +23,8 @@ struct PreviewPanelView: View {
         // 托盘的**双内容**(方案 E):它承载"选中格的内容" —— 活跃格 → 窗口卡;入口槽 → 启动图标行。
         // 两种内容共用同一套玻璃/卡壳/动效,切换是内容级的事,窗口与玻璃纹丝不动
         Group {
+            // T91 表三:文案**不走托盘**(那是第二枚芯片 + 尺寸账不同源 ⇒ 崩溃)。
+            // 芯片由面板那一扇窗承担,见 PanelView / PanelController.contentSize。
             if controller.entrySelected { launchGrid } else { thumbGrid }
         }
         .padding(.top, PanelMetrics.trayPadTop)
@@ -85,6 +87,19 @@ struct PreviewPanelView: View {
                 }
             }
         }
+        // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
+        // 卡片在指针脚下重排 —— tracking area 在"视图于指针底下重排之后就哑了,不补发 hover"
+        // (本仓库实咬两次的病)。表现就是用户实报的「键盘选完组、鼠标去接管,慢半拍」。
+        // 每帧问一次全局指针位置、自己算格子,事件丢了也有帧拍;
+        // 落账走 pollWindowHover 的异步一跳(不许在视图更新中直接写 @Published,见那边病例)。
+        // paused 跟着面板在不在台上走(与 SheenOverlay 同一省电纪律:不台上就一帧都不跑)。
+        .background(alignment: .topLeading) {
+            TimelineView(.animation(paused: !controller.isVisible)) { _ in
+                Canvas { _, _ in controller.pollWindowHover() }
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private func thumb(at i: Int) -> some View {
@@ -102,7 +117,8 @@ struct PreviewPanelView: View {
                     close: { controller.closeWindowClicked(w.wid) },
                     minimize: { controller.minimizeWindowClicked(w.wid) },
                     zoom: { controller.zoomWindowClicked(w.wid) },
-                    dimmed: !(i == controller.winIndex)
+                    dimmed: !(i == controller.winIndex),
+                    closeDisabled: w.pid == ProcessInfo.processInfo.processIdentifier
                 )
             },
             motion: MotionPolicy.animation(PanelMotion.thumb)
@@ -225,6 +241,9 @@ struct TrafficLights: View {
     let zoom: () -> Void
     /// 未选中的卡片:三粒灯去饱和(= macOS 上"非激活窗口"的样子 ✓)
     let dimmed: Bool
+    /// **红灯禁用**(2026-09-18 用户裁定):Glance 自己的窗(设置/权限)在预览卡上的
+    /// 红灯置灰、点了没反应 —— 切换器不能从面板上关掉自己的窗再"自杀"
+    var closeDisabled: Bool = false
     /// 哪一粒被直接踩到(nil = 没踩到整组):
     /// 整组里**任意一粒**被悬停 → 三粒一起出符号;只有被直接踩到的那一粒放大
     @State private var hoveredDot: Int?
@@ -232,19 +251,20 @@ struct TrafficLights: View {
     var body: some View {
         // spacing 归零、每粒自带 3pt 内边:间距不变(11+6),但两粒之间的缝也算"踩到"
         HStack(spacing: 0) {
-            light(PanelColors.tlClose, "xmark", "关闭窗口", 0, close)
+            light(PanelColors.tlClose, "xmark", closeDisabled ? "Glance 的窗口不能在这里关闭" : "关闭窗口", 0, close, disabled: closeDisabled)
             light(PanelColors.tlMin, "minus", "最小化窗口", 1, minimize)
             light(PanelColors.tlZoom, "arrow.up.left.and.arrow.down.right", "缩放窗口", 2, zoom)
         }
     }
 
     private func light(_ color: Color, _ symbol: String, _ hint: String,
-                       _ index: Int, _ action: @escaping () -> Void) -> some View {
+                       _ index: Int, _ action: @escaping () -> Void,
+                       disabled: Bool = false) -> some View {
         TrafficLight(color: color, symbol: symbol, hint: hint,
                      showsGlyph: hoveredDot != nil,
                      hovering: hoveredDot == index,
-                     dimmed: dimmed,
-                     action: action)
+                     dimmed: dimmed || disabled,
+                     action: disabled ? {} : action)
             .padding(3)
             // 逐粒听 hover,而不是给 HStack 挂一个:容器上的 onHover 会被子按钮吃掉
             // (实机现形:只有被踩到的那一粒出符号,另两粒没反应)

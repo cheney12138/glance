@@ -126,8 +126,17 @@ struct GlanceApp: App {
         }
     }
 
-    private func showPermissions() { showWindow(id: "permissions") }
-    private func showSettings() { showWindow(id: "settings") }
+    private func showPermissions() {
+        showWindow(id: "permissions")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Snapshotter.shared.precaptureOwnWindows() }
+    }
+    private func showSettings() {
+        showWindow(id: "settings")
+        // 设置窗是**打开时才建**的,冷启动预热拍不到它 —— 它入环后的第一眼不该是「截图中…」
+        // (2026-09-18 用户实报)。窗建好、渲染落定(0.6s)后立刻把自己的普通图层窗拍进缓存;
+        // 此后关面板预拍会持续保鲜。悬浮面板是 popUpMenu 图层,不在名单里
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Snapshotter.shared.precaptureOwnWindows() }
+    }
 
     /// 冷启动预热(T86):启动后空闲 2.5s 干两件没人看的事 ——
     /// ① 语境屏枚举 + 预截一遍:把冷枚举管线(T85 实测 256ms:CGWindowList / AX 首连 / SCK 全是
@@ -135,10 +144,25 @@ struct GlanceApp: App {
     /// ② 两块面板窗(NSPanel + SwiftUI hosting)先建好但不显示:首局"开窗 80ms"(T85 实测)
     ///    不占唤起那一拍。
     /// 权限齐了才发:预截没有屏幕录制权限只会白失败;权限中途补齐走 onChange 那条路,同样能到这。
+    ///
+    /// ★ 2026-09-18 拆成两笔(用户实报「白光又出现了」—— 日志:启动后 1.6s 就唤起,
+    /// `[唤起] 缓存 0.0MB/0 张、按键→上屏 264ms`,而 `[保温]` 2538ms 才跑):
+    /// 两件事的"贵"差一个量级,不该绑在同一个 2.5s 上 ——
+    ///   · 两块面板窗构建 + 首帧合成预热 = 便宜(几十 ms)⇒ 提前到 **0.6s**;
+    ///   · 冷枚举扫屏 + 全量预截 = 贵(百 ms 级,AX/CGWindowList/SCK 全是第一次)⇒ 仍等 2.5s。
+    /// 这样"启动后立刻唤起"也有预热过的合成器与建好的窗口,冷启动的白光没有可乘之机
+    /// (扫屏还没跑只影响"第一眼有没有图",那是另一件事,不闪)。
     private func scheduleWarmup() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [panelController] in
+            panelController.prewarmPanels()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [panelController] in
             ThumbnailRefresher.shared.coldStartSweep()
-            panelController.prewarmPanels()
+        }
+        // 诊断钩子(自动化复现用,平时不生效):`open … --args -debug.autoOpenSettings 1`
+        // 启动后自动开一次设置窗 —— 复现"设置窗关闭后 Glance 仍在环里"的病例
+        if UserDefaults.standard.bool(forKey: "debug.autoOpenSettings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showSettings() }
         }
     }
 }

@@ -643,9 +643,6 @@ final class ThreeFingerTap {
     // ⚠️ 第一版量错了(记在这里,别再犯):量的是"所有触摸点的**包围盒**" —— 而轻点也有 3–4 根
     // 手指**张在**触控板上,包围盒天生就大(实测 abs≈50–66 = 手指之间的张开距离),
     // 于是"点"和"滑"分不开。正确的量是:**每根手指离开它落点时走了多远**(按 fingerId 跟踪)。
-    private var firstNorm: [Int32: MTPoint] = [:]
-    private var firstAbs: [Int32: MTPoint] = [:]
-    private var maxNormMove: Float = 0
     /// T91 表二:**3 与 4 指都要过"位移"这一关**。阈值来自实测(2026-09-17):
     ///   真轻点   norm≈0.002–0.007
     ///   三指拖移 norm≈0.13–0.21    四指滑动 norm≈0.13–0.55
@@ -655,13 +652,138 @@ final class ThreeFingerTap {
     /// **漏查了一个键**:`TrackpadThreeFingerDrag = 1`(**三指拖移开着**,用户天天在用:拖窗、选字)。
     /// 于是"拖窗"的那种快速三指(150–300ms、位移 0.13+)被我们判成了轻点 ⇒ 用户实报「三指滑动改坏了」。
     /// 教训:查"系统占用了什么手势"时,要把**拖移(Drag)**和**轻扫(Swipe)**两类键都过一遍。
-    private static let maxMove: Float = 0.08
-    private var maxAbsMove: Float = 0
+    static let maxMove: Float = 0.08
+    static let maxDuration: Double = 0.30
 
     private var started = false
-    private var maxTouches = 0
-    private var beganAt: CFAbsoluteTime = 0
-    private static let maxDuration: Double = 0.30
+    /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
+    /// 判卷逻辑越来越长,再跟"读 C 结构体 + 回调线程纪律"搅在一起,每次动都会伤到别的)
+    private var press = Press()
+    /// 上一次成功判卷的时刻。**0.35s 防抖**(LumaRing 同款):连击的第二发不重复动作 ——
+    /// 用户连着试几次的时候,面板被反复拆建,读起来就是"闪"
+    private var lastTapAt: CFAbsoluteTime = 0
+
+    /// **一次按压**从第一帧触点到全部抬起的完整账本。
+    ///
+    /// 2026-09-18 用户实报「三指唤起了未启动, 四指失灵」—— 日志铁证:
+    /// ```text
+    /// [指点按] 5 指 154ms 位移 norm=0.0035 → 不动作     ← 干净的四指点按,被数成 5
+    /// [指点按] 四指 113ms 位移 norm=0.0060 → 进未启动环   ← 三指点按,被数成 4
+    /// ```
+    /// **每个触点都被多数了 +1**:掌缘/拇指根搭在板上也被 `state == 4` 计进手指数。
+    /// T91 把计数从"抬手瞬间的手指数"改成"整轮 maxTouches"(治四指慢落误判)之后,
+    /// 这类**搭着的杂触点**就再也躲不掉计数了 —— 三指→4(开错环)、四指→5(不动作)。
+    /// 解法用的是这份数据里早就躺着、只是没读的信号:`size` / `majorAxis`(触点面积/长轴)
+    /// —— 指尖小、掌大,这是系统手势识别同款的第一道掌缘豁免。
+    ///
+    /// 阈值纪律照旧:**先量后定**。真值会记进 [指点按] 日志(size=/major= 字段),
+    /// 第一版先放很宽(只挡明显是掌的),宁可漏挡也别把真手指挡掉 —— 漏挡 = 病复发,可再调;
+    /// 误挡 = 真四指永远唤不醒,更难查。
+    struct Press {
+        /// 掌缘豁免线(第一版,待真值收紧):长轴 ≥22 或面积 ≥4.5 的触点不计入手指数
+        static let palmMajorAxis: Float = 22
+        static let palmSize: Float = 4.5
+
+        private(set) var maxTouches = 0
+        /// **去重手指 id 数**(2026-09-18 补,治「不灵敏」):极快的轻点(实测 ~50ms)里,
+        /// 四根手指可能**从未同帧落齐** —— 按"同帧最大手指数"就数成 2/3,判成不动作。
+        /// 每个触点有稳定 fingerId,整轮去重计数兜住"先后落、没同帧"的竞态;
+        /// 掌缘豁免的 id 不进这个集合(豁免的本意就是它不算手指)。
+        private(set) var distinctIDs: Set<Int32> = []
+        private(set) var maxNormMove: Float = 0
+        private(set) var maxAbsMove: Float = 0
+        private(set) var palmCount = 0           // 被豁免的触点数(记账,不计数)
+        private(set) var maxSeenSize: Float = 0  // 量尺:本轮真实触点的最大面积/长轴
+        private(set) var maxSeenMajor: Float = 0
+        private var beganAt: CFAbsoluteTime = 0
+        private var pressActive = false
+        private var firstNorm: [Int32: MTPoint] = [:]
+        private var firstAbs: [Int32: MTPoint] = [:]
+
+        /// 判卷结果。
+        enum Outcome {
+            case fireThree(held: Double, norm: Float, abs: Float)
+            case fireFour(held: Double, norm: Float, abs: Float)
+            case slide(norm: Float)                  // 位移过大 = 滑动,让给系统
+            case rejected(String)                    // 不动作(带原因,进日志)
+        }
+
+        /// 喂一帧。返回"当前正在触摸的手指数"(>0 = 这一轮还没结束)。
+        /// 线程纪律:只在 MultitouchSupport 的回调线程跑,只碰自己的标量;判卷在抬手帧同步出。
+        mutating func feed(nFingers: Int, data: UnsafeMutableRawPointer?) -> Int {
+            var touching = 0
+            var palmTouching = 0
+            if let data, nFingers > 0 {
+                for i in 0..<nFingers {
+                    let f = data.assumingMemoryBound(to: Finger.self)[i]
+                    // ★ 3 和 4 都算"手指在板上"(口径来自 LumaRing 的 TapRecognizer,MIT):
+                    //   极快轻点(实测 ~50ms)的大量帧里,手指处在落/抬的过渡态(state 3),
+                    //   只认 4 会把整帧的手指漏掉 —— 4 指被数成 2 指,"十次唤不醒七次"。
+                    guard f.state == 3 || f.state == 4 else { continue }
+                    let id = f.fingerId
+                    // 掌缘豁免:大触点不计入手指数(位移照记 —— 掌动了就是真滑,该让给系统)
+                    let isPalm = f.size >= Self.palmSize || f.majorAxis >= Self.palmMajorAxis
+                    if isPalm { palmTouching += 1 } else { touching += 1; distinctIDs.insert(id) }
+                    maxSeenSize = max(maxSeenSize, f.size)
+                    maxSeenMajor = max(maxSeenMajor, f.majorAxis)
+                    if let p0 = firstNorm[id] {
+                        let dx = Double(f.normalized.pos.x - p0.x), dy = Double(f.normalized.pos.y - p0.y)
+                        maxNormMove = max(maxNormMove, Float((dx * dx + dy * dy).squareRoot()))
+                    } else {
+                        firstNorm[id] = f.normalized.pos
+                    }
+                    if let p0 = firstAbs[id] {
+                        let dx = Double(f.absolute.pos.x - p0.x), dy = Double(f.absolute.pos.y - p0.y)
+                        maxAbsMove = max(maxAbsMove, Float((dx * dx + dy * dy).squareRoot()))
+                    } else {
+                        firstAbs[id] = f.absolute.pos
+                    }
+                }
+            }
+            let total = touching + palmTouching
+            if total > 0 {
+                if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
+                    pressActive = true
+                    beganAt = CFAbsoluteTimeGetCurrent()
+                    firstNorm.removeAll(); firstAbs.removeAll()
+                    maxNormMove = 0; maxAbsMove = 0
+                    palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
+                }
+                maxTouches = max(maxTouches, touching)
+                palmCount = max(palmCount, palmTouching)
+                return total
+            }
+            pressActive = false
+            return 0
+        }
+
+        /// 全部抬起 ⇒ 判卷。
+        /// T91:按 **maxTouches**(整轮最大值)而不是抬手瞬间的手指数 —— 四根手指不可能
+        /// 同一帧落齐(先落 3 根、第 4 根 40ms 后到是常态),只看当前帧会把"四指慢落"误判成三指。
+        func judge() -> Outcome {
+            let held = CFAbsoluteTimeGetCurrent() - beganAt
+            // 手指数 = max(同帧最大, 去重 id 数) —— 前者管"同帧落齐"的常态,后者兜"极快轻点
+            // 从未同帧"的竞态(实测 ~50ms 的四指点按曾被数成 2)
+            let n = max(maxTouches, distinctIDs.count)
+            // <30ms = 瞬时毛刺(LumaRing 同款下限):一次真实的四指轻点至少也要 30ms+
+            guard held >= 0.03 else { return .rejected("") }
+            guard (n == 3 || n == 4), held <= ThreeFingerTap.maxDuration else {
+                // 不匹配也要留账(要能分辨"0 是干净"还是"0 是没看见");带上豁免账与量尺
+                if n >= 2 || palmCount > 0 {
+                    return .rejected(String(format: "%d 指(豁免掌 %d)%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且 ≤%.0fms)",
+                                            n, palmCount, held * 1000, maxNormMove, maxAbsMove,
+                                            maxSeenSize, maxSeenMajor, ThreeFingerTap.maxDuration * 1000))
+                }
+                return .rejected("")   // 一指的普通点按:不进账
+            }
+            if maxNormMove > ThreeFingerTap.maxMove {
+                return .slide(norm: maxNormMove)
+            }
+            let heldMs = held * 1000
+            return n == 4 ? .fireFour(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
+                          : .fireThree(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
+        }
+    }
 
     func start() {
         guard !started else { return }   // 幂等
@@ -694,83 +816,50 @@ final class ThreeFingerTap {
              + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
-    /// C 回调:主线程之外也可能被调 ⇒ 只碰自己这几个标量,回调末尾回主线程才动作。
+    /// C 回调:主线程之外也可能被调 ⇒ 只喂数据、只在抬手帧判卷,回主线程才动作。
     private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
         let tap = ThreeFingerTap.shared
-        var touching = 0
-        if let data, nFingers > 0 {
-            for i in 0..<Int(nFingers) {
-                let f = data.assumingMemoryBound(to: Finger.self)[i]
-                guard f.state == 4 else { continue }     // 4 = 正在触摸
-                touching += 1
-                // T91 表二:每根手指"离开落点走了多远"—— 取这一整次按压里的最大值。
-                // 点:≈0;滑:几十(absolute)/ 零点几(normalized)。两套坐标都记,互相印证。
-                let id = f.fingerId
-                if let p0 = tap.firstNorm[id] {
-                    let dx = Double(f.normalized.pos.x - p0.x), dy = Double(f.normalized.pos.y - p0.y)
-                    tap.maxNormMove = max(tap.maxNormMove, Float((dx * dx + dy * dy).squareRoot()))
-                } else {
-                    tap.firstNorm[id] = f.normalized.pos
-                }
-                if let p0 = tap.firstAbs[id] {
-                    let dx = Double(f.absolute.pos.x - p0.x), dy = Double(f.absolute.pos.y - p0.y)
-                    tap.maxAbsMove = max(tap.maxAbsMove, Float((dx * dx + dy * dy).squareRoot()))
-                } else {
-                    tap.firstAbs[id] = f.absolute.pos
-                }
-            }
+        if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
+            return 0   // 按压还没结束
         }
-        if touching > 0 {
-            if tap.maxTouches == 0 {
-                tap.beganAt = CFAbsoluteTimeGetCurrent()
-                tap.firstNorm.removeAll(); tap.firstAbs.removeAll()
-                tap.maxNormMove = 0; tap.maxAbsMove = 0
-            }
-            tap.maxTouches = max(tap.maxTouches, touching)
-            return 0
-        }
-        // 全部抬起 ⇒ 给这一轮判卷
-        let maxTouches = tap.maxTouches
-        let held = CFAbsoluteTimeGetCurrent() - tap.beganAt
-        // 表二记账:归一化坐标的包围盒对角线 + 绝对坐标的(反推布局若错,两套会互相矛盾)
-        let nSpread = tap.maxNormMove
-        let aSpread = tap.maxAbsMove
-        tap.maxTouches = 0
-        // T91:3 与 4 指都归这里判卷,而且**按 maxTouches** —— 不按"抬手那一刻的手指数":
-        // 四根手指不可能在同一帧落齐(先落 3 根、第 4 根 40ms 后才到是常态)⇒ 只看当前手指数
-        // 会把"四指慢落"误判成三指点按。取整次按压的最大值,顺带把这条竞态一起解决。
-        // 其它手指数(1/2/5)一概不动作 —— 5 指顺手避开"捏合 = 启动台"。
-        guard (maxTouches == 3 || maxTouches == 4), held <= maxDuration else {
-            // ★ **不匹配也要留账**(纪律:要能分辨"0 是干净"还是"0 是没看见")。
-            // 病例:用户实报「四指还是没好」,而日志里**一条都没有** ⇒ 无法分辨
-            // "压根没触发"与"触发了但手指数被判成 5"。这一行把每次按压的真实手指数说出来。
-            // (只在 ≥2 指时出声:一指的普通点按不该进账)
-            if maxTouches >= 2 {
-                DispatchQueue.main.async {
-                    glog(String(format: "[指点按] %d 指 %.0fms 位移 norm=%.4f abs=%.1f → 不动作(只认 3/4 指,且 ≤%.0fms)",
-                                maxTouches, held * 1000, nSpread, aSpread, maxDuration * 1000))
-                }
-            }
-            return 0
-        }
-        // T91 表二:位移关 —— 滑动让给系统(三指拖移 / 四指调度中心·曝光·桌面)
-        if nSpread > ThreeFingerTap.maxMove {
+        // 全部抬起 ⇒ 判卷(账本换新,下一轮从零记)
+        let outcome = tap.press.judge()
+        tap.press = Press()
+        switch outcome {
+        case .rejected(""):
+            break                              // 一指的普通点按:不进账
+        case .rejected(let why):
+            DispatchQueue.main.async { glog("[指点按] \(why)") }
+        case .slide(let norm):
             DispatchQueue.main.async {
-                glog(String(format: "[指点按] %d 指 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
-                            maxTouches, nSpread, ThreeFingerTap.maxMove))
+                glog(String(format: "[指点按] 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
+                            norm, ThreeFingerTap.maxMove))
             }
-            return 0
-        }
-        DispatchQueue.main.async {
-            let tap = ThreeFingerTap.shared
-            if maxTouches == 4 {
-                glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held * 1000, nSpread, aSpread))
-                if tap.enabledFour { tap.onFireFour?() }
-            } else {
+        case .fireThree(let held, let norm, let absMove):
+            DispatchQueue.main.async {
+                let tap = ThreeFingerTap.shared
+                let now = CFAbsoluteTimeGetCurrent()
+                guard now - tap.lastTapAt > 0.35 else {
+                    glog(String(format: "[指点按] 三指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
+                    return
+                }
+                tap.lastTapAt = now
                 glog(String(format: "[指点按] 三指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held * 1000, nSpread, aSpread))
+                            held, norm, absMove))
                 if tap.enabled { tap.onFire?() }
+            }
+        case .fireFour(let held, let norm, let absMove):
+            DispatchQueue.main.async {
+                let tap = ThreeFingerTap.shared
+                let now = CFAbsoluteTimeGetCurrent()
+                guard now - tap.lastTapAt > 0.35 else {
+                    glog(String(format: "[指点按] 四指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
+                    return
+                }
+                tap.lastTapAt = now
+                glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
+                            held, norm, absMove))
+                if tap.enabledFour { tap.onFireFour?() }
             }
         }
         return 0

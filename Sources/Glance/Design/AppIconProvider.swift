@@ -10,15 +10,26 @@ enum IconProvider {
         let fill: CGFloat
     }
 
-    private static var cache: [pid_t: Art] = [:]
+    /// 图标账本:pid → 画面 + **取图时的 bundle id**。bundle 记进来是为了防两类错图:
+    ///   ① 瞬时查不到(如 App 刚启动,NSWorkspace 还没登记它)—— 曾兜底到自家图标
+    ///      (`NSImage(named: applicationIconName)` 就是 Glance 的!)且**永固化**,
+    ///      那个 App 到进程退出都顶着错的图标(2026-09-18 用户实报 Obsidian);
+    ///   ② pid 被系统回收复用 —— 旧 App 的缓存会顶到新 App 头上。
+    /// 命中时核对 bundle 仍相符,不符就当没缓存过重取;查不到时**不缓存**、
+    /// 兜底系统通用图标,下一帧重试真身。
+    private struct Entry { let art: Art; let bundleID: String? }
+    private static var cache: [pid_t: Entry] = [:]
 
     static func art(for pid: pid_t) -> Art {
-        if let a = cache[pid] { return a }
-        let img = NSRunningApplication(processIdentifier: pid)?.icon
-            ?? NSImage(named: NSImage.applicationIconName)
-            ?? NSImage()
+        if let e = cache[pid],
+           NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == e.bundleID {
+            return e.art
+        }
+        guard let app = NSRunningApplication(processIdentifier: pid), let img = app.icon else {
+            return Art(image: NSWorkspace.shared.icon(for: .application), fill: 1)
+        }
         let a = Art(image: img, fill: fillRatio(of: img))
-        cache[pid] = a
+        cache[pid] = Entry(art: a, bundleID: app.bundleIdentifier)
         return a
     }
 
