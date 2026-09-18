@@ -67,8 +67,13 @@ enum WindowEnumerator {
         for info in infos {
             guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t,
-                  pid != ownPID,                                   // 自家窗(面板)不进列表
                   let layer = info[kCGWindowLayer as String] as? Int, layer == 0, // 只收普通 app 窗
+                  // ★ 自家窗**不再按 pid 一刀切排除**(2026-09-18 用户实报「打开了设置面板,
+                  // 它要有图标,跟别的 app 一样」):设置/权限窗口是普通图层(0)的正常窗口,
+                  // 应与其他 App 的窗一样进环。切换器自家的面板仍被排除 —— 它们是
+                  // popUpMenu 图层(≠0),上面那道 layer 过滤天然挡住,不需要 pid 特判
+                  true,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),
                   bounds.width > 1, bounds.height > 1

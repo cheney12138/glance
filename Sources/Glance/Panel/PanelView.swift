@@ -50,7 +50,14 @@ struct PanelView: View {
 
     var body: some View {
         ZStack {
-            GlassBackground(cornerRadius: PanelMetrics.rPanel)
+            // 说话时:同一块玻璃,形状变成胶囊(芯片样式) —— 材质不变,只改形状。
+            // 圆角 = 玻璃高的一半(真胶囊)。⚠️ 别在这里减 shadowPadStrip:hintContentSize
+            // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
+            // 上一版减了,算出负圆角喂给 NSGlassEffectView,玻璃形状当场失真
+            // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
+            GlassBackground(cornerRadius: controller.hintText == nil
+                            ? PanelMetrics.rPanel
+                            : PanelMetrics.hintContentSize.height / 2)
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
@@ -78,9 +85,45 @@ struct PanelView: View {
                 // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
                 // 这层只管竖直,不然左右各叠一层就是双重边距
                 .padding(.vertical, PanelMetrics.rowPadY)
+                // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
+                // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
+                .opacity(controller.hintText == nil ? 1 : 0)
+                // 模型 C 跨段过渡:identity 换新触发 transition;方向随行进
+                // (Tab = 内容左滑、⇧Tab = 右滑、↓/↑ 跳段 = 淡切),动画事务由 setSegment 的
+                // withAnimation 提供 —— 与窗口(AppKit)那边的 0.22s easeInOut 同一根曲线
+                .id(controller.entrySelected)
+                .transition(segmentTransition)
+
+            // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
+            // 上一轮把尺寸和形状做了、**文字漏了** —— 于是"芯片出来了, 没文案"。
+            // v2(2026-09-18「太大太重」):12pt regular + 14/6 内边距,配 168×36 的玻璃
+            // (尺寸在 PanelMetrics.hintContentSize,别在这里另立一本)
+            if let hint = controller.hintText {
+                Text(hint)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
+        // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
+        // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
+        // 段头只负责交代两件事:这是什么、怎么回去。
+        .overlay(alignment: .bottom) {
+            if controller.entrySelected {
+                Text("未启动的 App · ↑ 返回 / Tab 继续")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(PanelColors.txt2)
+                    .opacity(0.9)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 4)
+                    .allowsHitTesting(false)
+            }
+        }
         // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
         .glassEdge(cornerRadius: PanelMetrics.rPanel)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
@@ -95,13 +138,44 @@ struct PanelView: View {
         }
         // 入场与退场**都不做动效**(v1.12 砍入场,2026-09-14 砍退场):
         // ⌘Tab 是效率动作,面板要"已经在",关闭要"已经没了"——两头都不该让用户等动画。
-        // 窗口由控制器直接 orderOut,这里的 opacity 只是兜住"显示中"这个状态
-        .opacity(controller.isVisible ? 1 : 0)
-        .elevation(.strip)
+        // ★★ T91 病例(2026-09-17,用户实报「重启之后**第一次**唤起面板, 会闪一下, 有一道白光」):
+        //
+        // 这里原来挂着 `.opacity(controller.isVisible ? 1 : 0)` —— 窗口的出现/消失**本来**由
+        // 控制器 orderFrontRegardless / orderOut 负责,这一层是多余的"双保险"。
+        // 它的代价正好落在"第一次"上:`isVisible = true` 写下去之后,SwiftUI 的那一帧**还没重算**
+        // ⇒ 窗口先上屏的是"玻璃 + 阴影",而**内容整层透明度还是 0** ⇒
+        // 屏幕上一块空的白色玻璃 = 用户说的"一道白光";下一帧图标才补上。
+        // 之后几次唤起之所以看不出来,是因为视图状态已经算过一帧了 —— 这就是"只在重启后第一次"。
+        //
+        // 结论:**视图不该再藏一层**。窗口在屏幕上 = 内容就可见。
+        // (将来若真要做退场淡出,请用窗口的 alphaValue,别回到这里。)
+        // 投影:长条用 .strip;芯片(说话局)换 .puck —— .strip 的深色 α .62 是大面板的配重,
+        // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
+        // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
+        .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
+        // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
+        // 居中玻璃)—— 根视图尺寸依赖提议、提议依赖尺寸 ⇒ AppKit Update Constraints 布局递归
+        // FAULT(2026-09-18 实机崩溃,本仓库此病第三次现形)。段变形的居中问题已在窗口侧解决。
     }
 
     // MARK: - 图标层
+
+    /// 跨段过渡的方向(模型 C,见 `PanelController.SegmentTravel`)。
+    /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
+    /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
+    private var segmentTransition: AnyTransition {
+        switch controller.segmentTravel {
+        case .forward:
+            return .asymmetric(insertion: .opacity.combined(with: .offset(x: 14)),
+                               removal: .opacity.combined(with: .offset(x: -14)))
+        case .backward:
+            return .asymmetric(insertion: .opacity.combined(with: .offset(x: -14)),
+                               removal: .opacity.combined(with: .offset(x: 14)))
+        case .direct:
+            return .opacity
+        }
+    }
 
     private var iconStrip: some View {
         // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),App 区两端再负 padding 收回来 ——
@@ -112,6 +186,12 @@ struct PanelView: View {
         // (App→线 = 线→点 = 点→玻璃边 = iconGap)。
         HStack(spacing: 0) {
             HStack(spacing: 0) {
+                if controller.entrySelected {
+                    // T91 ↓ 换环:这格里装的是"未启动的 App"——**完全覆盖**,不是多一行
+                    ForEach(Array(controller.launchables.enumerated()), id: \.offset) { i, _ in
+                        launchRingCell(i)
+                    }
+                } else {
                 ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                     IconCell(
                         group: group,
@@ -137,25 +217,8 @@ struct PanelView: View {
                     }
                 }
             }
-            .padding(.horizontal, -PanelMetrics.iconGap / 2) // App 区首格左、末格右各收回半个间隙
-            // 启动区(v11 分割线 + 入口槽 → **T89 合并为一整格尾格**):
-            // 线到两边等距、点阵到玻璃边同距(尾部三点同距 = iconGap);
-            // 整格 = 悬停/点击目标,原来分割线上那条"指针划过什么都不选中"的死区一并消失
-            if !controller.launchables.isEmpty {
-                entryTail
-                    .frame(width: PanelMetrics.entryTailWidth, height: PanelMetrics.icon)
-                    .contentShape(Rectangle())
-                    .onHover { inside in
-                        if inside {
-                            controller.hoverEntry()
-                        } else {
-                            // 离开启动区 = 挂"悬停回退单"(迟滞 0.12s):指针没回主环就回退
-                            controller.scheduleEntryRevert()
-                        }
-                    }
-                    // 点启动区 = 选中(托盘弹启动行);已选中再点 = no-op(等用户进到某格)
-                    .onTapGesture { if !controller.entrySelected { controller.hoverEntry() } }
             }
+            .padding(.horizontal, -PanelMetrics.iconGap / 2) // App 区首格左、末格右各收回半个间隙
         }
         // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
         // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
@@ -164,9 +227,39 @@ struct PanelView: View {
         // (尾部三点同距),没有时 = rowPadX 与左缘对称
         .background(alignment: .leading) { puck.allowsHitTesting(false) }
         .padding(.leading, PanelMetrics.rowPadX)
-        .padding(.trailing, controller.launchables.isEmpty ? PanelMetrics.rowPadX : PanelMetrics.iconGap)
+        .padding(.trailing, PanelMetrics.rowPadX)   // T91:尾格撤了 ⇒ 右缘与左缘对称
+        // 主环 hover 的兜底轮询不挂在这里:TimelineView(.animation) 在静态窗口上**不跳帧**
+        // (macOS 不给静止窗口排帧,"每帧"实际只是"有视图更新的那几拍"),兜不住
+        // "界面静止、指针开始动"的那一刻 —— 帧拍已由控制器里的 60Hz 定时器统一驱动
+        // (PanelController.startHoverPolling,主环 + 托盘一份账)。
     }
 
+    /// 换环后(strip 里装的是"未启动的 App")的格子。
+    ///
+    /// 与托盘里那一行**同一套**(幽灵壳 + 图标收到 76% + 上浮这层反馈),不另立语言 ——
+    /// 用户口径:「完全覆盖掉」:同一块地方换了内容,不是另一种东西。
+    /// 托底不在这儿:仍是主环那一枚滑动的,只是换环后跟着 launchIndex 走(见 puckOffsetX)。
+    private func launchRingCell(_ i: Int) -> some View {
+        let app = controller.launchables[i]
+        let sel = i == controller.launchIndex
+        return ZStack {
+            GhostTile().frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
+            Image(nsImage: app.icon)
+                .resizable()
+                .renderingMode(.original)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: PanelMetrics.icon * 0.76, height: PanelMetrics.icon * 0.76)
+        }
+        .scaleEffect(sel ? PanelMetrics.iconScale : 1)
+        .offset(y: sel ? controller.contentEntryRise - PanelMetrics.iconLift : 0)
+        .elevation(.icon, active: sel)
+        .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+        .contentShape(Rectangle())
+        .onHover { inside in if inside { controller.hoverApp(i) } }
+        .onTapGesture { controller.launchAt(i) }
+        .animation(controller.selectionAnimation(PanelMotion.select), value: controller.launchIndex)
+    }
+    
     /// 滑动托底:宽 = 图标宽,上下各出 8px;换选中时整枚胶囊弹过去(位移+宽度同曲线)
     private var puck: some View {
         RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
@@ -190,6 +283,11 @@ struct PanelView: View {
                     .strokeBorder(PanelColors.puckBorder, lineWidth: 1)
             )
             .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
+            // 换环时只有"选中了某一格"才显形(launchIndex == nil = 还没选任何一格)
+            // T91 v2:**换环后托底不上场**(用户实拍「选中态很怪, 嵌套太多圆角边框了」——
+            // 托底的圆角+发丝边 套在 幽灵壳的圆角 外面,再叠一层投影 = 三层圆角框套在一起)。
+            // 未启动的 App **只要"上浮"这一层反馈** —— 这正是 2026-09-16 给托盘里那一行定的规矩,
+            // 换环后它们搬进了主环,规矩不变:同一个东西,同一套语言。
             .opacity(controller.entrySelected ? 0 : 1)
             .offset(x: puckOffsetX,
                     // 纵向 = 入场升起(与选中那一格同源同值,所以两者永远同步)
@@ -198,7 +296,10 @@ struct PanelView: View {
             // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
             // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
             .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
-            .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.entrySelected)
+            // ⚠️ 这里**故意没有** `.animation(…, value: entrySelected)`(T91 病例,
+            // 用户实报「按下切换环的时候,在未启动的环上会有一个向右淡出的滑块效果」):
+            // 托底的消失若走动画,会和"滑到 appIndex"叠在一起演 —— 读起来像"选中滑走了",
+            // 而换环根本不是选中移动。去掉这条 ⇒ 换环时它**当帧就没了**。
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)
@@ -208,50 +309,9 @@ struct PanelView: View {
     /// 托底永远只属于主环的 App。历史账:"缩宽"与"滑过去淡出"两案也都试过、都被否
     /// —— 那是在"槽里没有可见记号"的前提下的困境;有了点阵,落点由记号承担。
     private var puckOffsetX: CGFloat {
-        CGFloat(max(controller.appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
-    }
-
-    private var entryTail: some View {
-        HStack(spacing: 0) {
-            // 前距 = 半格:App 格子自己已带尾半格,两段相加 = 整格 iconGap,与后距同宽
-            Color.clear.frame(width: PanelMetrics.iconGap / 2)
-            entrySeparator
-            Color.clear.frame(width: PanelMetrics.iconGap)
-            entrySlot
-        }
-    }
-
-    /// 分割线:macOS 原生语,浅黑/深白,一根发丝线表达"区与区之间"
-    private var entrySeparator: some View {
-        RoundedRectangle(cornerRadius: PanelMetrics.hairline / 2, style: .continuous)
-            .fill(PanelColors.entrySeparator)
-            .frame(width: PanelMetrics.hairline, height: PanelMetrics.icon * 0.52)
-    }
-
-    private var entrySlot: some View {
-        let sel = controller.entrySelected
-        let d = PanelMetrics.entryDot
-        // v17(用户裁定):**竖向 3 行 × 2 列** —— 竖着数三个、横着数两个,
-        // 紧凑居中(行距 = 列距),在 icon 高度内居中
-        return VStack(spacing: d * 1.5) {
-            ForEach(0..<3, id: \.self) { _ in
-                HStack(spacing: d * 1.5) {
-                    ForEach(0..<2, id: \.self) { _ in
-                        Circle()
-                            .fill(AnyShapeStyle(
-                                LinearGradient(colors: [PanelColors.entryDotTop, PanelColors.entryDotBottom],
-                                               startPoint: .top, endPoint: .bottom)))
-                            .frame(width: d, height: d)
-                    }
-                }
-            }
-        }
-        // **宽度也锁死**(T89):不锁的话 HStack 把剩余空间全塞给它(弹性视图吃 proposal),
-        // 可见点阵在超宽 frame 里居中,两侧各多出 ~2.7pt 的"隐形松动",三点同距被破坏
-        .frame(width: PanelMetrics.entryDot * 3.5, height: PanelMetrics.icon)
-        .scaleEffect(sel ? 1.18 : 1)
-        .animation(MotionPolicy.animation(PanelMotion.entrance), value: sel)
-        .allowsHitTesting(false)
+        // T91 v2:托底只属于已启动的主环(换环后它不上场)⇒ 永远跟 appIndex
+        let i = controller.appIndex
+        return CGFloat(max(i, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
     }
 
     /// 顶缘一道**极窄的**受光边(深色专用)。
@@ -263,13 +323,28 @@ struct PanelView: View {
     /// 与已删的 `glassTopLight`(白 .18 铺到 30% 高度)的区别在**高度**:
     /// 那道是一层纱(浅色上就是"透明度不行"的元凶),这道只有 1.5% 高度、只够描一条边。
     /// 浅色返回透明色(不改浅色)。
+    /// 顶缘那道静态受光带 —— **只在深色**要(浅色不要,见上面的注释)。
+    ///
+    /// ★★ 判据**不许**读环境/DynamicColor(T91 病例,2026-09-17):
+    /// 用户实报「**一排 app 上很明显的一条闪光**, 第二次唤起就没有了」。
+    /// 根因:动态色(`PanelColors.glassTopEdge`)要靠"外观"解析,而进程起来后的**第一帧**里
+    /// 窗口/环境的外观还没落定 ⇒ 它按**深色**解析 ⇒ 一排图标上方闪出一道亮线;
+    /// 下一帧浅色生效,线就没了 —— 这正是"只在以后第一次"的来源。
+    /// 现在改成读**设置里那个确定值**(UserDefaults 直读,第一时间就是对的),
+    /// 「跟随系统」时才回落到 NSApp 的实际外观。
+    @ViewBuilder
     private var glassTopEdge: some View {
-        LinearGradient(
-            colors: [PanelColors.glassTopEdge, .clear],
-            startPoint: .top,
-            endPoint: UnitPoint(x: 0.5, y: 0.015)
-        )
-        .allowsHitTesting(false)
+        let pref = UserDefaults.standard.string(forKey: "panel.appearance") ?? "system"
+        let dark = pref == "dark"
+            || (pref != "light" && NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        if dark {
+            LinearGradient(
+                colors: [PanelColors.glassTopEdge, .clear],
+                startPoint: .top,
+                endPoint: UnitPoint(x: 0.5, y: 0.015)
+            )
+            .allowsHitTesting(false)
+        }
     }
 
     /// 确认涟漪的圆心 = 选中图标的中心(含 14px 上浮,demo 取的是变换后的 rect 中心)。

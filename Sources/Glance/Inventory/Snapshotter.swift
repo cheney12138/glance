@@ -84,11 +84,12 @@ final class Snapshotter: ObservableObject {
             guard let infos = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
             ) as? [[String: Any]] else { return }
-            let ownPID = ProcessInfo.processInfo.processIdentifier
             var alive: Set<CGWindowID> = []
             for info in infos {
+                // ★ 不再按 pid 排除自家窗(2026-09-18):设置窗口进环后,它的缓存条目曾被这里
+                // 当"死窗"剪掉 ⇒ 每次唤起都闪「截图中…」。悬浮面板是 popUpMenu 图层(≠0),
+                // 下面那道 layer 过滤天然挡住,不需要 pid 特判
                 guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
-                      let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
                       let layer = info[kCGWindowLayer as String] as? Int, layer == 0
                 else { continue }
                 alive.insert(wid)
@@ -100,6 +101,32 @@ final class Snapshotter: ObservableObject {
 
     /// 同一扇窗的失败只报第一次(访达等 SCK 截不了的窗会屡败屡试;现拍风暴期曾刷屏)
     private let failedOnce = FailureLog()
+
+    /// 拍下本进程自己的普通图层窗(设置/权限窗口)。**窗刚建好、渲染落定后调用** ——
+    /// 这些窗是打开时才建的,冷启动预热拍不到,不补这一拍的话,它们入环后的第一眼
+    /// 就是「截图中…」(2026-09-18 用户实报)。悬浮面板是 popUpMenu 图层,天然不在名单里
+    func precaptureOwnWindows() {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        Task.detached(priority: .userInitiated) {
+            guard let infos = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]] else { return }
+            let records: [WindowRecord] = infos.compactMap { info in
+                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                      let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == ownPID,
+                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                      let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                      bounds.width > 1, bounds.height > 1
+                else { return nil }
+                let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
+                return WindowRecord(wid: wid, pid: pid, ownerName: "Glance",
+                                    title: title, bounds: bounds)
+            }
+            guard !records.isEmpty else { return }
+            await MainActor.run { Snapshotter.shared.precapture(records, force: true) }
+        }
+    }
 
     /// 对一批窗做预截。**不阻塞调用方**(内部自管任务):调用方是主线程上的选中变化热点。
     ///
