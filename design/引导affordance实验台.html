@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>引导 affordance 实验台 v2 · 可交互模拟</title>
+<style>
+  :root{
+    --icon: 56px; --gap: 16px;
+    --ink:#1c1f24; --ink2:#6b7280; --line:#dfe3e8;
+    --bad:#c2410c; --good:#15803d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 60px;background:#f6f7f9;color:var(--ink);
+       font:13px/1.55 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  .hint{color:var(--ink2);font-size:12px;margin:0 0 14px}
+  .hint kbd{font:600 11px/1 -apple-system;background:#fff;border:1px solid #c9ced5;border-bottom-width:2px;
+        border-radius:4px;padding:1px 5px;margin:0 1px}
+  .toggle{float:right;font:12px/1 -apple-system,"PingFang SC";padding:6px 12px;border-radius:8px;
+          border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  .toggle:hover{background:#f0f2f5}
+
+  fieldset{border:1px solid var(--line);border-radius:10px;padding:14px 16px 12px;margin:0 0 18px;background:#fff}
+  legend{font-size:12px;color:var(--ink2);padding:0 6px}
+  legend b{color:var(--ink);font-size:13px}
+  .desc{font-size:12px;color:var(--ink2);margin:0 0 10px;max-width:860px}
+  .desc b{color:var(--ink)}
+
+  .desk{border-radius:12px;padding:30px 20px 34px;position:relative;overflow:hidden;
+        background:linear-gradient(135deg,#dfe7ee 0%,#cfd9e4 45%,#e8e2d8 100%)}
+  body.dark .desk{background:linear-gradient(135deg,#2b3038 0%,#3a4150 55%,#46403a 100%)}
+
+  /* 面板 */
+  .strip{border-radius:18px;position:relative;margin:0 auto;width:fit-content;
+         padding:10px 22px 16px;transition:transform .16s ease,opacity .16s ease}
+  .strip.light,body.dark .strip{background:linear-gradient(180deg,rgba(58,64,72,.97),rgba(34,38,44,.97));
+         box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .strip:not(.dark-on){background:linear-gradient(180deg,rgba(251,252,253,.96),rgba(238,241,245,.96));
+         box-shadow:0 1px 0 #fff inset,0 8px 24px rgba(16,24,40,.12)}
+  body.dark .strip:not(.dark-on){background:linear-gradient(180deg,rgba(58,64,72,.97),rgba(34,38,44,.97));
+         box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  /* 唤起 / 换环动画 */
+  .strip.enter{animation:enter .18s ease-out}
+  @keyframes enter{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+  .strip.swap .icons{opacity:0;transform:translateY(3px)}
+  .icons{display:flex;align-items:flex-end;gap:var(--gap);transition:opacity .12s ease,transform .12s ease}
+  body.dark .strip .slot .dot,body.dark .strip .slot .dash{color:#fff}
+
+  .slot{position:relative;width:calc(var(--icon) + 8px);display:flex;justify-content:center;flex:none}
+  .tile{width:var(--icon);height:var(--icon);border-radius:15px;display:flex;align-items:center;justify-content:center;
+        font-size:24px;font-weight:700;color:#fff;box-shadow:0 3px 8px rgba(16,24,40,.22);
+        transition:transform .15s ease}
+  .slot .dot{position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);
+        width:4px;height:4px;border-radius:50%;background:#3a4048;opacity:.5}
+  .slot .dash{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);
+        width:12px;height:4px;border-radius:2px;background:#3a4048;opacity:.5}
+  .slot.sel::before{content:"";position:absolute;left:-3px;right:-3px;top:-8px;bottom:-8px;border-radius:17px;
+        background:rgba(255,255,255,.62);box-shadow:0 4px 6px rgba(16,24,40,.14)}
+  body.dark .slot.sel::before{background:rgba(150,156,165,.92)}
+  .slot.sel .tile{transform:translateY(-6px) scale(1.10)}
+  /* 启动环:幽灵壳座位 */
+  .slot.ghost .tile{background:none;box-shadow:inset 0 0 0 1.5px rgba(120,128,136,.45);
+        font-size:19px;opacity:.9}
+  .slot.ghost{opacity:.95}
+
+  /* 控制条 */
+  .ctl{display:flex;align-items:center;gap:8px;margin:10px 4px 0;flex-wrap:wrap}
+  .ctl button{font:12px/1 -apple-system,"PingFang SC";padding:5px 10px;border-radius:7px;
+        border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  .ctl button:hover{background:#f0f2f5}
+  .ctl .state{font-size:12px;color:var(--ink2)}
+  .ctl .state b{color:var(--ink)}
+  .ctl .ok{color:var(--good)}
+
+  ul.ruling{margin:10px 0 0;padding:0;list-style:none;font-size:12px;color:var(--ink2)}
+  ul.ruling li{margin:3px 0;padding-left:14px;position:relative}
+  ul.ruling li::before{content:"·";position:absolute;left:2px}
+  ul.ruling b{color:var(--ink)}
+  .note-ok{color:var(--good)} .note-bad{color:var(--bad)}
+
+  /* ① 键帽 */
+  .keycap-zone{display:flex;align-items:center;gap:12px;padding:2px 0 2px 12px;margin-left:8px;
+        border-left:1px solid rgba(120,128,136,.35);align-self:stretch;cursor:pointer}
+  .keycap{min-width:32px;height:32px;padding:0 9px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+        font:600 15px/1 -apple-system,"SF Pro Text";
+        background:linear-gradient(180deg,#ffffff,#e8ebef);border:1px solid #c9ced5;
+        box-shadow:0 1.5px 0 #c9ced5,0 2px 4px rgba(16,24,40,.12);color:#3a4048;
+        transition:transform .12s,box-shadow .12s}
+  .keycap:hover{transform:translateY(1px);box-shadow:0 1px 0 #c9ced5,0 1px 2px rgba(16,24,40,.12)}
+  body.dark .keycap{background:linear-gradient(180deg,#4a515b,#3a4048);border-color:#2a2e34;
+        box-shadow:0 1.5px 0 #24282e,0 2px 4px rgba(0,0,0,.3);color:#dfe3e8}
+  .keycap-zone .lbl{font-size:10px;color:var(--ink2);max-width:56px;line-height:1.25}
+  body.dark .keycap-zone .lbl{color:#aab1ba}
+
+  /* ② 把手 */
+  .grabber{position:absolute;left:50%;bottom:3px;transform:translateX(-50%);
+        display:flex;align-items:center;cursor:pointer;padding:4px 6px;border-radius:8px}
+  .grabber .bar{width:26px;height:4px;border-radius:2px;background:#565b60;opacity:.55;transition:all .18s ease}
+  .grabber .tag{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;
+        font:500 11px/1 -apple-system,"PingFang SC";color:#565b60;transition:all .18s ease}
+  .grabber:hover .tag{max-width:130px;opacity:.85;margin-left:6px}
+  .grabber:hover .bar{opacity:.85}
+  body.dark .grabber .bar,body.dark .grabber .tag{color:#c9ced5;background:none}
+  body.dark .grabber .bar{background:#c9ced5}
+  .grabber.guide .tag{max-width:130px;opacity:.8;margin-left:6px}
+
+  /* ③ 气泡 */
+  .bubble{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:10px;
+        background:#25282d;color:#f2f4f7;border-radius:10px;padding:7px 12px;
+        font:500 12px/1.4 -apple-system,"PingFang SC";white-space:nowrap;
+        box-shadow:0 6px 18px rgba(16,24,40,.28);opacity:0;pointer-events:none;
+        transition:opacity .22s ease,transform .22s ease}
+  .bubble::before{content:"";position:absolute;top:-4px;left:50%;transform:translateX(-50%) rotate(45deg);
+        width:8px;height:8px;background:#25282d;border-radius:2px}
+  .bubble.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .bubble kbd{font:600 11px/1 -apple-system;background:#3a4048;border:1px solid #4a515b;
+        border-radius:4px;padding:1px 5px;margin:0 2px}
+
+  /* ④ 揭幕 */
+  .peeking .icons{transform:translateY(-7px)}
+  .reveal{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);
+        font:600 11px/1 -apple-system;color:var(--ink2);opacity:0;transition:opacity .25s ease;white-space:nowrap}
+  body.dark .reveal{color:#c9ced5}
+  .peeking .reveal{opacity:.9}
+
+  @media (prefers-reduced-motion: reduce){
+    *{transition:none !important;animation:none !important}
+  }
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.body.classList.toggle('dark')">切到深色面板</button>
+<h1>引导 affordance 实验台 v2 · 可交互模拟</h1>
+<p class="hint">每个方案是<b>活的面板</b>:直接按 <kbd>↓</kbd> <kbd>↑</kbd>(或点方案里的 affordance)换环;<b>重新唤起</b>模拟下一局 —— 教学期只有 3 局,播完看常态。<b>跳过教学期</b>直接看稳态。图标为占位色块,实机为真图标。</p>
+
+<!-- ① -->
+<fieldset>
+  <legend><b>① 右缘键帽 —— 键即语义</b></legend>
+  <p class="desc">环右端独立分区:分割线 + 一枚键帽「↓ 未启动的 App」。按它或按 <b>↓</b> 换环,键帽翻成「↑」。占宽度不占高度。</p>
+  <div class="sim" id="sim1">
+    <div class="desk"><div class="strip"></div></div>
+    <div class="ctl">
+      <button class="resummon">重新唤起(下一局)</button>
+      <button class="skip">跳过教学期</button>
+      <span class="state"></span>
+    </div>
+  </div>
+  <ul class="ruling">
+    <li class="note-ok">语义最强:键帽 = 按这个键;独立分区,与点阵零冲突,误触零风险。</li>
+    <li>代价:长条永远宽一格;图标很少时键帽存在感偏重。</li>
+  </ul>
+</fieldset>
+
+<!-- ② -->
+<fieldset>
+  <legend><b>② 下沉把手 —— 贴玻璃下缘,教学期带字,之后 hover 展开</b></legend>
+  <p class="desc">把手沉到贴下缘(离图标排空气最大)。教学期(前 3 局)文字常显;之后只剩把手,<b>鼠标悬上去</b>展开「↓ 未启动的 App」。</p>
+  <div class="sim" id="sim2">
+    <div class="desk"><div class="strip" style="padding-bottom:20px"></div></div>
+    <div class="ctl">
+      <button class="resummon">重新唤起(下一局)</button>
+      <button class="skip">跳过教学期</button>
+      <span class="state"></span>
+    </div>
+  </div>
+  <ul class="ruling">
+    <li class="note-ok">距离拉开、贴下缘;教学期靠文字,稳态靠 hover。</li>
+    <li>风险:与点阵的形状亲缘还在(小、圆角、低透明度);不看 hover 的用户可能又忘了语义。</li>
+  </ul>
+</fieldset>
+
+<!-- ③ -->
+<fieldset>
+  <legend><b>③ 一次性气泡 —— 面板零改动,唤起后说一句(画在呼吸区,玻璃不增高)</b></legend>
+  <p class="desc">教学期(前 3 局)每次唤起后,长条正下方浮气泡 2 秒淡出;之后永久无痕。注意看气泡消失后面板有多干净。</p>
+  <div class="sim" id="sim3">
+    <div class="desk" style="padding-bottom:56px"><div class="strip"></div></div>
+    <div class="ctl">
+      <button class="resummon">重新唤起(下一局)</button>
+      <button class="skip">跳过教学期</button>
+      <span class="state"></span>
+    </div>
+  </div>
+  <ul class="ruling">
+    <li class="note-ok">语义/误触双满分:明说,且没有任何可误触之物;实现最便宜。</li>
+    <li>风险:过后无痕 —— 错过教学期的用户之后零提示(可与 ① 组合)。</li>
+  </ul>
+</fieldset>
+
+<!-- ④ -->
+<fieldset>
+  <legend><b>④ 图标揭幕 —— 用动效教学(最激进)</b></legend>
+  <p class="desc">无静态控件。教学期(前 3 局)每次唤起:图标整排<b>上抬一闪</b>,露出底缘「↓ 未启动的 App」,落回。之后永久安静。</p>
+  <div class="sim" id="sim4">
+    <div class="desk"><div class="strip" style="padding-bottom:18px"></div></div>
+    <div class="ctl">
+      <button class="resummon">重新唤起(下一局)</button>
+      <button class="skip">跳过教学期</button>
+      <span class="state"></span>
+    </div>
+  </div>
+  <ul class="ruling">
+    <li class="note-ok">引导感最强:运动是注意力的第一驱动。</li>
+    <li>风险:与「砍入场动效」的裁定有张力;实现最贵;过后同样无痕。</li>
+  </ul>
+</fieldset>
+
+<script>
+const MAIN_APPS = [
+  ["G","linear-gradient(145deg,#3b4a63,#1e2a3f)",1],
+  ["象","linear-gradient(145deg,#8a9099,#5c636c)",1],
+  ["C","linear-gradient(145deg,#e8590c,#c23a08)",1],
+  ["O","linear-gradient(145deg,#7c5cd6,#53389e)",1],
+  ["S","linear-gradient(145deg,#e8590c,#b02a05)",5],
+  ["网","linear-gradient(145deg,#e03131,#b02525)",1],
+  ["D","linear-gradient(145deg,#20c997,#0ca678)",1],
+];
+const LAUNCH_APPS = [
+  ["微","linear-gradient(145deg,#2ea44f,#1a7f37)"],
+  ["M","linear-gradient(145deg,#4263eb,#3b5bdb)"],
+  ["Z","linear-gradient(145deg,#2b8aef,#1971c2)"],
+];
+const appHTML = (apps, mode) => apps.map((a, i) => {
+  const sel = mode === "main" && i === 2 ? " sel" : "";
+  const mark = mode === "main"
+    ? (a[2] >= 5 ? '<div class="dash"></div>' : '<div class="dot"></div>')
+    : "";
+  const ghost = mode === "launch" ? " ghost" : "";
+  return `<div class="slot${sel}${ghost}"><div class="tile" style="background:${mode==="launch" ? "none" : a[1]}${mode==="launch"?`;color:${a[1].match(/#[0-9a-f]{6}/)[0]}`:""}">${a[0]}</div>${mark}</div>`;
+}).join("");
+
+function makeSim(id, buildAffordance, onSummon) {
+  const root = document.getElementById(id);
+  const strip = root.querySelector(".strip");
+  const state = { mode: "main", guideLeft: 3, summoned: false };
+  root._state = state;
+
+  function render() {
+    const apps = state.mode === "main" ? MAIN_APPS : LAUNCH_APPS;
+    strip.querySelector(".icons").innerHTML = appHTML(apps, state.mode);
+    buildAffordance(strip, state);
+    const st = root.querySelector(".state");
+    if (state.guideLeft >= 3) {
+      st.innerHTML = `待演示 · 点「重新唤起」开始(教学期共 3 局)`;
+    } else if (state.guideLeft > 0) {
+      st.innerHTML = `教学期:已播 <b>${3 - state.guideLeft}/3</b> 局`;
+    } else {
+      st.innerHTML = `<b>稳态</b>(教学期已过)${(root.id === "sim1" || root.id === "sim2") ? " · affordance 常驻" : ' · 面板上<b>没有任何提示物</b>'}`;
+    }
+  }
+  function swap() {
+    strip.classList.add("swap");
+    setTimeout(() => {
+      state.mode = state.mode === "main" ? "launch" : "main";
+      render();
+      strip.classList.remove("swap");
+    }, 130);
+  }
+  function summon() {
+    state.mode = "main";   // 新一局回主环(与实机一致)
+    strip.classList.remove("enter"); void strip.offsetWidth;
+    strip.classList.add("enter");
+    const showGuide = state.guideLeft > 0;
+    if (showGuide) state.guideLeft--;
+    onSummon({ strip, state, swap, showGuide });
+    render();
+  }
+  // 初始骨架
+  strip.innerHTML = '<div class="icons"></div>';
+  buildAffordance(strip, state);
+  root.querySelector(".resummon").onclick = summon;
+  root.querySelector(".skip").onclick = () => { state.guideLeft = 0; render(); };
+  let apiRef = null;
+  root.addEventListener("mouseenter", () => { activeSim = apiRef; });
+  const api = { swap, summon, strip, root, _state: state };
+  apiRef = api;
+  render();
+  return api;
+}
+
+let activeSim = null;
+
+/* ① 键帽 */
+const api1 = makeSim("sim1", (strip, state) => {
+  let zone = strip.querySelector(".keycap-zone");
+  if (!zone) {
+    zone = document.createElement("div");
+    zone.className = "keycap-zone";
+    zone.innerHTML = `<div class="keycap"><span class="k">↓</span></div><div class="lbl"></div>`;
+    zone.onclick = () => api1 && api1.swap();
+    strip.appendChild(zone);
+  }
+  const inLaunch = state.mode === "launch";
+  zone.querySelector(".k").textContent = inLaunch ? "↑" : "↓";
+  zone.querySelector(".lbl").innerHTML = inLaunch ? "已启动<br>的 App" : "未启动<br>的 App";
+}, () => { /* 键帽无唤起演出,面板自己 enter */ });
+
+/* ② 把手 */
+const api2 = makeSim("sim2", (strip, state) => {
+  let g = strip.querySelector(".grabber");
+  if (!g) {
+    g = document.createElement("div");
+    g.className = "grabber";
+    g.innerHTML = `<span class="tag"></span><span class="bar"></span>`;
+    g.onclick = () => api2 && api2.swap();
+    strip.appendChild(g);
+  }
+  const inLaunch = state.mode === "launch";
+  g.querySelector(".tag").textContent = inLaunch ? "↑ 已启动的 App" : "↓ 未启动的 App";
+  g.classList.toggle("guide", state.guideLeft > 0);
+}, () => {});
+
+/* ③ 气泡 */
+const api3 = makeSim("sim3", (strip, state) => {
+  let b = strip.querySelector(".bubble");
+  if (!b) {
+    b = document.createElement("div");
+    b.className = "bubble";
+    b.innerHTML = `按 <kbd>↓</kbd> 或四指轻点 · 查看未启动的 App`;
+    strip.appendChild(b);
+  }
+}, ({ strip, showGuide }) => {
+  const b = strip.querySelector(".bubble");
+  if (!showGuide) { b.classList.remove("show"); return; }
+  setTimeout(() => b.classList.add("show"), 350);
+  setTimeout(() => b.classList.remove("show"), 2600);
+});
+
+/* ④ 揭幕 */
+const api4 = makeSim("sim4", (strip, state) => {
+  let r = strip.querySelector(".reveal");
+  if (!r) {
+    r = document.createElement("div");
+    r.className = "reveal";
+    r.textContent = "↓ 未启动的 App";
+    strip.appendChild(r);
+  }
+}, ({ strip, showGuide }) => {
+  if (!showGuide) return;
+  setTimeout(() => strip.classList.add("peeking"), 320);
+  setTimeout(() => strip.classList.remove("peeking"), 1450);
+});
+
+/* 键盘 ↓/↑ 作用于最后悬停的面板 */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  if (!activeSim) return;
+  const wantLaunch = e.key === "ArrowDown";
+  if (wantLaunch === (activeSim._state.mode === "main")) activeSim.swap();
+});
+activeSim = api1;   // 首屏默认作用对象(悬停哪个就切换到哪个)
+/* 首屏各演一遍教学期第一局 */
+document.querySelectorAll(".sim .resummon").forEach(b => b.click());
+</script>
+</body>
+</html>

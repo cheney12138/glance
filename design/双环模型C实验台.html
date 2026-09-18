@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>双环模型 C 实验台 · 逻辑一条环,呈现分段换</title>
+<style>
+  :root{
+    --icon: 56px; --gap: 14px;
+    --ink:#1c1f24; --ink2:#6b7280; --line:#dfe3e8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 60px;background:#f6f7f9;color:var(--ink);
+       font:13px/1.55 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  .hint{color:var(--ink2);font-size:12px;margin:0 0 6px;max-width:900px}
+  .hint b{color:var(--ink)}
+  .keys{margin:0 0 14px}
+  kbd{font:600 11px/1 -apple-system;background:#fff;border:1px solid #c9ced5;border-bottom-width:2px;
+      border-radius:4px;padding:1px 5px;margin:0 1px;color:var(--ink)}
+  .toggle{float:right;font:12px/1 -apple-system,"PingFang SC";padding:6px 12px;border-radius:8px;
+          border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer;margin-left:8px}
+  .toggle:hover{background:#f0f2f5}
+
+  .desk{border-radius:12px;padding:34px 20px 40px;position:relative;overflow:hidden;
+        background:linear-gradient(135deg,#dfe7ee 0%,#cfd9e4 45%,#e8e2d8 100%)}
+  body.dark .desk{background:linear-gradient(135deg,#2b3038 0%,#3a4150 55%,#46403a 100%)}
+
+  .strip{border-radius:18px;position:relative;margin:0 auto;width:fit-content;
+         padding:10px 22px 16px;
+         background:linear-gradient(180deg,rgba(251,252,253,.96),rgba(238,241,245,.96));
+         box-shadow:0 1px 0 #fff inset,0 8px 24px rgba(16,24,40,.12);
+         transition:opacity .16s ease,transform .16s ease}
+  body.dark .strip{background:linear-gradient(180deg,rgba(58,64,72,.97),rgba(34,38,44,.97));
+         box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .strip.off{opacity:0;transform:translateY(6px) scale(.985)}
+  .strip.enter{animation:enter .18s ease-out}
+  @keyframes enter{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+  .strip.swap .icons{opacity:0;transform:translateY(4px)}
+  .strip.firstime.swap .icons{transform:translateY(8px)}
+  .icons{display:flex;align-items:flex-end;gap:var(--gap);transition:opacity .13s ease,transform .13s ease}
+
+  .slot{position:relative;width:calc(var(--icon) + 8px);display:flex;justify-content:center;flex:none;cursor:pointer}
+  .tile{width:var(--icon);height:var(--icon);border-radius:15px;display:flex;align-items:center;justify-content:center;
+        font-size:24px;font-weight:700;color:#fff;box-shadow:0 3px 8px rgba(16,24,40,.22);
+        transition:transform .15s ease}
+  .slot .dot{position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);
+        width:4px;height:4px;border-radius:50%;background:#3a4048;opacity:.5}
+  .slot .dash{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);
+        width:12px;height:4px;border-radius:2px;background:#3a4048;opacity:.5}
+  .slot.sel::before{content:"";position:absolute;left:-3px;right:-3px;top:-8px;bottom:-8px;border-radius:17px;
+        background:rgba(255,255,255,.62);box-shadow:0 4px 6px rgba(16,24,40,.14)}
+  body.dark .slot.sel::before{background:rgba(150,156,165,.92)}
+  body.dark .slot .dot,body.dark .slot .dash{background:#e8ebef}
+  .slot.sel .tile{transform:translateY(-6px) scale(1.10)}
+  /* 启动段:幽灵壳座位 */
+  .slot.ghost .tile{background:none !important;box-shadow:inset 0 0 0 1.5px rgba(120,128,136,.45);
+        font-size:19px}
+  body.dark .slot.ghost .tile{box-shadow:inset 0 0 0 1.5px rgba(200,206,214,.4)}
+
+  /* 段头:住在下缘留白里,只在启动段存在 */
+  .seghead{position:absolute;left:0;right:0;bottom:3px;text-align:center;
+        font:500 10px/1 -apple-system,"PingFang SC";color:#6b7280;opacity:0;transition:opacity .2s ease}
+  body.dark .seghead{color:#aab1ba}
+  .strip.inlaunch .seghead{opacity:.9}
+  .seghead b{font-weight:600}
+  .seghead .ret{opacity:.75;margin-left:8px}
+
+  /* 表三那句话(说话局) */
+  .chip{height:36px;padding:0 22px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+        font:500 12px/1 -apple-system,"PingFang SC";color:#565b60;margin:10px auto;width:fit-content;
+        background:linear-gradient(180deg,rgba(251,252,253,.96),rgba(238,241,245,.96));
+        box-shadow:0 8px 24px rgba(16,24,40,.12)}
+  body.dark .chip{background:linear-gradient(180deg,rgba(58,64,72,.97),rgba(34,38,44,.97));color:#c9ced5}
+
+  .toast{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+        background:#25282d;color:#f2f4f7;border-radius:9px;padding:7px 14px;
+        font:500 12px/1.4 -apple-system,"PingFang SC";white-space:nowrap;
+        box-shadow:0 6px 18px rgba(16,24,40,.28);opacity:0;transition:opacity .2s ease;pointer-events:none}
+  .toast.show{opacity:1}
+
+  .ctl{display:flex;align-items:center;gap:10px;margin:12px 4px 0;flex-wrap:wrap}
+  .ctl button{font:12px/1 -apple-system,"PingFang SC";padding:6px 11px;border-radius:7px;
+        border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  .ctl button:hover{background:#f0f2f5}
+  .ctl label{font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:5px;cursor:pointer}
+  .status{font-size:12px;color:var(--ink2);margin-top:10px;min-height:18px}
+  .status b{color:var(--ink)}
+  @media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.body.classList.toggle('dark')">切到深色面板</button>
+<h1>双环模型 C 实验台 · 逻辑一条环,呈现分段换</h1>
+<p class="hint"><b>这条链路是真的,用键盘走一遍</b>:面板开在「上一个 App」→ <kbd>Tab</kbd> 走到主环最后一格 → 再按 <kbd>Tab</kbd>,<b>自然遇见未启动段</b>(段头住在下缘留白里,玻璃高度不变)→ <kbd>Tab</kbd> 继续绕完未启动段回到主环第一格;<kbd>⇧Tab</kbd> 反向;<kbd>↓</kbd> 任何时候直达未启动段、<kbd>↑</kbd> 返回主环;<kbd>回车</kbd> 确认(启动段的 App 启动后会真的搬进主环);<kbd>Esc</kbd> 散场。</p>
+<p class="keys">第二件事也试试:勾上「未启动名单清空」→ <kbd>Tab</kbd> 到底会照常绕回第一格(没有段),<kbd>↓</kbd> 会说那句话(表三)。</p>
+
+<div class="desk">
+  <div class="strip" id="strip"><div class="icons" id="icons"></div>
+    <div class="seghead" id="seghead"><b>未启动的 App</b><span class="ret">· <b>↑</b> 返回 / <b>Tab</b> 继续</span></div>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+<div class="ctl">
+  <button onclick="summon()">重新唤起</button>
+  <label><input type="checkbox" id="emptyToggle" onchange="setEmpty(this.checked)"> 未启动名单清空(模拟全都启动过)</label>
+</div>
+<div class="status" id="status"></div>
+
+<script>
+const APPS = [
+  ["Ghostty","linear-gradient(145deg,#3b4a63,#1e2a3f)",1],
+  ["大象","linear-gradient(145deg,#8a9099,#5c636c)",1],
+  ["Chrome","linear-gradient(145deg,#e8590c,#c23a08)",1],
+  ["Obsidian","linear-gradient(145deg,#7c5cd6,#53389e)",1],
+  ["Sublime","linear-gradient(145deg,#e8590c,#b02a05)",7],
+  ["网易云","linear-gradient(145deg,#e03131,#b02525)",1],
+  ["DataGrip","linear-gradient(145deg,#20c997,#0ca678)",1],
+];
+let UNLAUNCHED = [
+  ["微信","linear-gradient(145deg,#2ea44f,#1a7f37)"],
+  ["Meituan","linear-gradient(145deg,#4263eb,#3b5bdb)"],
+  ["Zoom","linear-gradient(145deg,#2b8aef,#1971c2)"],
+];
+const S = { visible:false, seg:"main", selMain:1, selLaunch:null, chip:null };
+
+const strip = document.getElementById("strip");
+const iconsEl = document.getElementById("icons");
+const statusEl = document.getElementById("status");
+const toastEl = document.getElementById("toast");
+
+function slotHTML(a, sel, ghost, mode) {
+  const mark = !ghost ? (a[2] >= 5 ? '<div class="dash"></div>' : '<div class="dot"></div>') : "";
+  const style = ghost ? `color:${a[1].match(/#[0-9a-f]{6}/)[0]}` : `background:${a[1]}`;
+  return `<div class="slot${sel ? " sel" : ""}${ghost ? " ghost" : ""}" data-i="${a._i}">` +
+         `<div class="tile" style="${style}">${a[0]}</div>${mark}</div>`;
+}
+
+function render() {
+  if (S.chip) {
+    iconsEl.innerHTML = `<div class="chip">${S.chip}</div>`;
+    strip.classList.remove("inlaunch");
+  } else if (S.seg === "main") {
+    strip.classList.remove("inlaunch");
+    iconsEl.innerHTML = APPS.map((a, i) => slotHTML(a, i === S.selMain, false, "main")).join("");
+  } else {
+    strip.classList.add("inlaunch");
+    iconsEl.innerHTML = UNLAUNCHED.map((a, i) => slotHTML(a, i === S.selLaunch, true, "launch")).join("");
+  }
+  // 状态行
+  if (!S.visible) statusEl.innerHTML = `面板已关 —— 点「重新唤起」`;
+  else if (S.chip) statusEl.innerHTML = `说话局(这一局只为说一句话)`;
+  else if (S.seg === "main") {
+    const hint = (!document.getElementById("emptyToggle").checked && S.selMain === APPS.length - 1)
+      ? ` —— 再按 <kbd>Tab</kbd> 就会遇见未启动段` : "";
+    statusEl.innerHTML = `主环 · 选中 <b>[${S.selMain + 1}/${APPS.length}] ${APPS[S.selMain][0]}</b>${hint}`;
+  } else {
+    const sel = S.selLaunch == null ? "未选(回车无效果)" : `[${S.selLaunch + 1}/${UNLAUNCHED.length}] ${UNLAUNCHED[S.selLaunch][0]}`;
+    statusEl.innerHTML = `<b>未启动段</b> · 选中 ${sel} · <kbd>↑</kbd> 返回主环 · <kbd>Tab</kbd> 继续绕环 · 点格子 = 启动`;
+  }
+  bindSlots();
+}
+
+function bindSlots() {
+  iconsEl.querySelectorAll(".slot").forEach(el => {
+    const i = +el.dataset.i;
+    el.onmouseenter = () => {
+      if (!S.visible || S.chip) return;
+      if (S.seg === "main" && i !== S.selMain) { S.selMain = i; render(); }
+      if (S.seg === "launch" && i !== S.selLaunch) { S.selLaunch = i; render(); }
+    };
+    el.onclick = () => {
+      if (!S.visible || S.chip) return;
+      if (S.seg === "main") confirmMain();
+      else launchAt(i);
+    };
+  });
+}
+
+function swapRender(fn) {
+  strip.classList.add("swap");
+  setTimeout(() => { fn(); strip.classList.remove("swap"); }, 130);
+}
+
+function move(delta, backward) {
+  if (!S.visible || S.chip) return;
+  const empty = document.getElementById("emptyToggle").checked;
+  if (S.seg === "main") {
+    if (!backward) {
+      if (S.selMain < APPS.length - 1) S.selMain++;
+      else if (!empty) enterLaunch(true);
+      else S.selMain = 0;                       // 空名单:照常绕回
+    } else {
+      if (S.selMain > 0) S.selMain--;
+      else if (!empty) { S.seg = "launch"; S.selLaunch = UNLAUNCHED.length - 1; doSwap(); }
+      else S.selMain = APPS.length - 1;
+    }
+  } else {
+    if (!backward) {
+      if (S.selLaunch == null) S.selLaunch = 0;
+      else if (S.selLaunch < UNLAUNCHED.length - 1) S.selLaunch++;
+      else { S.seg = "main"; S.selMain = 0; doSwap(); }   // 绕回主环第一格
+    } else {
+      if (S.selLaunch == null) S.selLaunch = 0;
+      else if (S.selLaunch > 0) S.selLaunch--;
+      else { S.seg = "main"; S.selMain = APPS.length - 1; doSwap(); }
+    }
+  }
+  render();
+}
+
+function enterLaunch(viaTab) {
+  swapRender(() => {
+    S.seg = "launch";
+    S.selLaunch = viaTab ? 0 : null;   // Tab 走进来 = 选中接续;↓ 直达 = 先不选(与现行一致)
+  });
+  render();
+}
+function doSwap() { swapRender(render); }
+
+function backToMain() {
+  if (S.seg !== "launch") return;
+  doSwap(); S.seg = "main"; render();
+}
+
+function confirmMain() {
+  toast(`聚焦 ${APPS[S.selMain][0]} · 面板关闭`);
+  dismiss();
+}
+function launchAt(i) {
+  const app = UNLAUNCHED[i];
+  if (!app) return;
+  UNLAUNCHED.splice(i, 1);
+  APPS.push([app[0], app[1], 1]);      // 启动后它进了主环(搬到尾部)
+  toast(`已启动 ${app[0]} · 面板关闭 —— 下次唤起它就在主环里`);
+  dismiss();
+  setTimeout(summon, 1400);
+}
+
+function showChip(text) {
+  S.chip = text; S.visible = true; render();
+  setTimeout(() => { dismiss(); }, 1000);
+  setTimeout(() => { S.chip = null; summon(); }, 1500);
+}
+
+function dismiss() {
+  S.visible = false;
+  strip.classList.add("off");
+  render();
+}
+function summon() {
+  S.seg = "main"; S.selMain = 1; S.selLaunch = null; S.visible = true;
+  strip.classList.remove("off"); strip.classList.remove("enter"); void strip.offsetWidth;
+  strip.classList.add("enter");
+  render();
+}
+
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg; toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1800);
+}
+
+function setEmpty(v) {
+  if (v && S.seg === "launch") { S.seg = "main"; S.selMain = Math.min(S.selMain, APPS.length - 1); }
+  render();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") { e.preventDefault(); move(0, e.shiftKey); }
+  else if (e.key === "ArrowDown") { e.preventDefault();
+    if (!S.visible || S.chip) return;
+    if (document.getElementById("emptyToggle").checked) showChip("没有未启动的 App");
+    else if (S.seg === "main") enterLaunch(false);
+  }
+  else if (e.key === "ArrowUp") { e.preventDefault();
+    if (S.visible && S.seg === "launch") backToMain();
+  }
+  else if (e.key === "Enter") { e.preventDefault();
+    if (!S.visible || S.chip) return;
+    if (S.seg === "main") confirmMain();
+    else if (S.selLaunch != null) launchAt(S.selLaunch);
+  }
+  else if (e.key === "Escape") { e.preventDefault(); if (S.visible) dismiss(); }
+});
+
+summon();
+</script>
+</body>
+</html>
