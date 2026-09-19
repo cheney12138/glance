@@ -156,6 +156,24 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     /// 我们永远不是 key window,任何需要"按下并持续跟踪"的交互都依赖它。来源:LumaRing 的 RingView 实证。
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // 🔬 Bug2 诊断(2026-09-19):合成器闸开后,点击已确认送到托盘窗口(win=托),
+    // 但 SwiftUI 手势无声。这两行账回答"事件到底走没走到视图层":
+    // 视图收到了而手势不响 ⇒ 吞在 SwiftUI 内部;视图没收到 ⇒ 吞在 AppKit 派发层
+    override func mouseDown(with event: NSEvent) {
+        if isTraceEnabled {
+            let f = window?.frame ?? .zero
+            print("[T6] 托盘视图 mouseDown 窗帧=(\(Int(f.minX)),\(Int(f.minY)),\(Int(f.maxX)),\(Int(f.maxY))) 自身bounds=\(Int(bounds.minX)),\(Int(bounds.minY)),\(Int(bounds.maxX)),\(Int(bounds.maxY)) loc=(\(Int(event.locationInWindow.x)),\(Int(event.locationInWindow.y))) clickCount=\(event.clickCount)")
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isTraceEnabled {
+            print("[T6] 托盘视图 mouseUp loc=(\(Int(event.locationInWindow.x)),\(Int(event.locationInWindow.y)))")
+        }
+        super.mouseUp(with: event)
+    }
+
         override func hitTest(_ point: NSPoint) -> NSView? {
         guard pad > 0 else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point

@@ -146,8 +146,22 @@ final class Snapshotter: ObservableObject {
     /// 唯一能抓住它的时机就是"这一组被显示出来"的这一刻。
     /// 病例(2026-09-15):用户把 IDE 换成浅色主题,唤起两次卡片仍是深色
     /// —— 上一版给缓存加了 60s TTL,把这条"显示即重拍"也一起跳过了。
+    nonisolated private static func logPermissionSkip(windows: Int) {
+        if permissionSkipLogged { return }
+        permissionSkipLogged = true
+        print("[T5] 屏幕录制权限未授权,后台截图停摆(每批跳过;弹窗只留给权限引导窗)")
+    }
+
     func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil) {
         guard !windows.isEmpty else { return }
+        // ★ **录屏权限预检**(2026-09-19 用户实报「怎么老是弹录屏授权」):后台 sweep(5s 开窗拍)
+        // 触发 SCK 时,若权限缺失/失效(重签名、系统更新都会让 TCC 记录失效),macOS 就弹授权框
+        // —— 用户被骚扰,而弹窗本该只属于权限引导流程。`CGPreflightScreenCaptureAccess`
+        // **不弹窗**地查权限:没授权就整个批次跳过(引导窗负责催授权,这里只管安静)。
+        guard CGPreflightScreenCaptureAccess() else {
+            Self.logPermissionSkip(windows: windows.count)
+            return
+        }
         // **缓存命中就不重拍**(2026-09-15 修):以前这里把整批目标原样丢给 ScreenCaptureKit,
         // 于是每次唤起都在后台重拍十几扇窗(每扇 26–52ms 的 GPU/WindowServer 活)——
         // 与入场上浮抢资源,而且缓存本来就是为了"不用重拍"才存在的(T25 的本意)。
@@ -353,6 +367,9 @@ final class Snapshotter: ObservableObject {
         }
     }
 }
+
+/// 录屏权限未授权的跳过账:**每进程只喊一次**(sweep 5s 一轮,不设闸就刷屏)
+nonisolated(unsafe) private var permissionSkipLogged = false
 
 /// `SCShareableContent` 的短命缓存:这个枚举**很贵**(要跟 WindowServer 打一轮),
 /// AltTab 也是缓存复用同一份。1 秒新鲜度对"缩略图"这件事完全够。

@@ -32,6 +32,12 @@ func glog(_ line: String) {
     if traceCostProbe { glogCostAccumulate(CFAbsoluteTimeGetCurrent() - t0) }
 }
 
+/// 进程相对时刻(ms),与 glog 行首的 `[ NNNms]` 同一口径 —— 给探针类诊断做**对时**用:
+/// 帧账里的长帧落在哪些毫秒,直接和事件流水账里的行对齐,谁在长帧那刻干活一目了然
+func glanceUptimeMs() -> Double {
+    (CFAbsoluteTimeGetCurrent() - glanceLogStart) * 1000
+}
+
 /// 前 50 行的总耗时(见 `glog`)。累加与统计都放文件级。
 /// 注意:不做并发保护 —— 只在 trace 模式下计数,计数本身不影响正确性,漏几次也无所谓。
 private let traceCostProbe = isTraceEnabled

@@ -154,6 +154,7 @@ struct PanelView: View {
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
+        .focusEffectDisabled(true)   // ★ 窗口根:切换器面板永不出现焦点环
         // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
         // 居中玻璃)—— 根视图尺寸依赖提议、提议依赖尺寸 ⇒ AppKit Update Constraints 布局递归
         // FAULT(2026-09-18 实机崩溃,本仓库此病第三次现形)。段变形的居中问题已在窗口侧解决。
@@ -213,7 +214,7 @@ struct PanelView: View {
                     .onHover { inside in if inside { controller.hoverApp(i) } }
                     // 点图标 = 选中;再点已选中的 = 确认它的头牌窗(或激活无窗应用)
                     .onTapGesture {
-                        if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i) }
+                        if i == controller.appIndex { controller.confirmSelection() } else { controller.hoverApp(i, strict: false) }
                     }
                 }
             }

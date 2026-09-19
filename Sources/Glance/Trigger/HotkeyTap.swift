@@ -771,9 +771,13 @@ final class ThreeFingerTap {
         /// **按压触发**(2026-09-18 用户提议:「给四指加上点按 + 按压」):四根手指齐压
         /// ≥0.25s 且几乎没动 ⇒ **当场生效**,不必抬手。点按失手时的兜底 —— 按住的手指
         /// 有几十帧把 identifier 记全,不存在"没同帧落齐"的竞态。
-        /// 防误触双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
+        /// ★ **必须同帧 4 指**(2026-09-19 修「三指变成未启动环」):曾经只看
+        /// distinctIDs ≥ 4 —— 而 id 跨帧累计,手势落指帧相互沾边时(滚动→点按)按压
+        /// 被合并、id 累到 4,三指点按就被误当"四指按压"唤起了未启动环。
+        /// 同帧 4 指 = 真的"四根手指此刻都在板上",三指点按永远凑不齐这个条件。
+        /// 防误触其余双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
         mutating func pressFireIfDue() -> Bool {
-            guard !pressFired, distinctIDs.count >= 4,
+            guard !pressFired, maxTouches >= 4, distinctIDs.count >= 4,
                   CFAbsoluteTimeGetCurrent() - beganAt >= 0.25,
                   maxNormMove <= ThreeFingerTap.maxMove else { return false }
             pressFired = true

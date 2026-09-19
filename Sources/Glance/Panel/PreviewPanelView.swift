@@ -85,6 +85,13 @@ struct PreviewPanelView: View {
                         thumb(at: i)
                     }
                 }
+                // ★ **行级点击**(2026-09-19,用户实报「第二张卡要点两遍」):卡片之间的
+                //   空隙曾是命中空洞 —— 点击穿透托盘落到下层长条上,什么都不会发生。
+                //   现在行内任何位置都归属最近的一张卡(首行原点 = 首卡左缘),一点即达;
+                //   卡身上的红绿灯是 Button(子级优先),不受影响。落账见 PanelController.cardTapped
+                .gesture(SpatialTapGesture().onEnded { value in
+                    controller.cardTapped(localX: value.location.x)
+                })
             }
         }
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
@@ -124,7 +131,7 @@ struct PreviewPanelView: View {
             motion: MotionPolicy.animation(PanelMotion.thumb)
         )
         .onHover { inside in if inside { controller.hoverWindow(i) } }
-        .onTapGesture { controller.hoverWindow(i); controller.confirmSelection() }
+        // (点击已由**行级手势**接管:cardTapped 把行内空隙也归属最近卡片,见 thumbGrid)
     }
 
     // MARK: - 启动行(方案 E v2:第二条主环)
@@ -234,91 +241,6 @@ struct PreviewPanelView: View {
 /// 悬停行为与 macOS 对齐(用户实评"hover的时候跟 macOS 保持一致"):
 /// 悬停**整组**三粒一起显出符号(✕ / − / ⤢),直接踩到的那一粒再略微放大。
 /// 不悬停时只剩纯色圆点 —— 这正是系统窗口上的样子。
-struct TrafficLights: View {
-    let wid: CGWindowID
-    let close: () -> Void
-    let minimize: () -> Void
-    let zoom: () -> Void
-    /// 未选中的卡片:三粒灯去饱和(= macOS 上"非激活窗口"的样子 ✓)
-    let dimmed: Bool
-    /// **红灯禁用**(2026-09-18 用户裁定):Glance 自己的窗(设置/权限)在预览卡上的
-    /// 红灯置灰、点了没反应 —— 切换器不能从面板上关掉自己的窗再"自杀"
-    var closeDisabled: Bool = false
-    /// 哪一粒被直接踩到(nil = 没踩到整组):
-    /// 整组里**任意一粒**被悬停 → 三粒一起出符号;只有被直接踩到的那一粒放大
-    @State private var hoveredDot: Int?
-
-    var body: some View {
-        // spacing 归零、每粒自带 3pt 内边:间距不变(11+6),但两粒之间的缝也算"踩到"
-        HStack(spacing: 0) {
-            light(PanelColors.tlClose, "xmark", closeDisabled ? "Glance 的窗口不能在这里关闭" : "关闭窗口", 0, close, disabled: closeDisabled)
-            light(PanelColors.tlMin, "minus", "最小化窗口", 1, minimize)
-            light(PanelColors.tlZoom, "arrow.up.left.and.arrow.down.right", "缩放窗口", 2, zoom)
-        }
-    }
-
-    private func light(_ color: Color, _ symbol: String, _ hint: String,
-                       _ index: Int, _ action: @escaping () -> Void,
-                       disabled: Bool = false) -> some View {
-        TrafficLight(color: color, symbol: symbol, hint: hint,
-                     showsGlyph: hoveredDot != nil,
-                     hovering: hoveredDot == index,
-                     dimmed: dimmed || disabled,
-                     action: disabled ? {} : action)
-            .padding(3)
-            // 逐粒听 hover,而不是给 HStack 挂一个:容器上的 onHover 会被子按钮吃掉
-            // (实机现形:只有被踩到的那一粒出符号,另两粒没反应)
-            .onHover { inside in
-                if inside {
-                    hoveredDot = index
-                } else if hoveredDot == index {
-                    hoveredDot = nil
-                }
-            }
-    }
-}
-
-/// 一粒灯。状态由父级传(整组管符号、单粒管放大 —— 两个层级,与 macOS 同构)
-private struct TrafficLight: View {
-    let color: Color
-    let symbol: String
-    let hint: String
-    let showsGlyph: Bool
-    let hovering: Bool
-    /// 未选中 = 灰(见 TrafficLights.dimmed)
-    let dimmed: Bool
-    let action: () -> Void
-
-    var body: some View {
-        // Button 而不是 onTapGesture:卡片本身挂着"点一下 = 确认"的手势,
-        // Button 才能把它隔开(子级优先),不会误触确认
-        Button(action: action) {
-            Circle()
-                .fill(color)
-                .frame(width: 11, height: 11)
-                .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
-                .overlay {
-                    // 符号色 = 本色的深色版(黑 50% 叠上去就是系统那个暗红/暗赭/暗绿)
-                    Image(systemName: symbol)
-                        .font(.system(size: 6.5, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.5))
-                        .opacity(showsGlyph ? 1 : 0)
-                }
-                .scaleEffect(hovering ? 1.15 : 1)
-                // 去饱和是"克制"的来源:亮点只在你看着它的时候出现。
-                // 用 saturation+opacity 而非新增灰色常量 —— 灰值随明暗外观自动正确,
-                // 也不必为一个中间态往设计系统里塞 token ✓
-                .saturation(dimmed ? 0 : 1)
-                .opacity(dimmed ? 0.55 : 1)
-                .animation(.easeOut(duration: 0.18), value: dimmed)
-                .animation(.easeOut(duration: 0.12), value: hovering)
-                .animation(.easeOut(duration: 0.12), value: showsGlyph)
-        }
-        .buttonStyle(.plain)
-        .help(hint)
-    }
-}
-
 private struct WindowThumb<Overlay: View>: View {
     let record: WindowRecord
     /// 决定标题显示什么:终端要 tab 名、编辑器要工程名(见 `GlanceCore.WindowTitle`)

@@ -104,7 +104,20 @@ enum SettingsTheme {
 
 /// 度量:HTML px = pt,一比一。demo 的 `.window` 600×480、行距 13、发丝 1(不是面板的 0.5)。
 enum SettingsMetrics {
-    static let windowW: CGFloat = 600
+    /// 2026-09-19 起导航从顶部横向三段改为**左侧纵向目录**:窗宽 = 侧栏 176 + 内容区
+    /// (内容比原 600 还宽一点,名单行不挤)。样式 token 全部沿用 demo,不动。
+    static let windowW: CGFloat = 780
+    /// 左侧目录栏的宽度
+    static let sidebarW: CGFloat = 176
+    /// 侧栏左右内缩:选中块不随行全宽出血(2026-09-19 精修)
+    static let sidebarInset: CGFloat = 10
+    /// 侧栏行内水平边距
+    static let sidebarRowPadX: CGFloat = 10
+    /// 侧栏顶部让位:红绿灯浮在窗左上(0…32pt),目录栏从它们下面起步
+    /// 侧栏顶部让位:红绿灯浮在窗左上但只占窗口最上面一条(32pt 处收尾),
+    /// 棱镜边以下与侧栏无关 —— 顶部留 4pt 呼吸,导航尽量往上顶
+    /// (2026-09-19:30 → 4,用户实报「没有顶上去」)
+    static let railTopClear: CGFloat = 4
     /// 内容高度。demo 是 600×480 的 mock 窗,但它的「通用」只有 4 行;本 App 多一行真设置
     /// (App 间距),照 480 排会当场把最后一行的说明切掉半行 —— 宁可窗高比 mock 高一条标题栏。
     /// 实测:内容 480 → 窗口 **512**(480 + 系统标题栏那一条 32pt;隐藏标题栏后它仍然占位)。
@@ -122,12 +135,25 @@ enum SettingsMetrics {
     static let tabItemPadY: CGFloat = 7
     static let tabRadius: CGFloat = 12
     static let puckRadius: CGFloat = 9
-    /// 内容区留白(demo `.content` 左右 28 / 上下 2、26)
+    /// 内容区留白(demo `.content` 左右 28 / 上下 2、26)。
+    /// 2026-09-19 顶部 2 → 14:导航改左侧目录后,内容区上方没了横向 tab 的占位,
+    /// 2pt 顶死上缘;14pt 让首个组标题与侧栏品牌头大致同一起跑线。
     static let contentPadX: CGFloat = 28
-    static let contentPadTop: CGFloat = 2
+    static let contentPadTop: CGFloat = 14
     static let contentPadBottom: CGFloat = 26
-    /// 组间距(demo `.group{margin-bottom:20}`)
-    static let groupGap: CGFloat = 26
+    /// 组间距(2026-09-19:26 → 8,因为组内新增了 18pt 锚点头部留白,8+18 = 26,
+    /// 常态视觉不变 —— 见 SettingsGroup 的锚点头部留白)
+    static let groupGap: CGFloat = 8
+    /// 组的锚点定位留白(侧栏子菜单 scrollTo 后标题上方的呼吸量)。
+    /// 导航定位后标题上方实际 = scrollTopPad(视口预留带)+ 本值
+    static let anchorHeadroom: CGFloat = 18
+    /// 内容滚动视口的**顶部预留带**(2026-09-19,用户实报「滚动的时候还是到顶了」):
+    /// 手动滚动与锚点定位共用的上边距,纸色渐隐,内容从带下开始淡出(spec §2)
+    static let scrollTopPad: CGFloat = 18
+    /// 环 hover 热区的**内缩量**(2026-09-19 用户实报「碰到边边就选中」):格框本身仍是
+    /// 点按目标,但 hover 选中要求指针落在格子内缩后的中心区 —— 四边各收 12/10pt(k 缩放)
+    static var hoverInsetX: CGFloat { PanelMetrics.hoverInsetX }
+    static var hoverInsetY: CGFloat { PanelMetrics.hoverInsetY }
     /// 组标题胶囊的内边距 / 圆角 / 与下一条行的间距
     static let labelPadX: CGFloat = 9
     static let labelPadY: CGFloat = 4
