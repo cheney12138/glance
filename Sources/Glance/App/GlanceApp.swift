@@ -17,6 +17,13 @@ struct GlanceApp: App {
         // **最先跑**:两个实例会抢同一组 ⌘Tab 并画出叠在一起的面板(见 SingleInstanceGuard 的病例),
         // 而且必须在 NativeHotkeys / 事件 tap 之前拦住,退出时系统状态才是一行没动
         SingleInstanceGuard.enforce()
+        // ★ 调试开关**只随启动参数生效**(2026-09-19 病例:自动化测试用 defaults 把
+        //   pinPanelOnRelease 留成 ON 后忘了复位 ⇒ 用户实报「点空白关不掉面板」——
+        //   钉住模式下"面板外点击不免死"本来就是设计)。普通启动一律清掉:
+        //   要钉住,用 `open --args -debug.pinPanelOnRelease 1`,进程死了开关自动失效
+        if !ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") {
+            UserDefaults.standard.removeObject(forKey: "debug.pinPanelOnRelease")
+        }
     }
 
     @StateObject private var permissions = PermissionMonitor()

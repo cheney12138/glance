@@ -21,12 +21,15 @@ final class FrameProbe: NSObject {
     private var intervals: [Double] = []
     private var last: CFTimeInterval = 0
     private var label = ""
+    /// 本轮探针开跑时的进程时刻(ms)—— 长帧直方图的事件对时锚点
+    private var startUptimeMs: Double = 0
 
     private var enabled: Bool { isTraceEnabled }
 
     func start(on view: NSView, label: String) {
         guard enabled, link == nil, #available(macOS 14.0, *) else { return }
         self.label = label
+        startUptimeMs = glanceUptimeMs()
         // 面板在哪块屏上,就按哪块屏的节拍判定(`maximumFramesPerSecond`,macOS 12+)
         fps = Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
         last = 0
@@ -53,20 +56,30 @@ final class FrameProbe: NSObject {
         // 用户看到的"抖"永远是后者,所以补一个"偏离中位的幅度"(P90),单位 ms。
         let medv = sorted[sorted.count / 2]
         let jitter = intervals.map { abs($0 - medv) }.sorted()[min(Int(Double(intervals.count) * 0.9), intervals.count - 1)] * 1000
-        // **长帧发生在什么时候**:只报"有几帧"没法判断它是不是落在入场那 0.2s 里。
-        // 偏移量从本轮第一帧算起,最多列 5 个(够看出是否聚集在开头)
+        // **长帧落在进程时间的哪些秒**(2026-09-19 改直方图):只报"有几帧"没法判断它是不是
+        // 落在入场那 0.2s 里、还是均匀铺在整个滚动期 —— 前者是开场布局的账,后者是滚动路径
+        // 的账。按秒聚堆,并给出探针起点的进程时刻(glanceUptimeMs 口径),可与
+        // `[保温]` / `[T5]` 等事件流水逐秒对时
         var elapsed: TimeInterval = 0
-        var marks: [String] = []
+        var bySecond: [Int: (count: Int, worst: Double)] = [:]
         for interval in intervals {
-            if interval > longFrame, marks.count < 5 { marks.append(String(format: "%.2fs", elapsed)) }
+            if interval > longFrame {
+                let sec = Int(elapsed)
+                let old = bySecond[sec] ?? (0, 0)
+                bySecond[sec] = (old.count + 1, max(old.worst, interval * 1000))
+            }
             elapsed += interval
         }
-        let where_ = marks.isEmpty ? "" : " @" + marks.joined(separator: ",")
+        let where_ = bySecond.isEmpty ? "" : " @" + bySecond.sorted { $0.key < $1.key }
+            .map { pair -> String in
+                String(format: "%d-%ds×%d(max %.0fms)", pair.key, pair.key + 1, pair.value.count, pair.value.worst)
+            }
+            .joined(separator: " ")
         // 判定基准非 60Hz 时标出来 —— 否则读日志的人会拿 25ms 的口径去理解 120Hz 屏的数据
         let judge = fps == 60 ? "" : String(format: " [按 %.0fHz 判定:>%.1fms]", fps, longFrame * 1000)
-        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%)%@%@",
+        print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%) %@| 探针起点=%.0fms%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
-                     long, Double(long) / Double(sorted.count) * 100, where_, judge))
+                     long, Double(long) / Double(sorted.count) * 100, where_, startUptimeMs, judge))
         if jitter > 1.5 { print(String(format: "[帧]   ↳节奏抖动 ±%.1fms(P90,中位 %.1fms)—— 均匀的慢看不出,忽快忽慢才是肉眼里的卡", jitter, medv * 1000)) }
         intervals.removeAll()
     }
