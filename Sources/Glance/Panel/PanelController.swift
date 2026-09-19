@@ -2299,7 +2299,7 @@ final class PanelController: ObservableObject {
         }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
-            WindowFocuser.focusWindowlessApp(pid: g.pid)
+            WindowFocuser.focusWindowlessApp(pid: g.pid, contextScreen: contextScreen)
             dismiss(reason: "确认(无窗应用)")
             return
         }

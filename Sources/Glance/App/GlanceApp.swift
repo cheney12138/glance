@@ -171,5 +171,25 @@ struct GlanceApp: App {
         if UserDefaults.standard.bool(forKey: "debug.autoOpenSettings") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showSettings() }
         }
+        // 🔬 AX 探针(2026-09-19,CatDesk 关窗不出现病例):defaults write debug.axprobePid
+        // <pid> 后重启,借本 App 的辅助功能权限查目标进程 AX 眼里的窗口账 ——
+        // 判别「CG 全量清单有窗但 onscreen=false」到底是"别屏 Space 的窗"还是"orderOut 的窗"
+        if let pidStr = UserDefaults.standard.string(forKey: "debug.axprobePid"),
+           let pid = pid_t(pidStr) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                let app = AXUIElementCreateApplication(pid)
+                var value: CFTypeRef?
+                let err = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+                print("[AX探针] pid=\(pid) err=\(err.rawValue)")
+                if err == .success, let ws = value as? [AXUIElement] {
+                    print("[AX探针] AX 窗口数 \(ws.count)")
+                    for w in ws {
+                        var t: CFTypeRef?
+                        AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &t)
+                        print("[AX探针]   - \(t as? String ?? "(无题)")")
+                    }
+                }
+            }
+        }
     }
 }

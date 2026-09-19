@@ -180,17 +180,59 @@ enum WindowFocuser {
     /// 曾尝试"落点跟随"(T16 轮询/T17 AX 诞生监听:窗口开错屏就挪正),
     /// 两路都有肉眼可感的闪烁,被拍板毙掉(docs/adr/0004)——
     /// 开窗位置交给 macOS 的窗口还原记忆,我们不再管。
-    static func focusWindowlessApp(pid: pid_t) {
+    static func focusWindowlessApp(pid: pid_t, contextScreen: NSScreen? = nil) {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
         guard let url = app.bundleURL else {
             app.activate(options: .activateAllWindows)
             print("[T15] 无窗应用激活: \(app.localizedName ?? "?")(activate)")
+            Self.logLandingProbe(pid: pid, name: app.localizedName ?? "?", contextScreen: contextScreen)
             return
         }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { running, _ in
             if running == nil { app.activate(options: .activateAllWindows) }
         }
         print("[T15] 无窗应用激活: \(app.localizedName ?? "?")(openApplication)")
+        Self.logLandingProbe(pid: pid, name: app.localizedName ?? "?", contextScreen: contextScreen)
+    }
+
+    /// 🔬 **落屏探针**(2026-09-19,用户问「无窗 App 能不能唤起到我唤起的那块屏」):
+    /// 激活后分两拍(0.8s / 1.6s)枚举该 App 的可见窗,量它落在哪块屏、与语境屏是否一致
+    /// —— 先量再改:命中率够了,openApplication 的原生语义就是答案;命中率差,
+    /// 再考虑指针引导之类的增强。trace 门控,语境屏缺省时不量
+    private static func logLandingProbe(pid: pid_t, name: String, contextScreen: NSScreen?) {
+        guard isTraceEnabled, let contextScreen else { return }
+        let contextName = contextScreen.localizedName ?? "?"
+        for delay in [0.8, 1.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                Task.detached(priority: .utility) {
+                    guard let infos = CGWindowListCopyWindowInfo(
+                        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+                    ) as? [[String: Any]] else { return }
+                    var lines: [String] = []
+                    for info in infos {
+                        guard let p = info[kCGWindowOwnerPID as String] as? pid_t, p == pid,
+                              let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                              let b = info[kCGWindowBounds as String] as? NSDictionary,
+                              let bounds = CGRect(dictionaryRepresentation: b),
+                              bounds.width > 50, bounds.height > 50 else { continue }
+                        let landed = NSScreen.screens
+                            .first { s in
+                                let inter = s.frame.intersection(bounds)
+                                return !inter.isEmpty
+                                    && inter.width * inter.height > 0.4 * bounds.width * bounds.height
+                            }?
+                            .localizedName ?? "?"
+                        lines.append("\(Int(bounds.width))x\(Int(bounds.height))@\(landed)")
+                    }
+                    let verdict = lines.isEmpty ? "尚未开窗" : lines.joined(separator: " , ")
+                    let hit = !lines.isEmpty && lines.contains { $0.hasSuffix("@\(contextName)") }
+                    let mark = lines.isEmpty ? "" : hit ? " ✓" : " ✗"
+                    await MainActor.run {
+                        print("[落屏探针] +\(String(format: "%.1f", delay))s \(name): \(verdict)(语境=\(contextName))\(mark)")
+                    }
+                }
+            }
+        }
     }
 
     private static func degrade(_ w: WindowRecord, reason: String) {

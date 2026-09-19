@@ -31,18 +31,54 @@ struct AppGroup {
 private let ghostLogLock = NSLock()
 nonisolated(unsafe) private var seenGhostLines: Set<String> = []
 
-/// **无窗应用的"善后期"豁免**(T90):⌘Q 之后、`didTerminate` 之前的善后期,窗已关、进程还在,
-/// "无窗应用"分支会把这种 App 当成合法成员挂上条带尾部(用户实拍:⌘Q 退出后在尾部"诈尸"
-/// 一次,再唤起又消失)。NSWorkspace **没有"将要退出"的通知可订**(只有 did 系列,那时已死透),
-/// 所以用**窗口消失的时限**替代:每次枚举记下"哪些 pid 此刻还有窗";一个 pid 距上次有窗不足
-/// `windowlessProbation` 秒,视为"窗刚消失、进程多半在善后",这一局不进面板;超过时限仍是
-/// "无窗 + 常规策略"才是真·无窗应用(T15 语义不变,只是晚 ~10s 入列)。锁 + 文件级全局:
-/// 与幽灵窗日志同一套跨线程模式(枚举跑后台)。
-private let windowedSeenLock = NSLock()
-nonisolated(unsafe) private var lastWindowedAt: [pid_t: CFAbsoluteTime] = [:]
-/// 无窗应用的善后期(T90):窗消失后这么多秒内,不把该 pid 当成无窗应用挂上面板
-/// (⌘Q 的进程善后期通常几秒;大型的 IntelliJ 系可能更久,超过时限的"诈尸"只能放行)
-private let windowlessProbation: CFAbsoluteTime = 10
+/// **善后期退役**(2026-09-19 用户裁定:「窗口关掉了,再次唤醒时没有任何间隔,
+/// APP 就应该在这儿」):无窗应用**立即入环**,不设时限。
+///
+/// 原 T90 的 10s 善后期防的是「⌘Q 后窗已关、进程还在善后 → 无窗分支把它挂回条带尾部诈尸
+/// 一次」。退役后这条老病的看门换了分工:
+///   · 面板自己 Q → `PanelController.quitPIDs`(先记后杀)+ `verifyQuit` 复核,原样承担;
+///   · 外部 ⌘Q → 死亡间隙只有 1~3s 且自愈(下次枚举自然消失),期间若恰逢唤起,
+///     环里短暂出现一个无点条目、确认激活无效果 —— 接受。
+/// (曾想用 `willTerminateApplicationNotification` 事件替代时间窗 —— AppKit **没有**这个
+/// 通知,T90 老注释是对的,此处记档防再犯。)
+///
+/// **无窗应用的"落屏记忆"快照**(2026-09-19 用户问句:「窗口上次关闭在哪个屏幕,再次唤起
+/// 就在哪个屏幕」):App 确认后恢复的窗会回到它自己记住的屏 —— 我们把这份记忆也抄一份:
+/// 每次枚举,有可见窗的 App 记下"此刻活在哪块屏"(按 bundleID 持久化,跨重启有效);
+/// 它变成无窗后,**只回最后活跃的那块屏**的环,不再全屏撒。
+/// (落屏探针实测:开新窗型 App 跟随激活语境,恢复型 App 回记忆屏 —— 两类都与
+/// lastScreen 语义吻合。)键 = bundleID(pid 跨 App 重启不稳);屏名跨会话基本稳定。
+nonisolated(unsafe) private var lastScreenByBundle: [String: String]? = nil
+private let lastScreenLock = NSLock()
+private let lastScreenDefaultsKey = "ring.lastScreenByBundle"
+
+/// 读快照(惰性装载一次;坏档当空表,下次写回覆盖)
+private func loadLastScreensIfNeeded() {
+    lastScreenLock.lock()
+    defer { lastScreenLock.unlock() }
+    guard lastScreenByBundle == nil else { return }
+    let raw = UserDefaults.standard.dictionary(forKey: lastScreenDefaultsKey) as? [String: String]
+    lastScreenByBundle = raw ?? [:]
+}
+
+/// 记/查快照的统一出入口(调用方持锁由这里管)
+private func updateLastScreen(bundleID: String?, screenName: String) {
+    guard let bundleID, !bundleID.isEmpty else { return }
+    loadLastScreensIfNeeded()
+    lastScreenLock.lock()
+    defer { lastScreenLock.unlock() }
+    guard lastScreenByBundle?[bundleID] != screenName else { return }
+    lastScreenByBundle![bundleID] = screenName
+    UserDefaults.standard.set(lastScreenByBundle, forKey: lastScreenDefaultsKey)
+}
+
+private func lastScreen(ofBundle bundleID: String?) -> String? {
+    guard let bundleID, !bundleID.isEmpty else { return nil }
+    loadLastScreensIfNeeded()
+    lastScreenLock.lock()
+    defer { lastScreenLock.unlock() }
+    return lastScreenByBundle?[bundleID]
+}
 
 @MainActor
 enum WindowEnumerator {
@@ -118,14 +154,21 @@ enum WindowEnumerator {
 
         // 归属过滤:只留本屏窗
         let records = axFiltered.filter { ownsByContextScreen($0.bounds, contextScreen: screen) }
-        // 记"谁此刻还有窗"(T90 无窗善后期豁免的账本;顺带裁掉 10 分钟没露面的旧账)
-        let seenNow = CFAbsoluteTimeGetCurrent()
-        windowedSeenLock.lock()
-        for r in records { lastWindowedAt[r.pid] = seenNow }
-        if lastWindowedAt.count > 300 {
-            lastWindowedAt = lastWindowedAt.filter { seenNow - $0.value < 600 }
+        // ★ **全屏探测**(2026-09-19,用户划线):存在一扇铺满某块屏的 layer 0 可见窗
+        //   = 有显示器处于全屏。全屏会把别的桌面整体盖住 —— 此刻"看不见"的窗可能是
+        //   被全屏挡住的(不许灌环,用户铁律:A 屏的 App 出现在 B 屏绝对不可以),
+        //   也可能是用户关掉的(应该立即入环)—— CGWindowList 分不出这两者,
+        //   所以用**全屏状态**当判据切换无窗判定面(见下方 allWindowedPIDs)
+        let screensSnapshot = NSScreen.screens
+        var fullscreenActive = false
+        for r in axFiltered {
+            for s in screensSnapshot {
+                if r.bounds.width >= s.frame.width - 2, r.bounds.height >= s.frame.height - 2,
+                   abs(r.bounds.midX - s.frame.midX) < 2, abs(r.bounds.midY - s.frame.midY) < 2 {
+                    fullscreenActive = true
+                }
+            }
         }
-        windowedSeenLock.unlock()
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
             // **系统权限弹窗过滤**(2026-09-15 用户报:"要权限的时候那个系统弹窗也被识别到,没有 app 图标,
@@ -154,40 +197,64 @@ enum WindowEnumerator {
                                             windows: [])].windows.append(r)
         }
 
+        // **落屏记忆快照**(见文件头):有可见窗的 App 记下"此刻活在这块屏"。
+        // 无窗后它只回这块屏的环(确认恢复的窗本来就会回它记住的屏,两边语义对齐)
+        let screenName = screen.localizedName
+        for g in byPID.values where !g.windows.isEmpty {
+            updateLastScreen(bundleID: g.bundleID, screenName: screenName)
+        }
+
         // 无窗应用(T15,用户拍板):全系统一扇可见窗都没有的已打开 App,
         // 不划分显示器分组,任何语境屏都展示;确认 = 激活该 App。
-        // ★ **判定面 = 全量窗清单**(2026-09-19 收紧,用户本机复现):原来用 candidates
-        //   (optionOnScreenOnly 可见窗)。病例:一块屏全屏播放时,其它 Space 的窗集体离屏
-        //   —— 别屏普通桌面上的 App 被误判成"无窗",过善后期后灌进**每一块屏**的环
-        //   (同一个 App 两屏同时出现、都没有点),主环同时缩水(实测 14 → 2)。
-        //   改判据:全量窗清单(不含 onScreenOnly)里 layer 0 有窗 = 有窗,不管窗在哪个
-        //   Space。代价:**只有最小化窗的 App 也算"有窗"** → 从环消失(唤起场景下本来
-        //   就不显示它的窗卡,可接受;要恢复需 AX 分辨"最小化 vs 别屏 Space",复杂度另议)
+        // ★ **判定面随全屏状态切换**(2026-09-19,用户划线定案):
+        //   · **无全屏**(常态):判定面 = 可见窗 —— 用户关掉某 App 的所有窗,它**立即**
+        //     成为无窗应用入环(病例:CatDesk 关窗后不出现;其"关窗"实现为 orderOut,
+        //     CGWindowList 全量清单里窗还活着,AX 也查无此窗 —— 系统层面与"被全屏
+        //     挡住的窗"无法区分,只能靠全屏状态当判据)。
+        //   · **有屏全屏**(fullscreenActive):判定面 = 全量窗清单(ghost 同款过滤)——
+        //     被全屏挡住的别屏 App **不许**以无窗条目灌环(铁律:F2/F4,实测 14 → 2 的
+        //     缩水与跨屏串场)。代价:全屏期间"关窗式无窗 App"暂时退环,全屏退出即回。
+        //   (AX 探针实证:CatDesk 关窗后 AX 窗口数 = 0,但全量 CG 清单里窗仍在 ——
+        //    AX 与 CG 在这一对场景里读数相同,分不出意图,故走状态开关。)
         var allWindowedPIDs: Set<pid_t> = []
-        if let allInfos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] {
-            for info in allInfos {
-                guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
-                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                      let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                      let bounds = CGRect(dictionaryRepresentation: boundsDict),
-                      bounds.width > 1, bounds.height > 1
-                else { continue }
-                allWindowedPIDs.insert(pid)
+        if fullscreenActive {
+            if let allInfos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] {
+                for info in allInfos {
+                    guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                          let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                          let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                          let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                          bounds.width > 1, bounds.height > 1
+                    else { continue }
+                    // ★ 幽灵窗启发式必须与上方 candidates **同款**(2026-09-19 回归修复):
+                    //   CatDesk 这类 App 关掉真窗后还挂着 alpha=0 的隐形辅助窗 —— 不过滤的话
+                    //   它被全量清单算成"有窗",永远进不了无窗应用名单,从环里消失
+                    //   (用户实报:关掉 CatDesk 的窗口后它不出现)
+                    let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+                    if alpha <= 0.05 || bounds.width < 50 || bounds.height < 50 { continue }
+                    allWindowedPIDs.insert(pid)
+                }
             }
+        } else {
+            allWindowedPIDs = Set(candidates.map(\.pid))
         }
-        _ = candidates // 幽灵窗启发式的可见窗账本仍服务 lastWindowedAt(上方)
+        // 不划分显示器分组,任何语境屏都展示;确认 = 激活该 App。
+        // ★ **立即入环**(2026-09-19 用户裁定):窗全关 = 马上是无窗应用,不设时限 ——
+        //   防"⌘Q 诈尸"的分工见文件头(quitPIDs + 外部 ⌘Q 死亡间隙自愈)
+        // ★ **只回最后活跃屏**(2026-09-19 用户问句):无窗 App 不再全屏撒 —— 快照里
+        //   记着它最后活在哪块屏,就只进那块屏的环;从未有过窗的真·无窗应用(无快照)
+        //   照旧任何语境屏都展示。有屏全屏时无窗条目整体退环(F2/F4 铁律,见上)
         let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
-        let probeNow = CFAbsoluteTimeGetCurrent()
+        let contextScreenName = screen.localizedName
         for app in NSWorkspace.shared.runningApplications {
             guard app.activationPolicy == .regular,
                   app.processIdentifier != ownPID,
                   !allWindowedPIDs.contains(app.processIdentifier),
                   !excludedSystemApps.contains(app.bundleIdentifier ?? ""),
                   !app.isTerminated else { continue }
-            // **善后期豁免**(T90):刚失去窗口的 pid 先观察 10s —— 窗刚关、进程还在善后的
-            // App 别急着当成无窗应用挂出来(⌘Q 后的"诈尸");超过时限仍无窗才是真·无窗应用
-            if let seen = lastWindowedAt[app.processIdentifier], probeNow - seen < windowlessProbation {
-                continue
+            if fullscreenActive { continue }                       // 全屏屏不收无窗条目(F2/F4)
+            if let ls = lastScreen(ofBundle: app.bundleIdentifier), ls != contextScreenName {
+                continue                                           // 有记忆但不是这块屏:不进
             }
             byPID[app.processIdentifier] = AppGroup(
                 pid: app.processIdentifier,
