@@ -39,7 +39,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "启动与行为", "未启动环名单", "动效"]
+            case .general: return ["外观", "启动与行为", "手势操控", "未启动环名单", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限"]
             }
@@ -65,6 +65,9 @@ struct SettingsView: View {
     @AppStorage("panel.showLaunchables") private var showLaunchables = true
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
     @AppStorage("panel.tabEntersLaunchSection") private var tabEntersLaunchSection = true
+    // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
+    @AppStorage("pointer.threeFingerTapPanel") private var threeFingerTapPanel = false
+    @AppStorage("pointer.fourFingerTapLaunchRing") private var fourFingerTapLaunchRing = false
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
     @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
@@ -203,6 +206,23 @@ struct SettingsView: View {
                             desc: "关闭后使用 ↓ 键进入。",
                             hairline: false) {
                     BeamSwitch(isOn: $tabEntersLaunchSection)
+                }
+            }
+
+            // **手势操控**(2026-09-19,用户:「这次也做成开关吧」):两枚真开关直读既有
+            // defaults 键 —— 此前这两个功能只能 `defaults write` 开,没有 UI(病例:另一台
+            // 机器装完 0.3.2 三指四指"根本唤不起来",真凶是 UserDefaults 每机独立、新机
+            // 全默认关)。键名不换:已装机用户的现网值原样继承;UserDefaults 直读 = 改了
+            // 立即生效,不重启(手势层每次事件都现读)
+            SettingsGroup(label: "手势操控", anchor: Page.general.anchor("手势操控")) {
+                SettingsRow(title: "三指点按唤起面板",
+                            desc: "三指轻点触控板唤起切换面板,该局不随松手散场。") {
+                    BeamSwitch(isOn: $threeFingerTapPanel)
+                }
+                SettingsRow(title: "四指点按进未启动环",
+                            desc: "四指轻点触控板,唤起并直接进入未启动环。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $fourFingerTapLaunchRing)
                 }
             }
 
