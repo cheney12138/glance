@@ -125,11 +125,7 @@ final class PanelController: ObservableObject {
               let previewPanel, previewPanel.isVisible, !previewPanel.ignoresMouseEvents,
               let glass = previewContentRect() else { return }
         let p = NSEvent.mouseLocation
-        guard glass.contains(p) else {
-            scheduleEntryRevert()   // 指针不在启动行:挂回退单(已挂则跳过);回到行内由 hover 撤单
-            return
-        }
-        cancelEntryRevert()
+        guard glass.contains(p) else { return }
         let (rows, cols) = launchLayout(count: launchables.count)
         let pitch = PanelMetrics.icon + PanelMetrics.iconGap
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
@@ -164,11 +160,12 @@ final class PanelController: ObservableObject {
               let glass = panelContentRect() else { return }
         let p = samplePointer()   // 帧拍顺带采样指针位移(谁后动听谁的账本)
         guard glass.contains(p) else { return }
-        // 几何与 iconStrip 同源:格宽 = icon + iconGap(命中热区并入格宽,格间无死区),
-        // 首格左缘 = 玻璃左 + rowPadX(外层 leading padding)− iconGap/2(内层负 padding 收回的半间隙)
+        // ★ **热区内缩**(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求指针
+        //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
         let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
         let i = Int(x / (PanelMetrics.icon + PanelMetrics.iconGap))
+        guard pointerInRingHotZone(i) else { return }
         // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
         let current = entrySelected ? (launchIndex ?? -1) : appIndex
         guard i != current else { return }
@@ -190,6 +187,7 @@ final class PanelController: ObservableObject {
         t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(4))
         t.setEventHandler { [weak self] in
             guard let self, self.isVisible else { return }
+            self.updateStripClickGate()   // Bug2:指针在托盘玻璃里就让长条对合成器隐身
             self.pollRingHover()
             self.resyncSelectionUnderPointer()
         }
@@ -212,47 +210,11 @@ final class PanelController: ObservableObject {
         UserDefaults.standard.object(forKey: "panel.tabEntersLaunchSection") as? Bool ?? true
     }
 
-    /// 启动区的**悬停回退单**(v9 用户裁定:主环 hover 是粘性的,启动区是悬停预览 ——
-    /// 指针离开槽和启动行,回退到最后选中的主环 app)。
-    /// 迟滞 **0.12s**(v10:0.3s 被用户实评「大概要半秒才回到」太慢)。为什么要有迟滞:
-    /// 槽(长条窗)与启动行(托盘窗)之间隔着一道缝,指针跨窗的路上 onHover(false) 先到,
-    /// 立即回退会把启动行在指针脚下拆掉 —— 永远够不着。
-    /// 判"还在启动区"的区域 = 长条玻璃 ∪ 托盘玻璃 ∪ **两块玻璃之间的缝**(走廊):
-    /// 有了走廊,迟滞收紧到 0.12s 也不会把慢速跨缝的人拦腰截断。
-    private var entryRevertWork: DispatchWorkItem?
-
-    /// 挂/重挂回退单。已挂时跳过(帧拍每帧都会来,不能每帧重置计时)。
-    func scheduleEntryRevert() {
-        guard entryRevertWork == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.entryRevertWork = nil
-            guard self.entrySelected else { return }
-            let p = NSEvent.mouseLocation
-            let strip = self.panelContentRect()
-            let tray = self.previewContentRect()
-            let inStrip = strip?.contains(p) ?? false
-            let inTray = tray?.contains(p) ?? false
-            // 缝间走廊:两块玻璃之间 y 向的空当,x 在两者的横向范围内
-            var inCorridor = false
-            if let strip, let tray {
-                let x0 = min(strip.minX, tray.minX), x1 = max(strip.maxX, tray.maxX)
-                inCorridor = p.x >= x0 && p.x <= x1 && p.y >= strip.maxY && p.y <= tray.minY
-            }
-            guard !inStrip, !inTray, !inCorridor else { return }   // 指针又回来了 → 不回退
-            self.entrySelected = false
-            self.launchIndex = nil
-            self.updatePreview()
-        }
-        entryRevertWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
-    }
-
-    func cancelEntryRevert() {
-        entryRevertWork?.cancel()
-        entryRevertWork = nil
-    }
-
+    // (2026-09-19)「悬停回退单」机制整段退役 —— 病例:四指/键盘进段后,指针不在面板上,
+    // 0.12s 后段被它静默收掉,白名单 App 还没确认就回到主环(用户实报「白名单的 App 没办法启动」,
+    // 日志:段内选中 → 半分钟后主环选中 → 确认,中间无任何段操作)。回退单是"入口槽 +
+    // 悬停预览"时代的语义(指针离开启动区 = 用户不要了);模型 C 里段只能由 ↓/四指/Tab
+    // **主动**进入,指针在不在面板上与段的生死无关 —— 段保持粘性,由 ↑/Tab/Esc/闲置超时收场。
     /// 本局内被 H 隐藏的 App。为什么要记:
     /// 隐藏是**异步**的(0.2–0.3s 动画),这期间重枚举**还看得见它的窗** ——
     /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
@@ -769,6 +731,7 @@ final class PanelController: ObservableObject {
         // 退场演出期间关掉的事件耳,开新局要还回来
         panel.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
+        stripClickGateOn = false   // 与上一行同拍复位;闸的翻动交给 60Hz 帧拍
         // (优先级断言已在 `begin()` 拿到:这里不再重复拿,免得 end→begin 把优先级抖一下)
 
         // 入场分**两层**,不是二选一(2026-09-15 用户口径:"上浮是通用的,从 c 滑动到 a 是额外的动效"):
@@ -899,13 +862,13 @@ final class PanelController: ObservableObject {
         // 不拦的话枚举回来会把面板在放弃之后又冒出来
         beginGeneration &+= 1
         removeOutsideClickMonitor()
-        cancelEntryRevert()
         entrySelected = false
         launchIndex = nil
         isVisible = false
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
         previewPanel?.ignoresMouseEvents = true
+        stripClickGateOn = false   // 长条点击闸复位(下一局 showPanel 会重新按指针状态翻)
         trace("[T6] \(reason):面板关闭")
         teardownPanel(generation: beginGeneration)
     }
@@ -1152,9 +1115,22 @@ final class PanelController: ObservableObject {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    /// key 状态变化账(2026-09-19):验证「点托盘 → 长条丢 key → 玻璃变浅 + 首击被吞」的理论
+    private func installKeyTransitionLogging() {
+        let center = NotificationCenter.default
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { note in
+                guard let w = note.object as? NSWindow, w is GlancePanel else { return }
+                let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
+                glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
+            }
+        }
+    }
+
     private func buildPanelIfNeeded() {
+        installKeyTransitionLogging()
         guard panel == nil else { return }
-        panel = makeChromePanel()
+        panel = makeChromePanel(keyable: false)
         let hosting = ClickThroughHostingView(rootView: PanelView(controller: self))
         hosting.pad = PanelMetrics.shadowPadStrip // 透明呼吸区不吃点击
         hosting.autoresizingMask = [.width, .height]
@@ -1162,13 +1138,14 @@ final class PanelController: ObservableObject {
         self.hostingView = hosting
     }
 
-    private func makeChromePanel() -> NSPanel {
+    private func makeChromePanel(keyable: Bool = true) -> NSPanel {
         let p = GlancePanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+        p.keyable = keyable
         p.isFloatingPanel = true
         p.level = .popUpMenu
         p.backgroundColor = .clear
@@ -1177,6 +1154,13 @@ final class PanelController: ObservableObject {
         p.hidesOnDeactivate = false
         p.isMovable = false
         p.acceptsMouseMovedEvents = true // hover 即选中依赖它
+        // ★ **点按不触发 key 分配**(2026-09-19 用户实报「指针选 A 的窗口,第一次点击没响应」):
+        // 托盘不是 key 窗口,真鼠标第一击会被 AppKit 拿去"把托盘设成 key"而**不派发给视图**
+        // (SwiftUI 内部视图不回 `acceptsFirstMouse`,宿主上的 override 管不到 deepest hit view),
+        // 第二击托盘已是 key 才送达 —— 就是"得点两次"。`becomesKeyOnlyIfNeeded` 让点按
+        // 直达视图,key 只在真正需要第一响应者的时刻才设置。合成 HID 点击绕过这套逻辑,
+        // 所以我自动化复现不出来 —— 这次靠真机现场抓的。
+        p.becomesKeyOnlyIfNeeded = true
         p.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
         return p
     }
@@ -1185,9 +1169,11 @@ final class PanelController: ObservableObject {
 
     private func buildPreviewPanelIfNeeded() {
         guard previewPanel == nil else { return }
-        previewPanel = makeChromePanel()
+        previewPanel = makeChromePanel(keyable: false)
         // 托盘低一层:它向下的阴影尾会伸进长条的呼吸区,demo 里长条(后一个兄弟)盖住托盘阴影,
         // 托盘在上就会把那层灰纱糊到长条玻璃顶上——"黑影"换个地方复活
+        // (2026-09-19 Bug2 期间做过"翻到长条前面"的判别实验,已还原:点击死区由
+        // `updateStripClickGate` 的合成器闸解决,不需要动 z 序)
         previewPanel!.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
         let hosting = ClickThroughHostingView(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
         hosting.pad = PanelMetrics.shadowPadPop
@@ -1414,12 +1400,22 @@ final class PanelController: ObservableObject {
                 if x < cursor + w { hit = j; break }
                 cursor += w + PanelMetrics.thumbGap
             }
-            guard let i = hit, i != winIndex else { return }
+            guard let i = hit else {
+                // 玻璃内但没命中卡片(点在 padding/行间隙):节流打一行,给"点击吞没"定位用
+                if CFAbsoluteTimeGetCurrent() - Self.lastCardMissLog > 0.5 {
+                    Self.lastCardMissLog = CFAbsoluteTimeGetCurrent()
+                    trace("[T6] 卡片未命中 (x=\(Int(x)) yUp=\(Int(yUp)) 行=\(r) start=\(start) end=\(end))")
+                }
+                return
+            }
+            guard i != winIndex else { return }
             bumpIdle()   // 同上
             winIndex = i
             trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(count)] \(names[i])")
         }
     }
+
+    nonisolated(unsafe) static var lastCardMissLog: CFAbsoluteTime = 0
 
     /// 帧拍兜底入口(与 `pollLaunchHover` 并排):窗口卡网格的**每帧**指针重定位。
     /// 为什么只做异步一跳:本函数跑在 Canvas 的绘制闭包里(视图更新中)——
@@ -1479,7 +1475,11 @@ final class PanelController: ObservableObject {
                     trace("[T91] 段切换: 未启动名单已空 → 主环 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
                     return
                 }
-                let cur = launchIndex ?? (backward ? 0 : n - 1)
+                // launchIndex == nil(↓/四指刚进段还没选)时,nil 的语义是"站在段门口":
+                // 正向 Tab 从第一格进,反向 ⇧Tab 从最后一格进 —— 而不是从段尾绕回主环!
+                // 病例(2026-09-19):↓ 进段后按 Tab 被 cur = n-1 的兜底直接推出段,
+                // 白名单 App 用键盘永远选不中 ⇒「没办法启动」。
+                let cur = launchIndex ?? (backward ? n : -1)
                 let next = cur + delta
                 if next < 0 {                   // 段头反向 → 主环最后一格
                     appIndex = groups.count - 1; winIndex = 0
@@ -1703,7 +1703,24 @@ final class PanelController: ObservableObject {
 
     /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"。
     /// `source` 区分来路(事件 / 帧拍)—— 两条路在这行账里长得一样就永远查不清"刚才谁选的"
-    func hoverApp(_ i: Int, source: String = "指针 hover") {
+    /// 指针是否落在第 i 格的 **hover 热区**(格子内缩后的中心区,见 PanelMetrics.hoverInset*)
+    /// 几何与 iconStrip 同源:首格左缘 = 玻璃左 + rowPadX − iconGap/2,格宽 = icon + iconGap
+    private func pointerInRingHotZone(_ i: Int) -> Bool {
+        guard let glass = panelContentRect() else { return false }
+        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let tileLeft = glass.minX + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
+        let rect = CGRect(
+            x: tileLeft + PanelMetrics.hoverInsetX,
+            y: glass.minY + PanelMetrics.rowPadY + PanelMetrics.hoverInsetY,
+            width: pitch - PanelMetrics.hoverInsetX * 2,
+            height: PanelMetrics.icon - PanelMetrics.hoverInsetY * 2)
+        return rect.contains(NSEvent.mouseLocation)
+    }
+
+    func hoverApp(_ i: Int, source: String = "指针 hover", strict: Bool = true) {
+        // ★ 热区内缩:指针只蹭到格子边缘 = "路过",不算选中(2026-09-19 用户裁定)。
+        //   点按路径传 strict:false —— 点击目标仍是整格,精度要求不同
+        if strict && !pointerInRingHotZone(i) { return }
         bumpIdle()
         // T91:换环后 strip 里装的是"未启动的 App" —— 同一格上的 hover 归 launchIndex,
         // 不能落到主环的 appIndex 上(那会把一套看不见的选中改掉)
@@ -1879,7 +1896,6 @@ final class PanelController: ObservableObject {
         // hover 到启动行某一格,**本身就意味着**入口槽是选中的 —— 不能再要求 entrySelected 为真:
         // 指针从入口槽(面板)走到托盘是跨窗口的一段路,状态可能已被清掉,于是"鼠标再移动也选不中"
         // (用户实报)。这里直接把它补回来,而不是让 hover 去依赖一段可能丢失的记忆。
-        cancelEntryRevert()
         guard hoverAllowedByGate(), launchables.indices.contains(i) else { return }
         entrySelected = true
         guard launchIndex != i else { return }
@@ -1900,6 +1916,28 @@ final class PanelController: ObservableObject {
         if let g = currentGroup, g.windows.indices.contains(i) {
             trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
         }
+    }
+
+    /// **卡片行点击**(2026-09-19):行内任何位置都归属最近的一张卡(含卡片之间的空隙)。
+    /// `localX` = 行坐标系横向位置(行原点 = 首卡左缘,宽度口径与 resync 完全同源)。
+    /// 曾经行内空隙是命中空洞,点击穿透托盘落到长条上,什么都不发生
+    /// (用户实报「多窗口 App 的第二张卡要点两遍」)。
+    func cardTapped(localX: CGFloat) {
+        guard let g = currentGroup, !g.windows.isEmpty else { return }
+        var cum: CGFloat = 0
+        var hit: Int?
+        for (i, w) in g.windows.enumerated() {
+            let cw = PanelMetrics.thumbWidth(aspect: w.aspect)
+            if localX < cum + cw { hit = i; break }
+            cum += cw + PanelMetrics.thumbGap
+        }
+        guard let i = hit ?? g.windows.indices.last else { return }   // 行尾空隙 = 归最后一张
+        bumpIdle()
+        if winIndex != i {
+            trace("[T6] 卡片点击(行级): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
+            winIndex = i
+        }
+        confirmSelection()
     }
 
     // MARK: - 确认与放弃
@@ -2284,8 +2322,18 @@ final class PanelController: ObservableObject {
         // 本地:自己窗口的点击(**能吞**)——点空白就是关面板,不该顺手把下层那个 App 也点开。
         // 同时它也是仲裁账本的采样点:**点击 = 指针发言**(点格选中/点红绿灯必须能立即接管,
         // 哪怕之前一直是键盘在操作)。同步记账 —— 手势处理在同一轮事件里紧随其后,异步就输了
+        // ⚠️ 2026-09-19:长条→托盘的点击矛盾不用事件转交解(试过 `sendEvent` 重投 —— 合成事件
+        // 进了托盘但 SwiftUI 手势不认,down/up 双双无声)。改用**合成器闸**(见 updateStripClickGate):
+        // 指针进托盘玻璃时长条对 WindowServer 隐身,点击由系统直接送托盘 —— 全程真实事件。
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self else { return event }
+            if isTraceEnabled {
+                let inTray = self.previewContentRect()?.contains(NSEvent.mouseLocation) ?? false
+                let inStrip = self.panelContentRect()?.contains(NSEvent.mouseLocation) ?? false
+                let m = NSEvent.mouseLocation
+                let pf = self.previewPanel?.frame ?? .zero
+                glog("[T6] 本地点击 全局=(\(Int(m.x)),\(Int(m.y))) win=\(event.windowNumber) [长=\(self.panel?.windowNumber ?? -1) 托=\(self.previewPanel?.windowNumber ?? -1) 托可见=\(self.previewPanel?.isVisible ?? false) 托框=\(Int(pf.minX)),\(Int(pf.minY)),\(Int(pf.maxX)),\(Int(pf.maxY))] 托盘内=\(inTray ? "是" : "否") 长条内=\(inStrip ? "是" : "否") 长闸=\(self.panel?.ignoresMouseEvents ?? false)")
+            }
             self.notePointerClick()
             return self.dismissIfClickOutside() ? nil : event
         }
@@ -2312,6 +2360,37 @@ final class PanelController: ObservableObject {
                                          trayContent: previewContentRect()) else { return false }
         dismiss(reason: "面板外点击,放弃")
         return true
+    }
+
+    /// **长条→托盘的合成器闸**(2026-09-19,Bug2 终审):
+    /// 托盘被故意压一层(popUpMenu - 1,demo 让长条盖住托盘的阴影尾 —— 黑影防线),而长条
+    /// 整窗框带 108pt 呼吸区、与托盘玻璃大幅重叠(实测盖进下排卡片 ~185pt)。落在这条带里的
+    /// 点击被 WindowServer 送给长条;长条 hitTest 在呼吸区返回 nil,**事件就地落地** ——
+    /// 一锤定音账:`z序=长前托后 长hit=nil 托hit=ClickThroughHostingView`。
+    /// 单行托盘的卡片在带外(一直好使),多窗口 App 撑出两行 → 下排整排在死区
+    /// —— 用户实报「多窗口 App 的第二张卡要点两遍」,实为**永远点不着**。
+    ///
+    /// 修法:指针进托盘玻璃时把长条 `ignoresMouseEvents = true`(WindowServer 整窗跳过,
+    /// 点击落到下层唯一的自家窗 = 托盘,**真实事件原路进 SwiftUI**);离开玻璃就还回来。
+    /// 两扇窗的视觉 z 序一字不动,黑影防线保留。副作用审视:
+    ///   · 闸开期间长条收不到任何鼠标事件 —— 指针在托盘玻璃里,本来就轮不到长条,无损;
+    ///   · 翻闸有 ≤16ms 帧拍延迟 —— 极快的"划出即点"可能吞一下长条点击,点击先要有
+    ///     位移、位移先被帧拍看到,实测窗口足够大;
+    ///   · hover 不受影响(长条/托盘的选中都是帧拍几何算的,不靠事件)。
+    /// 事件转交方案(重建 NSEvent 重投 `sendEvent`)实测无效 —— 合成事件进了托盘但
+    /// SwiftUI 手势不认,down/up 双双无声 —— 别再走回头路。
+    private var stripClickGateOn = false
+
+    private func updateStripClickGate() {
+        let shouldGate = isVisible
+            && previewPanel?.isVisible == true
+            && (previewContentRect()?.contains(NSEvent.mouseLocation) ?? false)
+        guard shouldGate != stripClickGateOn else { return }
+        stripClickGateOn = shouldGate
+        panel?.ignoresMouseEvents = shouldGate
+        if isTraceEnabled {
+            glog("[T6] 长条点击闸 \(shouldGate ? "开(指针在托盘玻璃,点击让给托盘)" : "关")")
+        }
     }
 
     private func removeOutsideClickMonitor() {
@@ -2351,6 +2430,10 @@ extension NSRect {
 /// (AltTab / DockDoor 等先例都是这么配的)。所以这里显式打开 `canBecomeKey`,
 /// 同时把 `canBecomeMain` 关掉 —— 它是一个浮在别人上面的工具面板,不是主窗口。
 final class GlancePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+    /// nil = 默认可 key;托盘设 false(2026-09-19):托盘若可 key,真鼠标第一击会被
+    /// AppKit 拿去"设为 key"而不派发给视图(SwiftUI 内部视图不回 acceptsFirstMouse)
+    /// —— 用户实报「第二张卡要点两遍」。托盘没有任何需要 key 的交互。
+    var keyable: Bool = true
+    override var canBecomeKey: Bool { keyable }
     override var canBecomeMain: Bool { false }
 }
