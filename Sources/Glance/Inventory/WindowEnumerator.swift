@@ -156,14 +156,32 @@ enum WindowEnumerator {
 
         // 无窗应用(T15,用户拍板):全系统一扇可见窗都没有的已打开 App,
         // 不划分显示器分组,任何语境屏都展示;确认 = 激活该 App。
-        // 判断面是 candidates(已通过幽灵窗启发式的全系统可见窗),不是本屏 records
-        let hasWindowPIDs = Set(candidates.map(\.pid))
+        // ★ **判定面 = 全量窗清单**(2026-09-19 收紧,用户本机复现):原来用 candidates
+        //   (optionOnScreenOnly 可见窗)。病例:一块屏全屏播放时,其它 Space 的窗集体离屏
+        //   —— 别屏普通桌面上的 App 被误判成"无窗",过善后期后灌进**每一块屏**的环
+        //   (同一个 App 两屏同时出现、都没有点),主环同时缩水(实测 14 → 2)。
+        //   改判据:全量窗清单(不含 onScreenOnly)里 layer 0 有窗 = 有窗,不管窗在哪个
+        //   Space。代价:**只有最小化窗的 App 也算"有窗"** → 从环消失(唤起场景下本来
+        //   就不显示它的窗卡,可接受;要恢复需 AX 分辨"最小化 vs 别屏 Space",复杂度另议)
+        var allWindowedPIDs: Set<pid_t> = []
+        if let allInfos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] {
+            for info in allInfos {
+                guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                      let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                      bounds.width > 1, bounds.height > 1
+                else { continue }
+                allWindowedPIDs.insert(pid)
+            }
+        }
+        _ = candidates // 幽灵窗启发式的可见窗账本仍服务 lastWindowedAt(上方)
         let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
         let probeNow = CFAbsoluteTimeGetCurrent()
         for app in NSWorkspace.shared.runningApplications {
             guard app.activationPolicy == .regular,
                   app.processIdentifier != ownPID,
-                  !hasWindowPIDs.contains(app.processIdentifier),
+                  !allWindowedPIDs.contains(app.processIdentifier),
                   !excludedSystemApps.contains(app.bundleIdentifier ?? ""),
                   !app.isTerminated else { continue }
             // **善后期豁免**(T90):刚失去窗口的 pid 先观察 10s —— 窗刚关、进程还在善后的
