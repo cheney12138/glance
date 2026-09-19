@@ -35,9 +35,24 @@ struct SettingsView: View {
             case .about: return "info.circle"
             }
         }
+        /// 本页的**组标题 = 侧栏子菜单**(2026-09-19 用户:「把每一个目录的一级菜单挪出来,
+        /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
+        var groups: [String] {
+            switch self {
+            case .general: return ["外观", "启动与行为", "未启动环名单", "动效"]
+            case .shortcut: return ["触发", "导航", "窗口操作"]
+            case .about: return ["权限"]
+            }
+        }
+        func anchor(_ group: String) -> String { "\(rawValue):\(group)" }
     }
 
     @State private var page: Page = .general
+    /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
+    /// 子菜单点击 = 页内滚动定位。nil = 不定位
+    @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
+    /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
+    @State private var launchEditor: LaunchListEditor.Kind?
     @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
     @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
@@ -60,10 +75,19 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             prismEdge
-            SettingsTabRail(page: $page)
-                .padding(.top, SettingsMetrics.tabsTop)
-                .padding(.bottom, SettingsMetrics.tabsBottom)
-            content
+            HStack(spacing: 0) {
+                // 左侧目录:页面行 + 当前页的组子菜单(点了直接跳组,不用页内翻找)
+                SettingsTabRail(page: $page, selection: $navSelection)
+                    .padding(.top, SettingsMetrics.tabsTop + SettingsMetrics.railTopClear)
+                    .padding(.bottom, SettingsMetrics.tabsBottom)
+                    .frame(width: SettingsMetrics.sidebarW, alignment: .top)
+                // 目录与内容之间一道发丝(行 hairline 的同款色,不做新语言)
+                Rectangle()
+                    .fill(SettingsTheme.hairline)
+                    .frame(width: SettingsMetrics.hairline)
+                    .padding(.vertical, SettingsMetrics.tabsTop)
+                content
+            }
         }
         .frame(width: SettingsMetrics.windowW, height: SettingsMetrics.contentH)
         // 纸铺满整窗:窗口用 `.hiddenTitleBar`,红绿灯直接浮在这张纸的左上角(demo 的构图)
@@ -75,6 +99,12 @@ struct SettingsView: View {
         // 不豁免的话整条光带会被顶下去 32pt(实测 39 → 71),跟 demo 就不是一回事了。
         // 红绿灯占的是最上面 0…32pt,光带在 39pt,不会撞上。
         .ignoresSafeArea(.container, edges: .top)
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // ★ 窗口根:焦点环全窗禁用
+        // ★ 名单编辑器的弹出点挂在**窗口根**:曾深挂在 ScrollView 内的组上 ——
+        //   macOS 上滚动容器内的 sheet 有"首击不弹,得点两次"的怪癖(2026-09-19 用户实报)
+        .sheet(item: $launchEditor) { kind in
+            LaunchListEditor(kind: kind)
+        }
         .onAppear { systemReduced = MotionPolicy.systemReduced }
     }
 
@@ -87,18 +117,42 @@ struct SettingsView: View {
     }
 
     private var content: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: SettingsMetrics.groupGap) {
-                switch page {
-                case .general: generalPane
-                case .shortcut: ShortcutPane()
-                case .about: aboutPane
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: SettingsMetrics.groupGap) {
+                    switch page {
+                    case .general: generalPane
+                    case .shortcut: ShortcutPane()
+                    case .about: aboutPane
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SettingsMetrics.contentPadX)
+                .padding(.top, SettingsMetrics.contentPadTop)
+                .padding(.bottom, SettingsMetrics.contentPadBottom)
+            }
+            // **关掉到顶回弹**(2026-09-19,用户录屏自诊:「滚到头之后回弹不顺畅,一卡一卡的」):
+            // 帧账证明滚动期主线程很闲(P95 8.4ms@120Hz),磕绊出在系统橡皮筋动画本身的节奏,
+            // App 摸不到它 —— 那就不要回弹:惯性到顶后顺滑减速停住。SwiftUI 没有这个开关,
+            // 借 background 钩子摸到底下的 NSScrollView 关竖向弹性
+            .background(ScrollElasticityHook())
+            // **顶部预留带**(2026-09-19,用户实报「滚动的时候还是到顶了」):视口顶部常驻
+            // 18pt 纸色渐隐 —— 手动滚动时组标题最多走到带下沿才开淡出,不再顶到棱镜边;
+            // 锚点 scrollTo 的落点也在带下方(导航与手动滚动共用同一条边距,spec §2)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                LinearGradient(colors: [SettingsTheme.paper, SettingsTheme.paper.opacity(0)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: SettingsMetrics.scrollTopPad)
+                    .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
+            }
+            // 侧栏子菜单点了 ⇒ 滚到对应组(锚点 id 由 SettingsGroup 挂)
+            .onChange(of: navSelection) { _, sel in
+                guard let sel else { return }
+                withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
+                    proxy.scrollTo(sel, anchor: .top)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, SettingsMetrics.contentPadX)
-            .padding(.top, SettingsMetrics.contentPadTop)
-            .padding(.bottom, SettingsMetrics.contentPadBottom)
         }
     }
 
@@ -106,7 +160,7 @@ struct SettingsView: View {
 
     private var generalPane: some View {
         Group {
-            SettingsGroup(label: "外观") {
+            SettingsGroup(label: "外观", anchor: Page.general.anchor("外观")) {
                 SettingsRow(title: "颜色外观", desc: "面板与设置窗口同步生效。") {
                     BeamSegmented(options: [
                         .init(id: AppearancePreference.auto, label: "自动"),
@@ -132,7 +186,7 @@ struct SettingsView: View {
             }
             .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
 
-            SettingsGroup(label: "启动与行为") {
+            SettingsGroup(label: "启动与行为", anchor: Page.general.anchor("启动与行为")) {
                 SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
@@ -152,7 +206,20 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsGroup(label: "动效") {
+            SettingsGroup(label: "未启动环名单", anchor: Page.general.anchor("未启动环名单")) {
+                SettingsRow(title: "白名单",
+                            desc: "不在 Dock 常驻的 App 也会进未启动环。") {
+                    listCountButton(.whitelist)
+                }
+                SettingsRow(title: "黑名单",
+                            desc: "即使 Dock 常驻也不进未启动环。",
+                            hairline: false) {
+                    listCountButton(.blacklist)
+                }
+            }
+
+
+            SettingsGroup(label: "动效", anchor: Page.general.anchor("动效")) {
                 SettingsRow(title: "系统减弱动态效果") {
                     RowValue(systemReduced ? "已开启" : "未开启")
                 }
@@ -175,16 +242,20 @@ struct SettingsView: View {
 
     private var aboutPane: some View {
         Group {
-            // 品牌头(2026-09-18 用户:「面板就没有 glance 的图标」—— 设置页通篇没有 App 图标,
-            // CodeIsland 有,惯例缺失):图标直接取 NSApplication 的实际图标(与 Finder/Dock 同源,
-            // 换 AppIcon 资产时这里自动跟)。名称与版本并进这枚头 —— 原「版本信息」两行文字
-            // 被它完全复述,按文案纪律第 1 条删除
-            HStack(spacing: 14) {
+            // 品牌头(2026-09-19 二修,布局听用户的):**大图标独占一排、左右居中**,
+            // 距上方留一点高度;下面才是正常的文字内容(名称/版本行 + 权限组)。
+            // 图标直接取 NSApplication 的实际图标(与 Finder/Dock 同源,换资产自动跟)
+            VStack(spacing: 0) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+                    .frame(width: 128, height: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: 29, style: .continuous))
+                    .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+            }
+            .frame(maxWidth: .infinity)   // 左右居中
+            .padding(.top, 18)            // "距离上方有一点点的高度"
+            .padding(.bottom, 6)          // 图标与文字之间只留呼吸:外层 VStack 的 groupGap 会再垫一层,这里给多了就空
+            HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Glance")
                         .font(.system(size: 17, weight: .semibold))
@@ -195,7 +266,7 @@ struct SettingsView: View {
                 Spacer()
             }
             .padding(.bottom, 14)   // 左缘与 SettingsGroup 的组标题胶囊/行标题同线(都从 contentPadX 起步)
-            SettingsGroup(label: "权限") {
+            SettingsGroup(label: "权限", anchor: Page.about.anchor("权限")) {
                 SettingsRow(title: "辅助功能", desc: "用于读取与聚焦窗口。缺失时切换器无法工作。") {
                     PermissionBadge(granted: permissions.accessibilityGranted)
                 }
@@ -214,6 +285,285 @@ struct SettingsView: View {
     /// demo 里没有任何刻度语言。连续拖动、落在整数上,读数与 `PanelMetrics` 读到的值一致。
     private var clearanceBinding: Binding<Double> {
         Binding(get: { iconClearance }, set: { iconClearance = $0.rounded() })
+    }
+
+    /// 名单行尾部的操作入口:描边胶囊「N 个 ›」—— 之前的裸数字读不出"能点",
+    /// 用户实评「你倒是给我添加操作入口啊」。胶囊 = 这一页"可点"的通用暗示,不另立语言。
+    private func listCountButton(_ kind: LaunchListEditor.Kind) -> some View {
+        Button {
+            launchEditor = kind
+        } label: {
+            HStack(spacing: 5) {
+                Text("\(DockAppsProvider.listCount(forKey: kind.defaultsKey)) 个")
+                    .font(SettingsFont.rowValue)
+                    .foregroundStyle(SettingsTheme.ink)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.ink2)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().strokeBorder(SettingsTheme.hairline, lineWidth: SettingsMetrics.hairline)
+            )
+            // ★ 描边胶囊内部是透明的,SwiftUI 命中测试只认不透明像素 ——
+            //   不补 contentShape 的话只有文字能点(用户实报「只能点到 4 上面」)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+    }
+}
+
+/// 借 background 钩子摸到 SwiftUI `ScrollView` 底下的 NSScrollView,关掉竖向橡皮筋。
+/// 为什么要摸(2026-09-19,用户录屏自诊):设置窗滚动到顶的回弹"一卡一卡的" —— 帧账
+/// (FrameProbe)证明滚动期主线程很闲,磕绊出在系统弹性动画的节奏本身,SwiftUI 又
+/// 不给关它的开关;`verticalScrollElasticity = .disallowed` 后惯性到顶顺滑减速停住。
+/// 只动竖向(本页没有横向滚动),不动其它 App 的任何滚动行为
+private struct ScrollElasticityHook: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { HookView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class HookView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            var p: NSView? = superview
+            while let v = p {
+                if let sv = v as? NSScrollView {
+                    sv.verticalScrollElasticity = .none
+                    return
+                }
+                p = v.superview
+            }
+        }
+    }
+}
+
+// MARK: - 未启动环名单(白/黑名单,2026-09-19)
+
+/// 名单编辑器:白/黑共用一套骨架,只有文案与存取 key 不同。
+/// 条目行内 − 删除;「添加 App…」弹选择器。**两名单互斥由选择器保证** ——
+/// 已在对方名单的 App 根本不出现(用户裁定,spec note 6),冲突从根上不发生。
+private struct LaunchListEditor: View {
+    enum Kind: String, Identifiable {
+        case whitelist, blacklist
+        var id: String { rawValue }
+        var title: String { self == .whitelist ? "白名单" : "黑名单" }
+        var desc: String {
+            self == .whitelist ? "这些 App 不在 Dock 常驻也会进未启动环。"
+                               : "这些 App 即使 Dock 常驻也不进未启动环。"
+        }
+        var defaultsKey: String { "launch.\(rawValue)" }
+        /// 对方名单的 key:选择器的排除集 = 两名单并集
+        var otherKey: String { self == .whitelist ? "launch.blacklist" : "launch.whitelist" }
+    }
+
+    let kind: Kind
+    @State private var ids: [String] = []
+    @State private var showingPicker = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                TrafficLightClose { dismiss() }
+                Spacer()
+            }
+            .padding(.leading, 16)
+            .padding(.top, 12)
+            Text(kind.title)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 6)
+            Text(kind.desc)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+            if ids.isEmpty {
+                Text("还没有 App。点下面「添加 App…」挑一个。")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(ids, id: \.self) { id in
+                            listRow(id)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .padding(.top, 10)
+            }
+            HStack {
+                Button {
+                    showingPicker = true
+                } label: {
+                    Text("添加 App…")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                // 蓝框 = 系统焦点环(2026-09-19 用户:「不要这个蓝框」);这一页的按钮都不吃焦点
+                .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+        }
+        .frame(width: 440, height: 380, alignment: .topLeading)
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // ★ sheet 根   // 内容从左上起,不再垂直居中悬着
+        .onAppear { ids = UserDefaults.standard.stringArray(forKey: kind.defaultsKey) ?? [] }
+        .sheet(isPresented: $showingPicker) {
+            AppPicker(exclude: Self.combinedIDs(except: kind)) { id in
+                ids.append(id)
+                save()
+            }
+        }
+    }
+
+    private func listRow(_ id: String) -> some View {
+        let app = DockAppsProvider.resolvedApp(id)
+        return HStack(spacing: 10) {
+            Image(nsImage: app.icon)
+                .resizable()
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(app.name)
+                    .font(.system(size: 12.5))
+                Text(app.path)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button {
+                ids.removeAll { $0 == id }
+                save()
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+            .help("从名单移除")
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
+    private func save() {
+        DockAppsProvider.setList(ids, forKey: kind.defaultsKey)
+    }
+
+    /// 两名单并集(去掉自己这边的)—— 选择器的排除集,互斥的实现点
+    static func combinedIDs(except kind: Kind) -> Set<String> {
+        var all = Set(UserDefaults.standard.stringArray(forKey: kind.otherKey) ?? [])
+        all.formUnion(UserDefaults.standard.stringArray(forKey: kind.defaultsKey) ?? [])
+        return all
+    }
+}
+
+/// 应用选择器:扫 /Applications 与 /System/Applications(两级深),图标 + 名称 + 搜索。
+/// 已在任一名单里的 App 不出现(互斥);本 App 自己也不出现(把自己加进未启动环没有意义)。
+private struct AppPicker: View {
+    let exclude: Set<String>
+    let onAdd: (String) -> Void
+    @State private var query = ""
+    @State private var apps: [DockAppsProvider.InstalledApp] = []
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                // 左上角关闭钮 = 公共红绿灯单灯(与窗口红绿灯同一套语言)
+                TrafficLightClose { dismiss() }
+                Spacer()
+            }
+            .padding(.leading, 16)
+            .padding(.top, 12)
+            Text("添加 App")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 6)
+            TextField("搜索", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+                // 搜索收窄到**唯一**一个 App 时,回车直接收录(2026-09-19 用户要求)
+                .onSubmit {
+                    if filtered.count == 1 {
+                        onAdd(filtered[0].id)
+                        dismiss()
+                    }
+                }
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(filtered) { app in
+                        row(app)
+                    }
+                    if filtered.isEmpty {
+                        Text("没有匹配的 App")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 16)
+                    }
+                }
+                .padding(.horizontal, 24)
+            }
+            .padding(.top, 10)
+            HStack {
+                Spacer()
+                Button("完成") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+        }
+        .frame(width: 440, height: 420)
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // ★ sheet 根
+        .onAppear { apps = DockAppsProvider.scanInstalledApps() }
+    }
+
+    private var filtered: [DockAppsProvider.InstalledApp] {
+        apps.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private func row(_ app: DockAppsProvider.InstalledApp) -> some View {
+        Button {
+            onAdd(app.id)
+            dismiss()
+        } label: {
+            HStack(spacing: 10) {
+                Image(nsImage: app.icon)
+                    .resizable()
+                    .frame(width: 24, height: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(app.name)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.primary)
+                    Text(app.path)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -240,7 +590,7 @@ struct ShortcutPane: View {
 
     var body: some View {
         Group {
-            SettingsGroup(label: "触发") {
+            SettingsGroup(label: "触发", anchor: SettingsView.Page.shortcut.anchor("触发")) {
             SettingsRow(title: "双击 ⌥ 指针跳到另一块屏",
                         desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
                 BeamSwitch(isOn: $doubleOptionJumps)
@@ -286,7 +636,7 @@ struct ShortcutPane: View {
                     .help(recording ? "按 Esc 取消录制" : "点一下开始录制新的触发键")
                 }
             }
-            SettingsGroup(label: "导航") {
+            SettingsGroup(label: "导航", anchor: SettingsView.Page.shortcut.anchor("导航")) {
                 SettingsRow(title: "App 内切换窗口", key: "`", desc: "在同一个 App 的窗口之间移动。") {
                     BeamSwitch(isOn: $graveCyclesWindows)
                 }
@@ -298,7 +648,7 @@ struct ShortcutPane: View {
                     KeyChip(text: "松开 " + config.modifierSymbol + " / Esc")
                 }
             }
-            SettingsGroup(label: "窗口操作") {
+            SettingsGroup(label: "窗口操作", anchor: SettingsView.Page.shortcut.anchor("窗口操作")) {
                 SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "操作完成后面板保持打开。") {
                     KeyChip(text: "Q / W / M")
                 }
