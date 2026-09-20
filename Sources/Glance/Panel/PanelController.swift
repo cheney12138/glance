@@ -1980,10 +1980,19 @@ final class PanelController: ObservableObject {
             case .hide:
                 continue // 理论到不了(H 自己处理),留着只为穷尽枚举
             case .close, .minimize:
-                // 关掉 / 最小化的那扇窗离开列表(最小化窗我们本来就不列);组空了就把组也去掉
+                // 关掉 / 最小化的那扇窗离开列表(最小化窗我们本来就不列)。
+                // ★ 组空了**不再摘组**(2026-09-20 用户:「cmd w 只是关闭窗口,不需要从环里
+                //   杀掉」):进程还在 = 无窗应用(T15),原地保留、只清窗卡 —— 与 H 的
+                //   "位置不变,只是窗口消失"同一语义。App 若因关末窗自动退出,下一次
+                //   重枚举自然摘它(进程不在了)
                 let keep = group.windows.enumerated().filter { $0.offset != winIndex }.map(\.element)
-                if !keep.isEmpty { next.append(AppGroup(pid: group.pid, appName: group.appName,
-                                                        bundleID: group.bundleID, windows: keep)) }
+                if !keep.isEmpty {
+                    next.append(AppGroup(pid: group.pid, appName: group.appName,
+                                         bundleID: group.bundleID, windows: keep))
+                } else if NSRunningApplication(processIdentifier: group.pid)?.isTerminated == false {
+                    next.append(AppGroup(pid: group.pid, appName: group.appName,
+                                         bundleID: group.bundleID, windows: []))
+                }
             case .zoom, .fullscreen:
                 next.append(group) // 不摘(见上面的理由),等核对
             }
@@ -2203,17 +2212,29 @@ final class PanelController: ObservableObject {
                 // 位置不动,只换内容(窗多了少了都还在这格)。但**我们刚摘掉的窗**要按住,
                 // 否则 0.2s 后它诈尸回来一次(见 purgedWIDs 的病例)
                 let kept = f.windows.filter { !purgedWIDs.contains($0.wid) }
-                if kept.isEmpty { continue }                       // 整组都被摘了:这一组先不进
-                merged.append(kept.count == f.windows.count ? f
-                              : AppGroup(pid: f.pid, appName: f.appName,
-                                         bundleID: f.bundleID, windows: kept))
+                if kept.isEmpty {
+                    // ★ **窗全没了 ≠ App 没了**(2026-09-20 用户:「cmd w 只是关闭窗口,
+                    //    不需要从环里杀掉」):W 关掉最后一扇窗后,进程还活着 —— 它是
+                    //    无窗应用(T15),**原地保留**(顺序冻结,不挪窝),只清空窗卡。
+                    //    App 真死了的话(有的 App 关末窗即退出),下一次重枚举自然摘它
+                    if NSRunningApplication(processIdentifier: old.pid)?.isTerminated == false {
+                        merged.append(AppGroup(pid: old.pid, appName: old.appName,
+                                               bundleID: old.bundleID, windows: []))
+                    }
+                } else {
+                    merged.append(kept.count == f.windows.count ? f
+                                  : AppGroup(pid: f.pid, appName: f.appName,
+                                             bundleID: f.bundleID, windows: kept))
+                }
             }
             // 不在 fresh 里 = 这个 App 真的没了(退出)→ 丢掉
         }
         for g in fresh where !seen.contains(g.pid)
             && !hiddenPIDs.contains(g.pid) && !quitPIDs.contains(g.pid) {
+            // ★ 无窗条目(T15)照样收 —— 原来的 `guard !kept.isEmpty` 把它拦掉了,
+            //   W 之后 0.18s 的重枚举明明带回了它,却没请回环里(用户实报"被杀")
             let kept = g.windows.filter { !purgedWIDs.contains($0.wid) }
-            guard !kept.isEmpty else { continue }
+            guard !kept.isEmpty || g.windows.isEmpty else { continue }
             // 本局中途新出现的 App 挂到**尾部**:不插队,免得又跳一次
             merged.append(kept.count == g.windows.count ? g
                           : AppGroup(pid: g.pid, appName: g.appName, bundleID: g.bundleID, windows: kept))
