@@ -1,7 +1,7 @@
-# Glance
-
 <p align="center">
-  <img src="docs/assets/icon.png" alt="Glance" width="100" />
+  <img src="docs/assets/icon.png" alt="Glance logo" width="110" />
+  <br>
+  <img src="docs/assets/wordmark.png" alt="glance" width="240" />
 </p>
 
 A per-display macOS app switcher. Each screen has its own switcher, and confirming
