@@ -53,25 +53,25 @@ struct SettingsView: View {
     @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
-    @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
+    @AppStorage(Keys.debugPinPanelOnRelease) private var pinPanel = false
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
-    @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
+    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = true
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
-    @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
+    @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
-    @AppStorage("panel.showLaunchables") private var showLaunchables = true
+    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = true
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
-    @AppStorage("panel.tabEntersLaunchSection") private var tabEntersLaunchSection = true
+    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = true
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
-    @AppStorage("pointer.threeFingerTapPanel") private var threeFingerTapPanel = false
-    @AppStorage("pointer.fourFingerTapLaunchRing") private var fourFingerTapLaunchRing = false
+    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = false
+    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = false
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
-    @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
-    @AppStorage("panel.sheen") private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -594,19 +594,19 @@ struct ShortcutPane: View {
     @State private var recording = false
     @State private var monitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
-    @AppStorage("switch.advanceOnOpen") private var advanceOnOpen = true
+    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = true
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
-    @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
+    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = false
     /// 双击 ⌥ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)。
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
-    @AppStorage("pointer.doubleOptionJumps") private var doubleOptionJumps = false
+    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = false
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
-    @AppStorage("switch.scrollMovesSelection") private var scrollMovesSelection = true
+    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = true
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
     /// 滑杆若线性映射到间隔,两端手感会严重不均(慢端几乎不动)。默认 10 = 原 0.10s。
-    @AppStorage("panel.scrollSpeed") private var scrollSpeed: Double = 10
+    @AppStorage(Keys.panelScrollSpeed) private var scrollSpeed: Double = 10
 
     var body: some View {
         Group {
@@ -693,12 +693,12 @@ struct ShortcutPane: View {
             get: { TriggerConfig.takeoverEnabled },
             set: { on in
                 if on {
-                    UserDefaults.standard.set(0x30, forKey: "trigger.keyCode")
-                    UserDefaults.standard.set("command", forKey: "trigger.modifier")
+                    UserDefaults.standard.set(0x30, forKey: Keys.triggerKeyCode)
+                    UserDefaults.standard.set("command", forKey: Keys.triggerModifier)
                     TriggerConfig.setTakeover(true)
                 } else {
-                    UserDefaults.standard.removeObject(forKey: "trigger.keyCode")
-                    UserDefaults.standard.removeObject(forKey: "trigger.modifier")
+                    UserDefaults.standard.removeObject(forKey: Keys.triggerKeyCode)
+                    UserDefaults.standard.removeObject(forKey: Keys.triggerModifier)
                     TriggerConfig.setTakeover(false)
                 }
                 config = TriggerConfig.load()
@@ -713,8 +713,8 @@ struct ShortcutPane: View {
             if event.keyCode == 0x35 { stopRecording(); return nil } // Esc 取消
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard let mod = allowedModifier(in: flags) else { return event } // 没有合法修饰键,继续等
-            UserDefaults.standard.set(Int(event.keyCode), forKey: "trigger.keyCode")
-            UserDefaults.standard.set(mod, forKey: "trigger.modifier")
+            UserDefaults.standard.set(Int(event.keyCode), forKey: Keys.triggerKeyCode)
+            UserDefaults.standard.set(mod, forKey: Keys.triggerModifier)
             // 录到与系统热键重叠的和弦(⌘Tab / ⌘`)→ 显式标记"用户要接管"。
             // 不标的话原生那条会在 Dock/WindowServer 层就吃掉事件,我们注册的 Carbon 热键根本收不到
             // (见 docs/adr/0005);标记之后那个开关会跟着亮起来,用户看得见自己动了什么。

@@ -16,7 +16,7 @@ struct PreviewPanelView: View {
     @ObservedObject var snapshotter: Snapshotter
     // (S2.1)托盘**不再**观察整个池:每张卡各自观察自己那一个帧盒子 ⇒ 只重绘那一张卡 ✓
     /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
-    @AppStorage("panel.sheen") private var glow = true
+    @AppStorage(Keys.panelSheen) private var glow = true
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
@@ -131,7 +131,7 @@ struct PreviewPanelView: View {
         let liveAspect = liveFrame.map { CGFloat($0.width) / CGFloat($0.height) }
         let shotAspect = shot?.cgImage(forProposedRect: nil, context: nil, hints: nil)
             .map { CGFloat($0.width) / CGFloat($0.height) }
-        if UserDefaults.standard.bool(forKey: "debug.dumpSources") {
+        if UserDefaults.standard.bool(forKey: Keys.debugDumpSources) {
             let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
             SourceDump.dump(key: "shot-\(w.wid)", shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
             SourceDump.dump(key: "live-\(w.wid)", liveFrame, dir)
@@ -512,7 +512,7 @@ final class LivePreviewPool: ObservableObject {
     }
 
     /// 帧率档位 = 设置里的「实时预览」。**"0" = 关**(默认)。S4 起会分成"选中/其余"两档。
-    static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: "live.previewTier") ?? "0") ?? 0) }
+    static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: Keys.livePreviewTier) ?? "0") ?? 0) }
     static var enabled: Bool { tierFps > 0 }
     /// 流数上限(LRU 淘汰)
     /// 流数上限:**必须 ≥ 环里的窗口数**(实测环里 ~14 窗)⇒ 给 24 是防呆,不是节流阀。

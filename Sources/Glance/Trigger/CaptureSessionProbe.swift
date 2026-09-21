@@ -42,7 +42,7 @@ enum CaptureSessionProbe {
     ///
     ///     defaults write com.cheney12138.macswitcher switch.captureApps -array "com.foo.bar"
     private static var extraBundleIDs: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: "switch.captureApps") ?? [])
+        Set(UserDefaults.standard.stringArray(forKey: Keys.switchCaptureApps) ?? [])
     }
 
     // MARK: - 采集

@@ -136,16 +136,16 @@ final class HotkeyTapCenter {
     /// 默认**关**:它动的是系统级快捷键的肌肉记忆,只能用户显式开(与接管 ⌘Tab 同一纪律)。
     private static let keyGrave: Int64 = 0x32
     private static var graveCyclesWindows: Bool {
-        UserDefaults.standard.object(forKey: "switch.graveCyclesWindows") as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? false
     }
     /// 面板出现期间是否接管滚动(设置里的「双指滑动换组」,默认开)。
     /// 关掉时必须**放行**:设置里的说明写着"关闭后…照常交给底下的应用"。
     private static var scrollMovesSelection: Bool {
-        UserDefaults.standard.object(forKey: "switch.scrollMovesSelection") as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.switchScrollMovesSelection) as? Bool ?? true
     }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
-    private var pinPanel: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+    private var pinPanel: Bool { UserDefaults.standard.bool(forKey: Keys.debugPinPanelOnRelease) }
 
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
@@ -184,8 +184,8 @@ final class HotkeyTapCenter {
     private func normalizeLegacyTakeoverState() {
         guard !TriggerConfig.takeoverEnabled,
               NativeHotkeys.overlapsNativeHotkey(TriggerConfig.load()) else { return }
-        UserDefaults.standard.removeObject(forKey: "trigger.keyCode")
-        UserDefaults.standard.removeObject(forKey: "trigger.modifier")
+        UserDefaults.standard.removeObject(forKey: Keys.triggerKeyCode)
+        UserDefaults.standard.removeObject(forKey: Keys.triggerModifier)
         print("[T13] 未开启「接管系统切换器」:触发键已归位到 ⌥Tab,系统热键一行没动")
     }
 

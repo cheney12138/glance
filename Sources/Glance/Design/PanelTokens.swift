@@ -46,7 +46,7 @@ enum PanelMetrics {
     /// 选中图标**放大之后**,它的画面与左右邻居画面之间还要留多少净空 —— 这才是"呼吸感"
     /// 真正的设计量,间隙由它倒推,不写死。可在设置 → 通用 里现场调(也随尺寸同比例缩放)。
     static var iconClearance: CGFloat {
-        let v = UserDefaults.standard.object(forKey: "panel.iconClearance") as? Double
+        let v = UserDefaults.standard.object(forKey: Keys.panelIconClearance) as? Double
         return k(v.map { CGFloat($0) } ?? 13)
     }
     /// 选中放大后,图标**画面**相对格子单侧溢出的量。
