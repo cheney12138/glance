@@ -166,16 +166,13 @@ struct PanelView: View {
     /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
     /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
     private var segmentTransition: AnyTransition {
-        switch controller.segmentTravel {
-        case .forward:
-            return .asymmetric(insertion: .opacity.combined(with: .offset(x: 14)),
-                               removal: .opacity.combined(with: .offset(x: -14)))
-        case .backward:
-            return .asymmetric(insertion: .opacity.combined(with: .offset(x: -14)),
-                               removal: .opacity.combined(with: .offset(x: 14)))
-        case .direct:
-            return .opacity
-        }
+        // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效,直接毙掉」。
+        // 病例:选中 app B 的**非第一个**窗口,再直接 hover 到相邻 app A
+        //       ⇒ 新一组的卡片**左滑入场** ✗(窗口集合被判成"插入" ⇒ 播放 x:±14 的位移)。
+        //       同类误触发还有:IDE 类 app 开场几帧刷新窗口列表 ⇒ 也会被判成插入。
+        // ⇒ 位移**整段删除**,只保留淡切(opacity —— 淡切不是"滑入",换内容时不产生任何横向移动)。
+        // 注:`segmentTravel`(forward/backward)因此不再被使用,留给后面的清理步骤一起收(见 docs/live-preview-设计.md)。
+        return .opacity
     }
 
     private var iconStrip: some View {
