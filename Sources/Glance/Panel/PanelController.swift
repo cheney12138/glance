@@ -816,6 +816,8 @@ final class PanelController: ObservableObject {
             if isTraceEnabled, UserDefaults.standard.bool(forKey: "debug.screenProbe") {
                 self?.probeShownFrames(panel)
             }
+            // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
+            if let hv = panel.contentView { HzCompare.shared.run(panelView: hv) }
         }
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
