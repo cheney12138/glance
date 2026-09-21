@@ -11,7 +11,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 DOMAIN=com.cheney12138.macswitcher
-KEY="${2:-debug.noStripShadow}"
+KEY="${2:-}"
+
+if [[ -z "${2:-}" ]]; then
+  echo "✗ 必须写明键名（防呆：省略时上一个默认值会让人以为在测另一个开关）"
+  echo "  用法：bash Tools/ab.sh off|on|clear debug.键名"
+  echo "  例：  bash Tools/ab.sh on debug.noGlass"
+  exit 1
+fi
 
 case "${1:-}" in
   off)   defaults write "$DOMAIN" "$KEY" -bool false; echo "  开关 ${KEY} = **关**" ;;
