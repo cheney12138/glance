@@ -18,10 +18,6 @@ enum Keys {
 
     // MARK: debug —— 调试开关（重诊断一律默认关）
 
-    /// `debug.noGlass`
-    static let debugNoGlass = "debug.noGlass"
-    /// `debug.noStripShadow`
-    static let debugNoStripShadow = "debug.noStripShadow"
     /// `debug.autoOpenSettings`
     static let debugAutoOpenSettings = "debug.autoOpenSettings"
     /// `debug.axprobePid`

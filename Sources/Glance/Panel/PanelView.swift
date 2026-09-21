@@ -55,14 +55,9 @@ struct PanelView: View {
             // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
             // 上一版减了,算出负圆角喂给 NSGlassEffectView,玻璃形状当场失真
             // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
-            // 🔬 临时消元:debug.noGlass=1 时换成实心色(只为了量尖峰,观感会明显变差 ✓ 验完删)
-            if DebugFlags.noGlass {
-                Color.black.opacity(0.55)
-            } else {
-                GlassBackground(cornerRadius: controller.hintText == nil
-                                ? PanelMetrics.rPanel
-                                : PanelMetrics.hintContentSize.height / 2)
-            }
+            GlassBackground(cornerRadius: controller.hintText == nil
+                            ? PanelMetrics.rPanel
+                            : PanelMetrics.hintContentSize.height / 2)
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
@@ -157,7 +152,7 @@ struct PanelView: View {
         // 投影:长条用 .strip;芯片(说话局)换 .puck —— .strip 的深色 α .62 是大面板的配重,
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
-        .elevation(controller.hintText == nil ? .strip : .puck, active: !DebugFlags.noStripShadow)
+        .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         .focusEffectDisabled(true)   // ★ 窗口根:切换器面板永不出现焦点环
         // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里

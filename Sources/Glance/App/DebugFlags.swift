@@ -48,18 +48,6 @@ enum DebugFlags {
 
     // MARK: 启动期一次性开关
 
-    /// 🔬 **临时消元开关**（2026-09-21，第三刀：查"换选中那一拍的尖峰"）：
-    /// 把长条的**玻璃**换成一块实心色（`GlassBackground` → 纯色）。GPU/合成侧的最后嫌疑人。
-    /// 与 2026-09-16 那次 `debug.noGlass` 的区别：那次只比 **P50 节奏**（结论"与玻璃无关" ✓），
-    /// **没比尖峰**（max / 长帧条数）⇒ 这次比的是尖峰 ✓。验证完删掉。
-    static var noGlass: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoGlass) }
-
-    /// 🔬 **临时消元开关**（2026-09-21，查"Tab 换选中那一拍 20ms 长帧"）：
-    /// 掐掉长条自己的大投影（`.elevation(.strip)` —— 在一张 1758×374 的圆角矩形上做离屏光栅化）。
-    /// 已验证我们自己的代码 < 2ms（`traceCost` 的阈值就是 2ms，20 次 Tab 一行都没打）
-    /// ⇒ 钱在渲染 ⇒ 逐个消元。验证完**删掉本开关**。
-    static var noStripShadow: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoStripShadow) }
-
     /// 启动后直接打开设置面板（改设置时省去手点）。
     static var autoOpenSettings: Bool { UserDefaults.standard.bool(forKey: Keys.debugAutoOpenSettings) }
 
@@ -83,8 +71,6 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
-        ("debug.noStripShadow", noStripShadow, "**改变观感**：掐掉长条投影（消元用，验证完删掉）"),
-        ("debug.noGlass", noGlass, "**改变观感**：长条玻璃换实心色（消元用，验证完删掉）"),
     ]
 
     /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
