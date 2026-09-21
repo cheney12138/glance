@@ -131,7 +131,7 @@ struct PreviewPanelView: View {
         let liveAspect = liveFrame.map { CGFloat($0.width) / CGFloat($0.height) }
         let shotAspect = shot?.cgImage(forProposedRect: nil, context: nil, hints: nil)
             .map { CGFloat($0.width) / CGFloat($0.height) }
-        if UserDefaults.standard.bool(forKey: Keys.debugDumpSources) {
+        if DebugFlags.dumpSources {
             let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
             SourceDump.dump(key: "shot-\(w.wid)", shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
             SourceDump.dump(key: "live-\(w.wid)", liveFrame, dir)

@@ -845,7 +845,7 @@ final class PanelController: ObservableObject {
             // 病例:为了白光排查,这里一次唤起连抓 12 帧 `CGWindowListCreateImage`(单次 10–50ms ✗),
             // 而 debug.trace 一开它就一直在跑 ⇒ 唤起/早期交互的卡顿有它一份,还污染所有测量。
             // 纪律:重型诊断必须有自己的开关 + 默认关(见 AGENTS.md「诊断开关」)。
-            if isTraceEnabled, UserDefaults.standard.bool(forKey: Keys.debugScreenProbe) {
+            if isTraceEnabled, DebugFlags.screenProbe {
                 self?.probeShownFrames(panel)
             }
             // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
@@ -1394,7 +1394,7 @@ final class PanelController: ObservableObject {
         // 🔬 调试键 debug.hideTray:整个托盘不出现(用来**单测纯环上浮**是否掉帧)。
         //   放在门口(与下面那批守卫同一处)—— 打在这里,任何调用方都绕不过去。
         //   `defaults write com.cheney12138.macswitcher debug.hideTray -bool true` / delete 即装回
-        guard !UserDefaults.standard.bool(forKey: Keys.debugHideTray) else { return nil }
+        guard !DebugFlags.hideTray else { return nil }
         guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
               let area = contextScreen?.visibleFrame else { return nil }
         // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
@@ -2021,7 +2021,7 @@ final class PanelController: ObservableObject {
     private static var segmentAnimation: Animation? {
         // 🔬 消元开关:确认"换段动画"是不是那个把托盘卡片动画着挪位置的元凶。
         //   `defaults write com.cheney12138.macswitcher debug.noSegmentAnim -bool true`
-        if UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) { return nil }
+        if DebugFlags.noSegmentAnim { return nil }
         return MotionPolicy.animation(.easeInOut(duration: 0.18))
     }
 
@@ -2144,7 +2144,7 @@ final class PanelController: ObservableObject {
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: Keys.debugPinPanelOnRelease) }
+    private var pinPanelDebug: Bool { DebugFlags.pinPanelOnRelease }
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 

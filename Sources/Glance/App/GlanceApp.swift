@@ -168,13 +168,13 @@ struct GlanceApp: App {
         }
         // 诊断钩子(自动化复现用,平时不生效):`open … --args -debug.autoOpenSettings 1`
         // 启动后自动开一次设置窗 —— 复现"设置窗关闭后 Glance 仍在环里"的病例
-        if UserDefaults.standard.bool(forKey: Keys.debugAutoOpenSettings) {
+        if DebugFlags.autoOpenSettings {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showSettings() }
         }
         // 🔬 AX 探针(2026-09-19,CatDesk 关窗不出现病例):defaults write debug.axprobePid
         // <pid> 后重启,借本 App 的辅助功能权限查目标进程 AX 眼里的窗口账 ——
         // 判别「CG 全量清单有窗但 onscreen=false」到底是"别屏 Space 的窗"还是"orderOut 的窗"
-        if let pidStr = UserDefaults.standard.string(forKey: Keys.debugAxprobePid),
+        if let pidStr = DebugFlags.axprobePid,
            let pid = pid_t(pidStr) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 let app = AXUIElementCreateApplication(pid)
