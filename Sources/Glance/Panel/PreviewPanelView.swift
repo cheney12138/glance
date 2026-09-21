@@ -592,8 +592,15 @@ final class LivePreviewPool: ObservableObject {
             guard let self else { return }
             // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
             if Set(wids) == self.wanted, self.pending.isEmpty { return }
+            let added = Set(wids).subtracting(self.wanted)   // 刚变可见的那几张(下面补帧用)
             self.wanted = Set(wids)
             for w in wids { self.idleSince[w] = nil }
+            // ★ 补帧:上面那条门禁会拦住"不可见时"的派发 ⇒ 换回来时如果池里已有最新帧,
+            //   立刻补上(不然卡片要等下一拍才亮 ⇒ 静默态多显示约 100ms ✗)
+            for w in added {
+                guard let img = self.latest[w] else { continue }
+                DispatchQueue.main.async { [weak self] in self?.boxes[w]?.image = img }
+            }
             // ★ 先把"停"做完(停是便宜的、而且必须立刻做),**"起"推迟 150ms**。
             // 病例(2026-09-21,日志实证):hover 到"还没起过流的窗口"时,
             //   `SCStream` 创建(几十毫秒的系统级工作)正好压在 hover 那一拍上 ⇒ 丢 1 拍 ✗
@@ -784,6 +791,13 @@ final class LivePreviewPool: ObservableObject {
             let old = latestOrder.removeFirst()
             if !wanted.contains(old) { latest[old] = nil }
         }
+        // ★ 只把"**当前显示组**"的帧交给主线程(2026-09-21,归因量出来的账)。
+        //   池的 keepAlive=5s ⇒ 换组之后旧的那几条流**还在跑**(为了换回来是热的 ✓),
+        //   而它们仍然会被派给主线程 ⇒ 但那些卡**这一刻根本不在屏幕上** ✗
+        //   ⇒ 白换一次图 + 白触发一次重绘。实测:悬停长帧里 **2/3** 都带"直播新帧 ≥1"。
+        //   现在:帧照样收进 `latest`(换回来立刻有 ✓),但**不派** ⇒ 主线程零工作 ✓
+        //   注意:`wanted` 与这里都在**池队列**上 ⇒ 不跨线程读 ✓(那条崩溃纪律不破)
+        guard wanted.contains(wid) else { return }
         // 只把这一张图交给主线程 ⇒ 每张卡各自重绘(不重建整个托盘 ✓)
         DispatchQueue.main.async { [weak self] in
             self?.boxes[wid]?.image = img
