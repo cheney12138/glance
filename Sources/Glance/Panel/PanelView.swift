@@ -55,9 +55,14 @@ struct PanelView: View {
             // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
             // 上一版减了,算出负圆角喂给 NSGlassEffectView,玻璃形状当场失真
             // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
-            GlassBackground(cornerRadius: controller.hintText == nil
-                            ? PanelMetrics.rPanel
-                            : PanelMetrics.hintContentSize.height / 2)
+            // 🔬 临时消元:debug.noGlass=1 时换成实心色(只为了量尖峰,观感会明显变差 ✓ 验完删)
+            if DebugFlags.noGlass {
+                Color.black.opacity(0.55)
+            } else {
+                GlassBackground(cornerRadius: controller.hintText == nil
+                                ? PanelMetrics.rPanel
+                                : PanelMetrics.hintContentSize.height / 2)
+            }
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。

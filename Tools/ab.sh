@@ -11,13 +11,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 DOMAIN=com.cheney12138.macswitcher
-KEY=debug.noStripShadow
+KEY="${2:-debug.noStripShadow}"
 
 case "${1:-}" in
   off)   defaults write "$DOMAIN" "$KEY" -bool false; echo "  开关 ${KEY} = **关**" ;;
   on)    defaults write "$DOMAIN" "$KEY" -bool true;  echo "  开关 ${KEY} = **开**" ;;
   clear) defaults delete "$DOMAIN" "$KEY" 2>/dev/null; echo "  开关 ${KEY} 已删除（收尾 ✓）"; exit 0 ;;
-  *)     echo "用法：bash Tools/ab.sh off | on | clear"; exit 1 ;;
+  *)     echo "用法：bash Tools/ab.sh off|on|clear [debug.键名]"; echo "  省略键名 = debug.noStripShadow"; exit 1 ;;
 esac
 
 bash Tools/run.sh
