@@ -636,3 +636,50 @@ struct TrafficLightClose: View {
             .onHover { hovered = $0 }
     }
 }
+
+// MARK: - 托盘**窗口**的几何(唯一来源)
+
+/// 托盘窗(底部那排窗口卡)的几何 —— **一处算,处处读**。
+///
+/// 为什么要它(P0-2,2026-09-21):托盘的几何原来在**三个地方各算一遍** ✗ ——
+///   · 窗口尺寸:`PanelController.previewSize()`(用"整局最大内容" + 向上取整);
+///   · 窗口位置:`PanelController.previewFrame()`(x 一度用"**当前组**内容宽",尺寸却用整局最大 ✗);
+///   · 内容大小:`PreviewPanelView`(用它自己的 `previewContentSize()`,带小数)。
+///   三本账只要有一处取整规则/取数来源不同,就会互相改来改去。实机账(全在日志里):
+///     `[窗框] 托盘窗 1082x406 → 1081x405` 一局 **100+ 次**(两本账差 1pt 的 ping-pong)✗;
+///     `[窗框] 托盘窗 418.0,527.0 → 418.5,527.2` 一局 **104 次**(原点是亚像素,被 AppKit 吸附)✗;
+///     `[窗框] 托盘窗 …` 一局 **335 次**(x 随"当前组"变 ⇒ 窗口左右滑)✗。
+///
+/// 约定(写进类型,不靠自觉):
+///   · 输入只有三样:**本局最大内容尺寸**(整局恒定)、主面板窗框、所在屏可用区;
+///   · 输出的尺寸与原点**取整规则写在这里**(尺寸向上取整 = AppKit 对内容视图的行为;原点向下取整 = AppKit 对窗口原点的吸附);
+///   · 别处**不许**再自己算窗口尺寸/位置 —— 要改就改这里一处;
+///   · `contentSize`(玻璃/内容自己的大小)是**另一件事**(随选中格变),本类型只提供"窗口",不合并两者。
+struct TrayGeometry {
+    /// 托盘窗的尺寸(已按上面的取整规则定死)
+    let windowSize: NSSize
+    /// 托盘窗的原点(屏幕坐标,已取整)
+    let windowOrigin: NSPoint
+    /// 窗口框(交给 `setFrame`)
+    var frame: NSRect { NSRect(origin: windowOrigin, size: windowSize) }
+
+    /// - Parameters:
+    ///   - maxContentSize: 本局所有托盘内容里的**最大**尺寸(整局恒定 ⇒ 窗口整局只落位一次)
+    ///   - panelFrame: 主面板窗框(托盘与它同轴、并贴在它下沿)
+    ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
+    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
+        let pad = PanelMetrics.shadowPadPop * 2
+        let size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
+                          height: (maxContentSize.height + pad).rounded(.up))
+        // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip − 帧距,
+        // 反解出帧距 = padPop + padStrip − seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
+        let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
+        var x = panelFrame.midX - size.width / 2          // 窗口居中 ⇒ 内容随之居中(与长条同轴)
+        let margin = PanelMetrics.screenMargin
+        if size.width <= screenArea.width - margin * 2 {
+            x = min(max(x, screenArea.minX + margin), screenArea.maxX - margin - size.width)
+        }
+        self.windowSize = size
+        self.windowOrigin = NSPoint(x: x.rounded(.down), y: (panelFrame.maxY - frameGap).rounded(.down))
+    }
+}
