@@ -293,7 +293,13 @@ struct PanelView: View {
             .elevation(.puck)
             // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
             // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
-            .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
+            // 🔬 2026-09-21 实验(用户实报「后面几个容器没相对 App 居中」):
+            //   托底的**静态位置是准的**(数学核过:i × pitch vs i × pitch,完全重合 ✓),
+            //   而换到较远的图标时它会**横着滑过去 + 弹簧过冲回弹** ⇒ 飞行途中它当然不在任何图标上 ✗
+            //   越靠后的图标滑得越久、回弹越看得见 ⇒ 正好对上"后面几个没居中" ✓
+            //   用户自己定过规矩:「任何场景都不要的动效 = 直接毙掉」⇒ 先改成**当帧到位**。
+            //   嫌太生硬 ⇒ 改成 0.06s 的线性短移(不要弹簧 ✗)。
+            .animation(nil, value: controller.appIndex)
             // ⚠️ 这里**故意没有** `.animation(…, value: entrySelected)`(T91 病例,
             // 用户实报「按下切换环的时候,在未启动的环上会有一个向右淡出的滑块效果」):
             // 托底的消失若走动画,会和"滑到 appIndex"叠在一起演 —— 读起来像"选中滑走了",
