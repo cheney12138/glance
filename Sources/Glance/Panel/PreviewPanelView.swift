@@ -1,5 +1,8 @@
 import SwiftUI
+import VideoToolbox
 import AppKit
+import CoreImage
+import ScreenCaptureKit
 import GlanceCore
 
 /// 窗口预览托盘 —— 施工契约 = 最新设计 demo 的 `.preview-tray`。
@@ -285,10 +288,18 @@ private struct WindowThumb<Overlay: View>: View {
                 // fit 虽然不裁内容,但卡片是**定尺**的窗口卡,而红绿灯锚在卡片左上角 ——
                 // 宽窗(终端 1.83)被 fit 上下留出"信纸边"后,三粒灯就落在浅色空边上,
                 // 用户实评"加歪了"。fill 只裁两侧几个点,内容仍是满幅,灯稳稳落在画面里。
-                Image(nsImage: image)
-                    .resizable()
+                // ★ 2026-09-21:底图走**缓存**(已按卡片像素尺寸缩放过)。
+                //   病灶:`Image(nsImage:)` 每次重建都要 decode + 把 720px 缩到卡片尺寸 ✗
+                //   ⇒ 实机:托盘更新平时 0.1–0.3ms,一换 app 就 10–27ms(滑块那一帧掉帧)。
+                //   没缩好时先用原图,下一次渲染就走缓存 ✓
+                Group {
+                    if let prepared = CardImageCache.shared.image(wid: record.wid, source: image) {
+                        Image(decorative: prepared.cg, scale: prepared.scale).resizable()
+                    } else {
+                        Image(nsImage: image).resizable()
+                    }
+                }
                     .aspectRatio(contentMode: .fill)
-                    // **卡面压色**(方案 D,`design/卡面实验台.html` 用户拍板):非选中的卡把截图
                     // 压到 30%,统一底色(`PanelColors.thumbBg`)接管卡面 —— 一排过去不再深浅乱跳;
                     // 选中/悬停的那张恢复原样。压色量挂在卡片末尾同一条
                     // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
@@ -309,13 +320,16 @@ private struct WindowThumb<Overlay: View>: View {
         //   · 现在这版   → 不加任何暗色,只是把画面自己糊掉,再用渐变过渡回清晰。
         // 几何必须与底图**逐像素对齐**(同样的 frame + .fill + clipped),否则模糊层会与底图错位。
         .overlay {
-            if let image {
-                Image(nsImage: image)
+            // ★ 2026-09-21:**模糊只在"每扇窗第一次"算一次**(缓存)。原来 .blur 写在渲染路径里
+            //   ⇒ 卡片每次重绘都重算一次高斯模糊 ✗ ⇒ 实机:指针换选中 主线程 12–24ms(托盘更新占 98%)✗
+            //   ⇒ 滑块弹簧动画当帧掉帧(用户实报"划过去不流畅")。模糊结果与内容一样是**静态**的,
+            //   没有理由每帧重算。几何与底图逐像素对齐(frame + .fill + clipped 保持一致)。
+            if let image, let seat = SeatImageCache.shared.seat(wid: record.wid, source: image) {
+                Image(decorative: seat, scale: 1)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: cardW, height: PanelMetrics.shotH)
                     .clipped()
-                    .blur(radius: PanelMetrics.lightsBlur, opaque: true)
                     // 毛玻璃条随底图一起压色:它就是这张截图自己,底图压了它不压,顶部会浮出一截"实"的
                     .opacity(selected ? 1 : PanelMetrics.thumbWash)
                     .mask(alignment: .top) {
@@ -380,5 +394,335 @@ private struct WindowThumb<Overlay: View>: View {
             // 而现在的 macOS 早就不用它了(浅色那格当年也没这道唇,它返回的是全透明)。
             // 芯片要的"清透"由**底的半透**承担(透过它看到的是已毛玻璃化的画面),不再由受光边承担。
             .frame(height: PanelMetrics.chipH)
+    }
+}
+
+// MARK: - 实时预览 · 流池【S1.1:只起流收帧,不参与绘制】
+
+/// 「一扇窗一条流、一扇窗一张帧」的对象池。
+///
+/// 施工契约:`docs/live-preview-设计.md`(先读它 —— 里面是 16 条实机病例)。
+/// S1.1 修正(用户实报"hover 过 app 掉帧很严重"):
+///   · **一个批次只枚举一次** `SCShareableContent` —— 那是几十毫秒的全局调用,
+///     原来每条流各调一次 ⇒ 跨 5 个 app 就是 5 次 ⇒ hover 一顿一顿的;
+///   · **跨组保留流**(TTL 5s + 上限 12 的 LRU)—— 原来组一变就把上一组全停、下一组全起,
+///     hover 跨 app = 一整轮起停风暴;
+///   · **无变化不同步** —— 同一组内换窗口不触发任何流操作。
+///
+/// 三条不变量:
+///   I2 每扇窗**自带一帧**(不共享可变渲染资源 —— 病例 A1:共享 CALayer ⇒ 串台 79 次);
+///   I3 出图规格**首启冻结**(病例 A3/B5:局中重算 ⇒ 画面忽然缩放);
+///   I7 日志带时间轴(`glog`)。
+final class LivePreviewPool: ObservableObject {
+    static let shared = LivePreviewPool()
+
+    /// 帧率档位 = 设置里的「实时预览」。**"0" = 关**(默认)。S4 起会分成"选中/其余"两档。
+    static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: "live.previewTier") ?? "0") ?? 0) }
+    static var enabled: Bool { tierFps > 0 }
+    /// 流数上限(LRU 淘汰)
+    /// 流数上限:**必须 ≥ 环里的窗口数**(实测环里 ~14 窗)⇒ 给 24 是防呆,不是节流阀。
+    /// 教训(2026-09-21):上限小于环的规模 ⇒ LRU 永远在互相淘汰 ⇒ 同一窗口被反复起停 21 次 ⇒ hover 卡死。
+    /// 成本由**帧率**控制(S4 分档),不由"砍流数"控制。
+    static let maxStreams = 24
+    /// 闲置多久才停:局内**不靠它节流**(环里的窗口全程保留),它只回收"已经不在环里"的窗口。
+    static let keepAlive: Double = 5.0
+
+    @Published private(set) var frames: [CGWindowID: CGImage] = [:]
+
+    private struct Handle {
+        let gen: Int
+        let fps: Int
+        let stream: SCStream
+        let output: LiveOutput
+    }
+
+    private let queue = DispatchQueue(label: "glance.livepool")
+    private var handles: [CGWindowID: Handle] = [:]
+    private var wanted: Set<CGWindowID> = []
+    private var idleSince: [CGWindowID: CFAbsoluteTime] = [:]
+    private var pending: Set<CGWindowID> = []          // 正在起(错峰排队中)
+    private var activeGens: Set<Int> = []
+    private var gen = 0
+    private var startedAt: [CGWindowID: CFAbsoluteTime] = [:]
+    private var firstFrameLogged: Set<CGWindowID> = []
+    private var frozenSize: [CGWindowID: CGSize] = [:]
+    private var frameOrder: [CGWindowID] = []
+    /// 窗口枚举缓存:一个批次共用一次(短 TTL)
+    private var winCache: [CGWindowID: SCWindow] = [:]
+    private var winCacheAt: CFAbsoluteTime = 0
+    private var sweepScheduled = false
+
+    /// 把"当前界面上该活的窗口"交给池。池负责开/停到一致(对象池 reconcile)。
+    func sync(_ items: [(wid: CGWindowID, aspect: CGFloat)]) {
+        guard Self.enabled else { return }
+        let wids = items.map { $0.wid }
+        queue.async { [weak self] in
+            guard let self else { return }
+            // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
+            if Set(wids) == self.wanted, self.pending.isEmpty { return }
+            self.wanted = Set(wids)
+            for w in wids { self.idleSince[w] = nil }
+            self.reconcile(items)
+            self.scheduleSweep()
+        }
+    }
+
+    /// 面板收场:停掉全部流。**帧保留**(跨会话复用 ⇒ 下一次唤起第一眼就是活画面)。
+    func stopAll(reason: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let n = self.handles.count
+            for (_, h) in self.handles { Task { try? await h.stream.stopCapture() } }
+            self.handles.removeAll(); self.wanted.removeAll(); self.activeGens.removeAll()
+            self.startedAt.removeAll(); self.firstFrameLogged.removeAll()
+            self.idleSince.removeAll(); self.pending.removeAll()
+            glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.frames.count) 张")
+        }
+    }
+
+    /// 定时清扫:闲置超时的流**不等下一次 sync** 就回收。
+    /// (病例:用户 hover 扫过 5 个 app 后停手 —— 若只在 sync 里扫,那 6 条流会一直出帧。)
+    private func scheduleSweep() {
+        guard !sweepScheduled else { return }
+        sweepScheduled = true
+        queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            self.sweepScheduled = false
+            let now = CFAbsoluteTimeGetCurrent()
+            for (wid, since) in self.idleSince where now - since > Self.keepAlive {
+                self.stopStream(wid, why: "闲置 \(Int(now - since))s")
+            }
+            if !self.handles.isEmpty { self.scheduleSweep() }   // 还有流就继续守着
+        }
+    }
+
+    private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)]) {
+        // ① 记闲置时间(不再立刻停流 —— 见 keepAlive)
+        let now = CFAbsoluteTimeGetCurrent()
+        for wid in handles.keys where !wanted.contains(wid) {
+            if idleSince[wid] == nil { idleSince[wid] = now }
+        }
+        // ② 停:只停"确实不在环里"的窗口(闲置=它已经不在 wanted 集合里)。
+        //   局内**不做上限淘汰** —— 上限只是为了防呆,不是节流阀(见 maxStreams 的教训)。
+        for (wid, since) in idleSince where now - since > Self.keepAlive {
+            stopStream(wid, why: "已不在环内 \(Int(now - since))s")
+        }
+        // ③ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
+        var delay = 0.0
+        for item in items.prefix(Self.maxStreams) where handles[item.wid] == nil && !pending.contains(item.wid) {
+            pending.insert(item.wid)
+            let d = delay; delay += 0.04
+            queue.asyncAfter(deadline: .now() + d) { [weak self] in
+                guard let self else { return }
+                self.pending.remove(item.wid)
+                guard self.wanted.contains(item.wid), self.handles[item.wid] == nil else { return }
+                self.start(item.wid, aspect: item.aspect)
+            }
+        }
+    }
+
+    private func stopStream(_ wid: CGWindowID, why: String) {
+        guard let h = handles[wid] else { return }
+        Task { try? await h.stream.stopCapture() }
+        activeGens.remove(h.gen)
+        handles[wid] = nil; startedAt[wid] = nil; firstFrameLogged.remove(wid); idleSince[wid] = nil
+        glog("[直播] 停流 wid=\(wid)(\(why))")
+    }
+
+    /// 批量枚举(一个批次共用一次)。SCShareableContent 是几十毫秒的全局调用,不能每条流各来一次。
+    private func window(_ wid: CGWindowID) async -> SCWindow? {
+        if CFAbsoluteTimeGetCurrent() - winCacheAt < 2.0, let w = winCache[wid] { return w }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
+            return nil
+        }
+        winCacheAt = CFAbsoluteTimeGetCurrent()
+        for w in content.windows { winCache[w.windowID] = w }
+        return winCache[wid]
+    }
+
+    private func start(_ wid: CGWindowID, aspect: CGFloat) {
+        gen += 1
+        let g = gen
+        activeGens.insert(g)
+        let fps = Self.tierFps
+        Task { [weak self] in
+            guard let self else { return }
+            guard let win = await self.window(wid) else {
+                glog("[直播] 找不到窗口 wid=\(wid)"); return
+            }
+            let cfg = SCStreamConfiguration()
+            // I3:尺寸**首启冻结** —— 窗口后来变形也不改(改了就是"画面忽然缩放",病例 A3)
+            let size: CGSize
+            if let f = self.frozenSize[wid] {
+                size = f
+            } else {
+                let scale = NSScreen.main?.backingScaleFactor ?? 2
+                let h = (PanelMetrics.shotH * scale).rounded()
+                let a = win.frame.height > 0 ? win.frame.width / win.frame.height : aspect
+                size = CGSize(width: (h * max(0.3, min(4.0, a))).rounded(), height: h)
+                self.frozenSize[wid] = size
+            }
+            cfg.width = max(2, Int(size.width)); cfg.height = max(2, Int(size.height))
+            cfg.minimumFrameInterval = CMTime(value: 1, timescale: Int32(max(1, fps)))
+            cfg.queueDepth = 3; cfg.showsCursor = false; cfg.capturesAudio = false
+            cfg.scalesToFit = false
+            cfg.ignoreShadowsSingleWindow = true     // 与快照链一致(病例 B6:内容框也要同源)
+            let filter = SCContentFilter(desktopIndependentWindow: win)
+            let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
+            let out = LiveOutput(wid: wid) { [weak self] sb in self?.ingest(sb, wid: wid, gen: g) }
+            do {
+                try s.addStreamOutput(out, type: .screen, sampleHandlerQueue: self.queue)
+                self.queue.async {
+                    self.handles[wid] = Handle(gen: g, fps: fps, stream: s, output: out)
+                    self.startedAt[wid] = CFAbsoluteTimeGetCurrent()
+                }
+                try await s.startCapture()
+                glog(String(format: "[直播] 起流池 += wid=%d %dx%d @%dfps 池内=%d",
+                            wid, Int(size.width), Int(size.height), fps, self.handles.count))
+            } catch {
+                glog("[直播] 起流失败 wid=\(wid): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    fileprivate func ingest(_ sb: CMSampleBuffer, wid: CGWindowID, gen g: Int) {
+        guard activeGens.contains(g) else { return }
+        guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+        var raw: CGImage?
+        VTCreateCGImageFromCVPixelBuffer(pb, options: nil, imageOut: &raw)
+        guard let img = raw else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let t0 = self.startedAt[wid], !self.firstFrameLogged.contains(wid) {
+                self.firstFrameLogged.insert(wid)
+                glog(String(format: "[直播] 首帧 %.0fms wid=%d", (now - t0) * 1000, wid))
+            }
+            if self.frames[wid] == nil { self.frameOrder.append(wid) }
+            self.frames[wid] = img
+            while self.frameOrder.count > 10 {
+                let old = self.frameOrder.removeFirst()
+                if !self.wanted.contains(old) { self.frames[old] = nil }
+            }
+        }
+    }
+}
+
+/// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
+final class LiveOutput: NSObject, SCStreamOutput {
+    private let wid: CGWindowID
+    private let onFrame: (CMSampleBuffer) -> Void
+    init(wid: CGWindowID, onFrame: @escaping (CMSampleBuffer) -> Void) {
+        self.wid = wid; self.onFrame = onFrame
+    }
+    func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, sb.isValid else { return }
+        onFrame(sb)
+    }
+}
+
+// MARK: - 「座」的模糊缓存(每扇窗只算一次)
+
+/// 「座」= 把卡片自己糊掉再渐变遮掉下半 —— 结果**与内容无关、与时间无关**,所以只该算一次。
+/// 病例(2026-09-21):`.blur()` 写在渲染路径里 ⇒ 指针每换一次选中就重算一次高斯模糊
+/// ⇒ 主线程 12–24ms 卡顿(200 个样本里 30 个 ≥10ms)⇒ 滑块弹簧在那一帧掉帧。
+/// 现在:后台算 + 缓存;没算好就这一层不画(底图仍是清晰的截图,不闪)。
+final class SeatImageCache {
+    static let shared = SeatImageCache()
+    private let lock = NSLock()
+    private var store: [CGWindowID: CGImage] = [:]
+    private var inFlight: Set<CGWindowID> = []
+    private let ctx = CIContext(options: [.useSoftwareRenderer: false])
+    private let queue = DispatchQueue(label: "glance.seat", qos: .utility)
+
+    /// 取"座"图;没有就返回 nil(并顺手后台算一张)
+    func seat(wid: CGWindowID, source: NSImage) -> CGImage? {
+        lock.lock()
+        if let c = store[wid] { lock.unlock(); return c }
+        let busy = inFlight.contains(wid)
+        if !busy { inFlight.insert(wid) }
+        lock.unlock()
+        guard !busy else { return nil }
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let radius = PanelMetrics.lightsBlur * (NSScreen.main?.backingScaleFactor ?? 2)
+        queue.async { [weak self] in
+            guard let self else { return }
+            let out = Self.blur(cg, radius: radius, ctx: self.ctx)
+            self.lock.lock()
+            if let out { self.store[wid] = out }
+            self.inFlight.remove(wid)
+            self.lock.unlock()
+        }
+        return nil
+    }
+
+    /// 预热(面板打开时后台把整个环的窗都算一遍 ⇒ hover 时一次都不用算)
+    func prewarm(_ items: [(wid: CGWindowID, source: NSImage)]) {
+        for it in items { _ = seat(wid: it.wid, source: it.source) }
+    }
+
+    private static func blur(_ src: CGImage, radius: CGFloat, ctx: CIContext) -> CGImage? {
+        let ext = CGRect(x: 0, y: 0, width: src.width, height: src.height)
+        let input = CIImage(cgImage: src)
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(radius, forKey: kCIInputRadiusKey)
+        guard let out = filter.outputImage else { return nil }
+        return ctx.createCGImage(out, from: ext)   // 裁回原尺寸(避免边缘变暗)
+    }
+}
+
+// MARK: - 卡片底图的缩放缓存(每扇窗只 decode + 缩放一次)
+
+/// 卡片只有 ~207×122pt,而快照是 720px 宽 ⇒ 每次重建都要 decode + 缩放(主线程 ✗)。
+/// 病例(2026-09-21):托盘更新平时 0.1–0.3ms,一换 app 就 **10–27ms** ⇒ 同帧滑块弹簧掉帧。
+/// 现在:后台按**卡片设备像素尺寸**缩放一次并缓存;顺带与实时帧同一规格(1:1)。
+final class CardImageCache {
+    struct Prepared { let cg: CGImage; let scale: CGFloat }
+    static let shared = CardImageCache()
+    private let lock = NSLock()
+    private var store: [CGWindowID: Prepared] = [:]
+    private var inFlight: Set<CGWindowID> = []
+    private let queue = DispatchQueue(label: "glance.cardimg", qos: .utility)
+
+    func image(wid: CGWindowID, source: NSImage) -> Prepared? {
+        lock.lock()
+        if let p = store[wid] { lock.unlock(); return p }
+        let busy = inFlight.contains(wid)
+        if !busy { inFlight.insert(wid) }
+        lock.unlock()
+        guard !busy else { return nil }
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let aspect = CGFloat(cg.width) / CGFloat(max(1, cg.height))
+        let pxW = max(2, Int((PanelMetrics.thumbWidth(aspect: aspect) * scale).rounded()))
+        let pxH = max(2, Int((PanelMetrics.shotH * scale).rounded()))
+        queue.async { [weak self] in
+            guard let self else { return }
+            var out: CGImage?
+            if let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
+                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
+                ctx.interpolationQuality = .high
+                // **按 .fill 的中心裁剪**(不能直接铺满:那会拉伸变形 ✗)
+                let sw = CGFloat(cg.width), sh = CGFloat(cg.height)
+                let k = max(CGFloat(pxW) / sw, CGFloat(pxH) / sh)
+                let srcRect = CGRect(x: (sw - CGFloat(pxW) / k) / 2, y: (sh - CGFloat(pxH) / k) / 2,
+                                     width: CGFloat(pxW) / k, height: CGFloat(pxH) / k)
+                if let cropped = cg.cropping(to: srcRect) {
+                    ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: pxW, height: pxH))
+                }
+                out = ctx.makeImage()
+            }
+            self.lock.lock()
+            if let out { self.store[wid] = Prepared(cg: out, scale: scale) }
+            self.inFlight.remove(wid)
+            self.lock.unlock()
+        }
+        return nil
+    }
+
+    func prewarm(_ items: [(wid: CGWindowID, source: NSImage)]) {
+        for it in items { _ = image(wid: it.wid, source: it.source) }
     }
 }

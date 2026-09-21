@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import GlanceCore
 
 // MARK: - 动效(弹簧,不是过冲 bezier)
 //
@@ -62,9 +63,18 @@ enum MotionPolicy {
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }
 
+    /// **唤起静音期**(2026-09-20,帧账驱动):唤起那一拍内**任何动效都不给**。
+    /// 病例(用户):「掉帧是第一次 ⌘Tab 唤起的时候」「不管是不是第二个,唤起面板的时候都不要这个动效了」——
+    /// 帧探针实测:那一秒里有"首图上屏 +343ms"与"起流握手"两件重活,而**托底还要滑到默认选中那格**
+    /// (`switch.advanceOnOpen` 开着 ⇒ 默认落在第二格)⇒ 位移叠在重活上就是肉眼里的卡 ✓。
+    /// 所以:唤起后 ~0.45s 内,`animation(_:)` 一律返回 nil(瞬时到位),之后恢复。
+    /// 只影响动效,不影响任何状态与逻辑。
+    static var summonQuiet = false
+
     /// 取动效:正常给弹簧;降级给一记短淡出(不位移、也不硬跳)
-    static func animation(_ full: Animation, reduced reducedDuration: Double = 0.16) -> Animation {
-        reduced ? .easeOut(duration: reducedDuration) : full
+    static func animation(_ full: Animation, reduced reducedDuration: Double = 0.16) -> Animation? {
+        if summonQuiet { return nil }            // 唤起静音期:瞬时到位(见 summonQuiet 的注释)
+        return reduced ? .easeOut(duration: reducedDuration) : full
     }
 
     static var describe: String {
@@ -106,4 +116,73 @@ enum PanelMotion {
     static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
+}
+
+
+// MARK: - 触感(点按反馈)
+
+/// 触感落地:把 `GlanceCore.HapticPolicy` 的口径搬到 AppKit,并负责**去重**与一行日志。
+///
+/// 时机是刻意的:在**意图被接受的那一刻**发(面板还没画出来就震)。
+/// 于是「震了但没出现预期效果」＝ 真有问题 ✓;「没震」＝ 这一下没被接受 ✓。
+/// 手感分档与全部手测用例见 `docs/触感用例.md`。
+enum Haptics {
+    private static var lastFiredAt: Date?
+
+    static func fire(_ event: HapticEvent, trace: String = "") {
+        // ⚠️ 2026-09-20 病例:日志里每一次都发了(63 行),但用户一次震感都没有。
+        // 一个嫌疑:ThreeFingerTap 的回调跑在 **CGEvent tap 自己的线程**上,
+        // 而 AppKit 的触感在主线程之外调用不可靠(可能被静默丢弃)。
+        // ⇒ 统一 hop 到主线程再发。去重也放在主线程里做,避免两处竞态各震一次。
+        if Thread.isMainThread {
+            perform(event, trace: trace)
+        } else {
+            DispatchQueue.main.async { perform(event, trace: trace) }
+        }
+    }
+
+    private static func perform(_ event: HapticEvent, trace: String) {
+        let pattern = HapticPolicy.pattern(for: event)
+        guard pattern != .none else { return }
+        let now = Date()
+        // 同一瞬间只震一次:三指与 ⌥Tab 撞车时"双响"读起来像故障
+        if HapticPolicy.isDuplicate(now: now, lastFiredAt: lastFiredAt,
+                                    window: HapticPolicy.minInterval(for: event)) { return }
+        lastFiredAt = now
+        func strike(_ p: HapticPattern) {
+            let performer = NSHapticFeedbackManager.defaultPerformer
+            switch p {
+            case .none: break
+            case .alignment:  performer.perform(.alignment,  performanceTime: .now)
+            case .levelChange: performer.perform(.levelChange, performanceTime: .now)
+            case .generic:    performer.perform(.generic,    performanceTime: .now)
+            }
+        }
+        strike(pattern)
+        if HapticPolicy.burstCount(for: event) > 1 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { strike(pattern) }   // 第二发:赶在手指完全离开之前
+        }
+        glog("[触感] \(label(event)) → \(label(pattern))\(trace.isEmpty ? "" : " · \(trace)")")
+    }
+
+    private static func label(_ e: HapticEvent) -> String {
+        switch e {
+        case .summonThreeFinger: return "三指唤起"
+        case .summonFourFinger:  return "四指唤起"
+        case .clickAppRow:       return "点按 App"
+        case .clickPreviewThumb: return "点按托盘"
+        case .ringSwap:          return "换环"
+        case .hoverAppRow:       return "hover 格"
+        case .hoverPreviewThumb: return "hover 托盘"
+        case .gestureRejected:   return "手势不动作"
+        }
+    }
+    private static func label(_ p: HapticPattern) -> String {
+        switch p {
+        case .none: return "无"
+        case .alignment: return "轻(落位)"
+        case .levelChange: return "中(换档)"
+        case .generic: return "钝(提示)"
+        }
+    }
 }

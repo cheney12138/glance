@@ -11,6 +11,8 @@ final class PanelController: ObservableObject {
     @Published var appIndex = 0
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
+    /// 托盘窗的显隐状态机(懒建:窗口是 buildPreviewPanelIfNeeded 时才有的)
+    private var trayChrome: ChromeWindow?
     /// 选中态动效的**上膛标识**:开局第一帧必须不上膛(否则会从上一局的残影位置滑过来)。
     /// 上面说的"上一局残影"只在 `puckEntersFromLeft = false`(承接模式)时才是**故意**的 ——
     /// 那种情况下上膛反而要提前,见 showPanel。
@@ -791,7 +793,13 @@ final class PanelController: ObservableObject {
             panel.alphaValue = 1
             self?.bumpIdle()          // 表一 ④:从"看得见"那一刻开始计时
             // 🔬 连拍放在这里:拍的是"第一次被看见的那几帧",不是 alpha 0 的那几帧
-            if isTraceEnabled { self?.probeShownFrames(panel) }
+            // ⚠️ 2026-09-21:重型探针**单独门禁**(原来只挂 `isTraceEnabled`)。
+            // 病例:为了白光排查,这里一次唤起连抓 12 帧 `CGWindowListCreateImage`(单次 10–50ms ✗),
+            // 而 debug.trace 一开它就一直在跑 ⇒ 唤起/早期交互的卡顿有它一份,还污染所有测量。
+            // 纪律:重型诊断必须有自己的开关 + 默认关(见 AGENTS.md「诊断开关」)。
+            if isTraceEnabled, UserDefaults.standard.bool(forKey: "debug.screenProbe") {
+                self?.probeShownFrames(panel)
+            }
         }
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
@@ -832,9 +840,19 @@ final class PanelController: ObservableObject {
     /// 旧病:hover 每挪一格都 `setFrame` 一次(哪怕目标帧跟当前一模一样),在 SwiftUI 动画
     /// 途中强插一轮窗口布局 —— 横扫面板一顿一顿的,一半的账在这。
     /// 顺带说明:面板尺寸只由 App 数量决定,选中移动从来不改尺寸,所以选中路径根本不该碰窗框。
-    private func setFrameIfNeeded(_ panel: NSPanel, _ frame: NSRect?) {
+    private func setFrameIfNeeded(_ panel: NSPanel, _ frame: NSRect?, caller: String = #function) {
         guard let frame, !panel.frame.nearlyEquals(frame) else { return }
-        panel.setFrame(frame, display: true)
+        // ★★ 2026-09-21(分段计时抓到的最后一段账):`display: true` 会**当场**重绘 ✗
+        //   ⇒ 实测 setFrame **9–12ms**(就是注释里那句"同步窗口布局 + 后备存储重分配"),
+        //   而这一帧里滑块弹簧/图标上浮正在跑 ⇒ 掉帧。
+        //   改成 `display: false`:尺寸照样立刻生效,但把重绘排到下一拍(不逼它当场画)✓
+        // 只记"真的变了"的那些(托盘窗本该整局只变一次 ⇒ 一变就说明 trayMaxContentSize 的设计被绕过了)
+        glog(String(format: "[窗框] %@(%@) %.1f,%.1f %.1fx%.1f → %.1f,%.1f %.1fx%.1f",
+                    panel === previewPanel ? "托盘窗" : "主面板", caller,
+                    panel.frame.origin.x, panel.frame.origin.y,
+                    panel.frame.width, panel.frame.height,
+                    frame.origin.x, frame.origin.y, frame.width, frame.height))
+        panel.setFrame(frame, display: false)
     }
 
     /// 收场:先让两块玻璃按 demo 的曲线淡出,窗口拆迁排在演出之后。
@@ -865,6 +883,7 @@ final class PanelController: ObservableObject {
         entrySelected = false
         launchIndex = nil
         isVisible = false
+        LivePreviewPool.shared.stopAll(reason: "面板关闭")
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
         previewPanel?.ignoresMouseEvents = true
@@ -902,7 +921,11 @@ final class PanelController: ObservableObject {
         FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
         PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
         panel?.orderOut(nil)
-        previewPanel?.orderOut(nil)
+        // ★ 2026-09-21 修我自己引入的 bug:标记必须与 orderOut **成对**清掉。
+        //   病例(用户实报「本次不显示预览窗了」):第一次收场把托盘 orderOut 了,而标记没清 ✗
+        //   ⇒ 之后每一局都以为"它已经在台上" ⇒ **再也不 orderFront** ⇒ 托盘永不出现 ✓。
+        //   ★ 这个坑现已由 ChromeWindow 从结构上消掉(placed/teardown 成对,写在同一个类里)✓
+        trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
         panel?.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
         groups = []
@@ -1162,6 +1185,8 @@ final class PanelController: ObservableObject {
         // 所以我自动化复现不出来 —— 这次靠真机现场抓的。
         p.becomesKeyOnlyIfNeeded = true
         p.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
+        // 2026-09-21 查证:`NSWindow` 上**没有** `maximumFramesPerSecond`(AppKit SDK 里不存在该属性)
+        // ⇒ 之前"面板被锁在 60fps"的猜测**不成立**,已撤回。若之后要动刷新率,先确认真实 API 再改。
         return p
     }
 
@@ -1170,6 +1195,7 @@ final class PanelController: ObservableObject {
     private func buildPreviewPanelIfNeeded() {
         guard previewPanel == nil else { return }
         previewPanel = makeChromePanel(keyable: false)
+        if let previewPanel { trayChrome = ChromeWindow(previewPanel) }
         // 托盘低一层:它向下的阴影尾会伸进长条的呼吸区,demo 里长条(后一个兄弟)盖住托盘阴影,
         // 托盘在上就会把那层灰纱糊到长条玻璃顶上——"黑影"换个地方复活
         // (2026-09-19 Bug2 期间做过"翻到长条前面"的判别实验,已还原:点击死区由
@@ -1239,7 +1265,12 @@ final class PanelController: ObservableObject {
     private func previewSize() -> NSSize {
         let c = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
         let pad = PanelMetrics.shadowPadPop * 2
-        return NSSize(width: c.width + pad, height: c.height + pad)
+        // ★★ 2026-09-21 真凶之二(日志 [窗框] 托盘窗 **1082x406 → 1081x405** 反复 100+ 次):
+        //   卡片宽度是带小数的(thumbWidth 里有缩放系数 k())⇒ 我们算出的目标尺寸是 **1081.5 之类的分数**,
+        //   而 AppKit 那边 SwiftUI 内容视图按固有尺寸把窗口**向上取整**到 1082 ⇒ 我做一次 setFrame,
+        //   它又撑回去 ⇒ **1pt 的 ping-pong**,每次都伴随一次真窗口重排 ✗。
+        //   ⇒ 采用**与 AppKit 相同的取整规则(向上)** ⇒ 两边要的是同一个整数 ⇒ 不再互相改 ✓。
+        return NSSize(width: (c.width + pad).rounded(.up), height: (c.height + pad).rounded(.up))
     }
 
     /// 面板**内容**(玻璃)在本屏坐标里的矩形。面板窗口 = 内容 + 四周 shadowPadStrip,所以窗口往内收
@@ -1290,15 +1321,23 @@ final class PanelController: ObservableObject {
         // 曾经写在 finishBegin 里,而 showPanel 末尾的 updatePreview() 会把它**再拉起来**
         // (托盘上屏的唯一入口就是 updatePreview → 这里)。补丁打在调用方 = 每个新调用点
         // 都会让 bug 复活;打在门口 = 谁来都出不去。
+        // 🔬 调试键 debug.hideTray:整个托盘不出现(用来**单测纯环上浮**是否掉帧)。
+        //   放在门口(与下面那批守卫同一处)—— 打在这里,任何调用方都绕不过去。
+        //   `defaults write com.cheney12138.macswitcher debug.hideTray -bool true` / delete 即装回
+        guard !UserDefaults.standard.bool(forKey: "debug.hideTray") else { return nil }
         guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
               let area = contextScreen?.visibleFrame else { return nil }
         let size = previewSize()
         let contentW = previewContentSize().width
-        let inset = (size.width - contentW) / 2 // 内容在窗口里的左右留白
-        var x = panel.frame.midX - size.width / 2 // 内容居中 ⇒ 与长条同轴
+        // ★★ 2026-09-21 真凶之三([窗框] 托盘窗 一局 **335 次**重排,而尺寸打印出来完全一样 ⇒ 是 x 在动):
+        //   原来 x 用 `(size.width - contentW)/2` 补偿"当前组内容比窗口小"的偏移 ✗
+        //   ⇒ **每换一个 app,x 就变一次** ⇒ 窗口左右滑 ⇒ 每次都触发一轮真窗口重排 + 后备存储。
+        //   ⇒ x 只认**整局最大尺寸**(与窗口尺寸同源)✓。视觉不变:内容本来就在窗内居中
+        //   (SwiftUI 根视图默认居中),窗口居中 ⇒ 内容也居中 —— 与原来算出来的是同一个位置 ✓。
+        var x = panel.frame.midX - size.width / 2 // 窗口居中 ⇒ 内容随之居中(与长条同轴)
         let margin = PanelMetrics.screenMargin
-        if contentW <= area.width - margin * 2 {
-            x = min(max(x, area.minX + margin - inset), area.maxX - margin - contentW - inset)
+        if size.width <= area.width - margin * 2 {
+            x = min(max(x, area.minX + margin), area.maxX - margin - size.width)
         } else if !trayOverflowLogged {
             trayOverflowLogged = true
             glog("[尺寸] 托盘玻璃 \(Int(contentW))pt > 可用 \(Int(area.width - margin * 2))pt,已居中(两端会被切)")
@@ -1307,16 +1346,81 @@ final class PanelController: ObservableObject {
         // 反解出帧距 = padPop + padStrip - seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
         let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
         let y = panel.frame.maxY - frameGap
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
+        // ★★ 2026-09-21 最后一段(账里看得一清二楚):
+        //   `[窗框] 托盘窗(updatePreview()) 418.0,527.0 → **418.5,527.2**` —— 我算的原点是 418.5,527.2,
+        //   而 AppKit 把窗口原点**吸附到整数**(存回来是 418.0,527.0)✗ ⇒ 每次比较都"不等" ⇒ 一局 104 次重排 ✗。
+        //   ⇒ 原点**向下取整**(与 AppKit 的吸附规则一致)。
+        //   ⚠️ 只取整**原点**,**不动尺寸** —— 白天我取整过窗口框(连同尺寸),结果与内容+padding 的账不一致
+        //      ⇒ 面板整块空白 ✗。尺寸那一本账留给 P0-2(TrayGeometry)统一,这次不碰 ✓。
+        return NSRect(x: x.rounded(.down), y: y.rounded(.down), width: size.width, height: size.height)
     }
 
 
     private func updatePreview() {
+        // 🔬 分段计时(2026-09-21):"指针换选中 13–30ms"到底花在哪一段 —— 只在总量 >3ms 时打一行。
+        //   病例:托盘更新平时 0.30ms ✓,但 176 个样本里 13 个 ≥10ms ✗;两个图像缓存都没干掉它 ⇒ 拆段量。
+        let __t0 = CFAbsoluteTimeGetCurrent()
+        var __prev = __t0
+        var __segs: [String] = []
+        func __mark(_ s: String) {
+            let n = CFAbsoluteTimeGetCurrent()
+            __segs.append(String(format: "%@ %.1fms", s, (n - __prev) * 1000))
+            __prev = n
+        }
+        // ★ S1 接线:把"当前该活的窗口"交给流池(它只管起流收帧,不参与绘制)。
+        //   选这里是因为 updatePreview 是**唤起 + 每次换 app/换窗**的唯一公共出口。
+        // ★ 2026-09-21:「座」的模糊**预热门**。面板一开就把全环的窗在后台算一遍
+        //   ⇒ 指针 hover 换 app 时一次都不用算(原来每换一次重算高斯模糊 ⇒ 主线程 12–24ms ✗)。
+        //   注:缓存以"第一次拿到的快照"为准 —— 它只是一层**模糊**过的底,内容略有更新看不出来。
+        // 卡片底图同样预缩放到"卡片像素尺寸"⇒ 托盘重建时不再 decode/缩放(见 CardImageCache)
+        let shots = groups.flatMap { $0.windows }.compactMap { w in
+            Snapshotter.shared.cache[w.wid].map { (wid: w.wid, source: $0) }
+        }
+        CardImageCache.shared.prewarm(shots)
+        SeatImageCache.shared.prewarm(
+            groups.flatMap { $0.windows }.compactMap { w in
+                Snapshotter.shared.cache[w.wid].map { (wid: w.wid, source: $0) }
+            }
+        )
+        __mark("预热")
+        if !entrySelected {
+            // ★ S1.2:交给池的是**整个环的窗口**(不只当前组)。
+            // 依据:起流本身要几十~几百毫秒的系统级工作 ⇒ 放在 hover 路径上必然卡
+            //(实测:同一窗口被反复起停 21 次)。⇒ 唤起时一次预热完,之后 hover 不产生任何流操作。
+            // 顺序:当前组在前(先出画面的就是用户在看的这一组)。
+            var ordered: [WindowRecord] = currentGroup?.windows ?? []
+            for g in groups where g.appName != (currentGroup?.appName ?? "") {
+                ordered.append(contentsOf: g.windows)
+            }
+            var seen = Set<CGWindowID>()
+            let items = ordered.filter { seen.insert($0.wid).inserted }
+                                      .map { (wid: $0.wid, aspect: $0.aspect) }
+            if items.isEmpty {
+                LivePreviewPool.shared.stopAll(reason: "环里没有窗口")
+            } else {
+                LivePreviewPool.shared.sync(items)
+            }
+        } else {
+            LivePreviewPool.shared.stopAll(reason: "入口槽选中(启停生活动)")
+        }
+        __mark("池")
+        let __tf = CFAbsoluteTimeGetCurrent()
         guard let frame = previewFrame() else {
-            previewPanel?.orderOut(nil)
+            // ★★ 2026-09-21 定版:**没内容也不要 orderOut**。
+            //   病例(分段计时):`orderFront` 在 hover 途中被调用 **27/33 次** ✗,托盘窗重排 157 次 ✗
+            //   —— 因为"没内容"(hover 到无窗应用 / 说话局)时我 orderOut 了它,下一个 app 又 orderFront ✗
+            //   每次窗口排序 4–24ms,且都落在滑块弹簧正在跑的那一帧 ⇒ 掉帧。
+            //   ⇒ 改用 **alpha 0 + 忽略鼠标**:窗口留在台上,显/隐只是图层属性(微秒级 ✓)。
+            //   真正的 orderOut 只留在**整局收场**那一处(现在由 ChromeWindow 的 teardown 承担)。
+            trayChrome?.setContentHidden(true)      // 内容隐藏 = 只改图层属性(不再收窗,见 ChromeWindow)
             return
         }
+        __segs.append(String(format: "previewFrame %.1fms", (CFAbsoluteTimeGetCurrent() - __tf) * 1000))
+        __prev = CFAbsoluteTimeGetCurrent()
+        let __tb = CFAbsoluteTimeGetCurrent()
         buildPreviewPanelIfNeeded()
+        __segs.append(String(format: "buildPanel %.1fms", (CFAbsoluteTimeGetCurrent() - __tb) * 1000))
+        __prev = CFAbsoluteTimeGetCurrent()
         guard let previewPanel else { return }
         // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
@@ -1328,9 +1432,26 @@ final class PanelController: ObservableObject {
         traceCost("托盘改尺寸") {
             setFrameIfNeeded(previewPanel, frame)
         }
-        if !previewPanel.isVisible { previewPanel.orderFrontRegardless() }
+        __mark("setFrame")
+        // ★★ 2026-09-21 真凶(分段计时抓到):`orderFrontRegardless()` 在**每次 hover 更新**都被调用 ✗
+        //   ⇒ AppKit 窗口排序 4–35ms/次 ✗(日志:[工] 托盘分段 … **orderFront 34.8**)。
+        //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套
+        //   borderless + nonactivatingPanel + level=.popUpMenu 的组合上它**不可靠**(常常报 false),
+        //   于是每次更新都重排一次窗口。⇒ 改为**自己记账**:上屏一次就记下,只有 orderOut 才清掉。
+        trayChrome?.place()                          // 一整局只 orderFront 一次(其余靠 alpha)
+        __mark("orderFront")
         // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
+        let __tr = CFAbsoluteTimeGetCurrent()
         if previewPanel.frame != before { resyncSelectionUnderPointer() }
+        __segs.append(String(format: "resync %.1fms(调用了: %@)",
+                             (CFAbsoluteTimeGetCurrent() - __tr) * 1000,
+                             previewPanel.frame != before ? "是" : "否"))
+        __prev = CFAbsoluteTimeGetCurrent()
+        __mark("尾")
+        let __total = (CFAbsoluteTimeGetCurrent() - __t0) * 1000
+        if __total > 3 {
+            glog(String(format: "[工] 托盘分段 共 %.1fms | %@", __total, __segs.joined(separator: " · ")))
+        }
     }
 
     /// 视图在指针底下**自己挪位**时,SwiftUI 不会补发 hover(它只在指针移动时发声)→
@@ -2450,6 +2571,49 @@ extension NSRect {
 /// `.nonactivatingPanel` 的正确用法恰恰相反:**能成为 key,但点它不激活 App**
 /// (AltTab / DockDoor 等先例都是这么配的)。所以这里显式打开 `canBecomeKey`,
 /// 同时把 `canBecomeMain` 关掉 —— 它是一个浮在别人上面的工具面板,不是主窗口。
+/// 一扇 chrome 窗(主面板 / 托盘窗)的**显隐状态机** —— 显隐只有一个入口。
+///
+/// 为什么要有它(2026-09-21 两天的账):
+///   · `NSPanel.isVisible` 在 borderless + nonactivatingPanel + level=.popUpMenu 上**不可靠** ✗
+///     ⇒ 拿它当"已经在台上"的判据 ⇒ 每次 hover 都重排一次窗口(4–35ms ✗);
+///   · "没内容"时 orderOut ✗ ⇒ 下一个 app 又 orderFront ✗ ⇒ 一局 27 次窗口排序(收/放风暴);
+///   · 两件都在热路径上 ⇒ 把滑块的弹簧动画砸掉帧。
+/// ⇒ 约定:**上屏一次就记住**(placed);没内容只改图层属性(不进/出窗口栈);只有整局收场才真 orderOut。
+///   **落位(几何)不归它管** —— 那是 setFrameIfNeeded 的唯一职责。
+@MainActor
+final class ChromeWindow {
+    private let panel: NSPanel
+    private var placed = false              // 本局"已经在台上"(自己记账,不信 isVisible)
+    private var hidden = false              // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+
+    init(_ panel: NSPanel) { self.panel = panel }
+
+    /// 确保在台上 + 内容可见。**幂等**:重复调用不产生任何窗口排序 ✓
+    func place() {
+        if hidden { setContentHidden(false) }
+        guard !placed else { return }
+        placed = true
+        panel.orderFrontRegardless()
+    }
+
+    /// 内容显隐:只改图层属性(微秒级 ✓)
+    func setContentHidden(_ on: Bool) {
+        guard on != hidden else { return }
+        hidden = on
+        panel.alphaValue = on ? 0 : 1
+        panel.ignoresMouseEvents = on
+    }
+
+    /// 整局收场:真的腾出窗口 + 清账(与 place 严格配对)
+    func teardown() {
+        placed = false
+        hidden = false
+        panel.alphaValue = 1
+        panel.ignoresMouseEvents = false
+        panel.orderOut(nil)
+    }
+}
+
 final class GlancePanel: NSPanel {
     /// nil = 默认可 key;托盘设 false(2026-09-19):托盘若可 key,真鼠标第一击会被
     /// AppKit 拿去"设为 key"而不派发给视图(SwiftUI 内部视图不回 acceptsFirstMouse)
