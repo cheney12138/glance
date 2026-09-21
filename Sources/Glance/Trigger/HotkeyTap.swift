@@ -112,6 +112,21 @@ final class HotkeyTapCenter {
     private static let navKeys: Set<Int64> =
         Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave])
             .union(digitKeys.keys)
+    /// **⌘ + 动作键**(全匹配)⇒ 作用在"选中的那个 App / 那一扇窗"上。
+    ///
+    /// 病例(2026-09-21 用户实报「三指唤起后按 q/w/f/m/h 只会关面板」):用户按的是 **⌘Q/⌘W/⌘M/⌘H/⌘F**
+    /// ⇒ 那一发带 ⌘ ⇒ 撞上"修饰键门禁"(`pinnedSession ? [] : config.modifierMask`)被当成"不是我们的键"放行 ✗
+    /// ⇒ 而放行的副作用正是 `onElsewhereInput()` ⇒ **关面板,动作一个都没做** ✓。
+    /// 为什么 ⌘Tab 唤起时正常:那是**按住触发键**的局(⌘ 本来就在 `config.modifierMask` 里,门禁放行它)✓;
+    /// 三指唤起是"钉住"局(允许集为空)✗ ⇒ 差别就在这里。
+    /// 用户口径:「那肯定是**全匹配**啊。快捷键还能模糊匹配吗。」⇒
+    /// 判据 = 修饰键**恰好**是 ⌘(多一个 ⇧/⌃/⌥ 都不算):⌘⇧Q 是注销、⌃⌘W/⌥⌘W 是用户自己的热键 ✓
+    /// ⇒ 一律放行,绝不动用户选中的窗(守住 2026-09-17「⌃⌘W 误杀」那次病例)✓。
+    private static let cmdActionKeys: [Int64: Action] = [
+        keyQ: .quitApp, keyW: .closeWindow, keyM: .minimizeWindow,
+        keyF: .toggleFullscreen, keyH: .hideApp,
+    ]
+    
     /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
     ///
     /// 为什么这个键值得单独说:它同时是 macOS **全局**的"同 App 窗口循环"(⌘`) ——
@@ -362,8 +377,13 @@ final class HotkeyTapCenter {
 
     /// 导航期的固定键(唯一会吞键的地方)。触发键本身不在这里 —— 它走 Carbon,前台 App 本来就收不到
     private func handleNavKey(_ event: CGEvent) -> Bool {
+        // 🔬 键账(2026-09-21 用户实报「三指唤起后按 q/w/f/m/h 只会关面板,而 cmd-tab 唤起时正常」):
+        //   把 tap 看见的**每一颗会话期按键**都记下来(带状态与修饰键)⇒ 一眼能分清是
+        //   ① 键根本没被看见(navTap 没开/会话已结束)还是 ② 看见了但下游没做事。
+        let __kc = event.getIntegerValueField(.keyboardEventKeycode)
+        glog("[键账] kc=\(__kc) state=\(state) pinned=\(pinnedSession) mods=\(event.flags.rawValue)")
         guard state == .navigating else { return false } // 理论上不会(会话期才开),守一道
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let keyCode = __kc
         let config = TriggerConfig.load()
         // 触发键在导航期 = **循环移动**(开头那一发由 Carbon 负责,见 `handleHotKey`)
         if keyCode == config.keyCode {
@@ -379,6 +399,14 @@ final class HotkeyTapCenter {
         // 判据:除了**触发键本身那个修饰键**(只在"按住触发键"的那一局里才该出现)之外,
         // 不许再夹 ⌘/⌃/⌥(⇧ 始终允许:我们自己的 ⇧` / ⇧Tab 要用它)。
         // 夹了 ⇒ 这不是我们的键 ⇒ 原样交给 App;钉住的那一局还算"用户在做别的事"(表一 ⑤)。
+        // ★ 全匹配的 ⌘ 动作键(见 cmdActionKeys 的病例):先于"修饰键门禁"判定。
+        //   修饰键集合**必须恰好等于** {⌘} —— 多一个都算别人的快捷键 ⇒ 放行走下面的门禁。
+        let modSet = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+        if modSet == [.maskCommand], let act = Self.cmdActionKeys[keyCode] {
+            trace("navKey(cmd) kc=\(keyCode)")
+            emit(act)
+            return true
+        }
         let allowedMods: CGEventFlags = pinnedSession ? [] : config.modifierMask
         let extraMods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate])
         if !extraMods.subtracting(allowedMods).isEmpty {
