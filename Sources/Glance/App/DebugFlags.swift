@@ -53,4 +53,33 @@ enum DebugFlags {
 
     /// 把 AX 探针限定到某个 pid（值为 pid 字符串；空 = 不限）。用于定位"某 App 的窗口列不出来"。
     static var axprobePid: String? { UserDefaults.standard.string(forKey: Keys.debugAxprobePid) }
+
+    // MARK: 开机自报：**重型开关不允许静默开着**
+
+    /// 每个重型开关的"代价"一句话（与实测数字挂钩）。
+    ///
+    /// 为什么要有这张表（2026-09-21 第二次事故）：`dumpSources` 被上轮实验留在 ON 上，
+    /// 之后每次 hover 都在往磁盘写 1–2 张 PNG ⇒ 用户“又发现掉帧了”，
+    /// 而我们量到的长帧里，**有一部分是量具自己造成的**（max 45.4ms → 关掉后 28–37ms）。
+    /// 上一个同族事故是 `screenProbe`（一开就产出 **70–190ms** 长帧，量到的“卡顿”其实是它）。
+    /// ⇒ 教训：**重型开关必须醒着** ⇒ 开机就把它报出来，并把代价写在报的那一行里。
+    static let heavySwitches: [(name: String, isOn: Bool, cost: String)] = [
+        ("debug.screenProbe", screenProbe, "逐帧读回屏幕像素；**本身就是 70–190ms 的长帧**（量具会改变被测物）"),
+        ("debug.dumpSources", dumpSources, "每次 hover 往磁盘写 1–2 张 PNG；实测 max 帧 45.4ms → 关掉后 28–37ms"),
+        ("debug.hzProbe", hzProbe, "另开一扇临时窗口做 120Hz A/B；会遮挡屏幕左下角"),
+        ("debug.pinPanelOnRelease", pinPanelOnRelease, "钉住面板不消失 ⇒ **改变交互行为**（点空白也关不掉）"),
+        ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
+        ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
+        ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
+    ]
+
+    /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
+    /// 常态（全关）下**一行都不打** ⇒ 不影响日志预算。
+    static func reportHeavySwitchesIfNeeded() {
+        for s in heavySwitches where s.isOn {
+            print("[⚠️ 重型开关] \(s.name) 已打开 —— \(s.cost)")
+            print("[⚠️ 重型开关]   排查完请关掉：defaults write com.cheney12138.macswitcher \(s.name) -bool false")
+        }
+    }
+
 }

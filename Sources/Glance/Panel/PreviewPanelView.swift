@@ -535,6 +535,13 @@ final class LivePreviewPool: ObservableObject {
     ///   ② **性能**:原来任何一扇窗来帧 ⇒ 整个托盘(观察者)重建 ⇒ 13 条流时 70 次/秒 × N 张卡 ✗。
     ///      ⇒ 现在每张卡**只观察自己那一个 box** ⇒ 只重绘那一张卡 ✓(DockDoor 同款结构 ✓)。
     private var boxes: [CGWindowID: LiveFrameBox] = [:]      // 只在主线程碰
+    /// 诊断归因:自上次被探针取走以来,有多少张 live 帧落到了主线程(只在主线程读写)
+    @MainActor private(set) var ingestedSinceProbe = 0
+    /// 探针取走并清零(主线程调用)
+    @MainActor func takeIngested() -> Int {
+        defer { ingestedSinceProbe = 0 }
+        return ingestedSinceProbe
+    }
     /// 池队列独占:最新一帧与淘汰顺序(主线程不读它)
     private var latest: [CGWindowID: CGImage] = [:]
     private var latestOrder: [CGWindowID] = []
@@ -780,6 +787,9 @@ final class LivePreviewPool: ObservableObject {
         // 只把这一张图交给主线程 ⇒ 每张卡各自重绘(不重建整个托盘 ✓)
         DispatchQueue.main.async { [weak self] in
             self?.boxes[wid]?.image = img
+            // 归因用计数(只在主线程读写 ⇒ 不需要锁):探针拿它回答
+            // "这一拍的长帧是不是刚好有 live 帧到货" —— 不然只能猜到渲染/起流头上
+            self?.ingestedSinceProbe = (self?.ingestedSinceProbe ?? 0) + 1
         }
     }
 }

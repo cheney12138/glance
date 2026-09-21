@@ -10,6 +10,10 @@ struct GlanceApp: App {
     init() {
         _ = stdoutIsLineBuffered
         mirrorStdoutToLogFileIfTracing()   // trace 时把 stdout 落到 ~/Library/Logs/Glance/trace.log
+        // ★ 重型开关**开机自报**(2026-09-21 第二次"量具改变被测物"后加的)：
+        //   `dumpSources` 被上轮实验留在 ON 上,之后每次 hover 都在往磁盘写 PNG ⇒
+        //   用户报"又掉帧了",量到的长帧里有一部分是**量具自己**。⇒ 不允许静默开着。
+        DebugFlags.reportHeavySwitchesIfNeeded()
         // 外观要在任何窗/面板画出来之前摆好(面板取的全是按外观解析的动态色)
         AppearancePreference.apply()
         // AX 超时也在此刻定死:它是进程级设置,晚一步就有一次无上限的跨进程等待

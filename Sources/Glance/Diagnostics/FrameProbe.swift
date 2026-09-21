@@ -98,7 +98,12 @@ final class FrameProbe: NSObject {
         // 悬停后 200ms 内的每一拍都单独记一行 ⇒ hover 的真实代价(含 SwiftUI 重建卡片/取图/布局/绘制)
         let sinceHover = now - Self.lastHoverMark
         if Self.lastHoverMark > 0, sinceHover < 0.2 {
-            glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms)", dt * 1000, sinceHover * 1000))
+            // ★ 归因(2026-09-21):把"这一拍里到了几张 live 帧"带上。
+            //   没有这个数就只能猜"长帧是不是渲染/起流造成"（猜错过一次：先把长帧赖在收场上 ✗）。
+            //   读法:`[悬停拍] +33.2ms (悬停后 8ms · 直播新帧 2)` ⇒ 这一拍确实在换卡面图 ✓;
+            //        写 `· 直播新帧 0` 却慢 ⇒ 与收帧无关,去查布局/阴影/玻璃。
+            let live = MainActor.assumeIsolated { LivePreviewPool.shared.takeIngested() }
+            glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms · 直播新帧 %d)", dt * 1000, sinceHover * 1000, live))
         }
     }
 }
