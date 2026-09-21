@@ -95,14 +95,15 @@ final class FrameProbe: NSObject {
         guard last > 0 else { return }
         let dt = now - last
         intervals.append(dt)
+        // ★ 归因计数:**每一拍都取走**(不然计数会跨拍累积 —— 2026-09-21 实测把自己骗了一次:
+        //   日志里出现"直播新帧 8",而 10fps 的一扇窗**不可能**在一拍里交 8 张 ⇒
+        //   那是我自己攒出来的 ✗。现在:每拍取走、只在悬停窗口里打印。
+        let live = MainActor.assumeIsolated { LivePreviewPool.shared.takeIngested() }
         // 悬停后 200ms 内的每一拍都单独记一行 ⇒ hover 的真实代价(含 SwiftUI 重建卡片/取图/布局/绘制)
         let sinceHover = now - Self.lastHoverMark
         if Self.lastHoverMark > 0, sinceHover < 0.2 {
-            // ★ 归因(2026-09-21):把"这一拍里到了几张 live 帧"带上。
-            //   没有这个数就只能猜"长帧是不是渲染/起流造成"（猜错过一次：先把长帧赖在收场上 ✗）。
-            //   读法:`[悬停拍] +33.2ms (悬停后 8ms · 直播新帧 2)` ⇒ 这一拍确实在换卡面图 ✓;
-            //        写 `· 直播新帧 0` 却慢 ⇒ 与收帧无关,去查布局/阴影/玻璃。
-            let live = MainActor.assumeIsolated { LivePreviewPool.shared.takeIngested() }
+            // 读法:`+33.2ms (悬停后 8ms · 直播新帧 2)` ⇒ 这一拍确实在换卡面图 ✓;
+            //       `… 直播新帧 0` 却慢 ⇒ 与收帧无关,去查布局/阴影/玻璃/重绘。
             glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms · 直播新帧 %d)", dt * 1000, sinceHover * 1000, live))
         }
     }
