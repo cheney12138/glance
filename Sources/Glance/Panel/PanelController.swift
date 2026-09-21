@@ -512,6 +512,8 @@ final class PanelController: ObservableObject {
             return
         }
         // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
+        cachedSlotWidth = 0                      // 本局组集合变了 ⇒ 槽宽/卡面重算
+        cachedSlotHeight = 0
         applySessionScaleCap(on: screen)
         // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
         // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
@@ -657,7 +659,10 @@ final class PanelController: ObservableObject {
         // 每行/每列在 1.0 倍下的占位(含间隙;末尾那一份间隙要减掉,所以 pad 里是减不是加)。
         // 卡宽随窗比例(T88):**必须在 ∞ 窗口内**由 aspect 推基准宽 —— 传入现成的宽
         // 会带着上一局的缩放,除回 s 也救不回来(k 是在取值那一刻生效的)
-        let baseWidths = aspects.map { PanelMetrics.thumbWidth(aspect: $0) }
+        // ★ 方案 A:缩放账的基准宽也走槽宽(**取基准宽里的最大值,一律同宽** ✓)
+        //   否则"尺寸账"与"排布"口径不同 ⇒ 必然漂。必须在 ∞ 窗口内算(见上面注释)
+        let slotBase = aspects.map { PanelMetrics.thumbWidth(aspect: $0) }.max() ?? PanelMetrics.thumbMinW
+        let baseWidths = Array(repeating: slotBase, count: aspects.count)
         let padW = (PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap) / s
         let rowH = (PanelMetrics.thumbH + PanelMetrics.trayRowGap) / s
         let padH = (PanelMetrics.trayPadTop + PanelMetrics.trayPadBottom - PanelMetrics.trayRowGap) / s
@@ -679,6 +684,33 @@ final class PanelController: ObservableObject {
     /// 与传入的 widths 口径自动一致
     /// 一组窗口的**卡片尺寸**(唯一来源:min(真窗, 上限) ⇒ `PanelMetrics.thumbSize`)。
     /// 行高不再有常量 —— 一行里最高的那张卡决定这一行的高度(卡片可大小不一,用户 2026-09-21 拍板)。
+    // MARK: - 方案 A:槽位固定(2026-09-21 用户裁定)
+    //
+    // 病例(`[对位]` 实证):换组时行宽 195↔838 ⇒ 每张卡的 x = "前面那些卡的宽度之和" ✗
+    //   ⇒ 你正看的卡**横着挪 200–300pt** ✗(用户原话:"不是窗框移动,是里面的快照移动了" ✓ 窗框确实没动 ✓)。
+    // 口径:**卡仍按真窗比例画**(形状跟真窗走 ✓ 保住用户的设计 ✓),但它**占的槽位固定** = 本局最宽那张卡。
+    //   ⇒ 换组时位置一个像素不动 ✓。代价:窄卡两侧留白(实测最窄 195 vs 最宽 274 ⇒ 左右各 ≈40pt ✓),
+    //     且整行变宽 ⇒ 会话缩放比相应略降(卡片整体略小一点 ✓)。
+    private var cachedSlotWidth: CGFloat = 0
+    private var cachedSlotHeight: CGFloat = 0
+    var slotWidth: CGFloat {
+        if cachedSlotWidth > 0 { return cachedSlotWidth }
+        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.width) }
+        cachedSlotWidth = all.max() ?? PanelMetrics.thumbMinW
+        return cachedSlotWidth
+    }
+    /// C′ 的卡面高度 = 本局最高那张卡(与 `slotWidth` 同源同缓存)
+    var slotHeight: CGFloat {
+        if cachedSlotHeight > 0 { return cachedSlotHeight }
+        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.height) }
+        cachedSlotHeight = all.max() ?? PanelMetrics.shotH
+        return cachedSlotHeight
+    }
+    /// 布局用的宽度数组:**一律槽宽** ⇒ 尺寸账 / 排布 / 命中三处不再各算各的 ✓
+    private func slotWidths(_ count: Int) -> [CGFloat] {
+        Array(repeating: slotWidth, count: count)
+    }
+
     static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
         windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
     }
@@ -818,6 +850,7 @@ final class PanelController: ObservableObject {
             }
             // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
             if let hv = panel.contentView { HzCompare.shared.run(panelView: hv) }
+            PanelScreen.update(self?.contextScreen)
         }
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
@@ -845,6 +878,7 @@ final class PanelController: ObservableObject {
         }
         // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
         if let hostingView { FrameProbe.shared.start(on: hostingView, label: "面板\(groups.count)App") }
+        logRowAlignment("上屏")
     }
 
     /// 换选中时该用的动效(nil = 不动)。两道门:面板在台上 + 已过开局第一帧
@@ -858,6 +892,28 @@ final class PanelController: ObservableObject {
     /// 旧病:hover 每挪一格都 `setFrame` 一次(哪怕目标帧跟当前一模一样),在 SwiftUI 动画
     /// 途中强插一轮窗口布局 —— 横扫面板一顿一顿的,一半的账在这。
     /// 顺带说明:面板尺寸只由 App 数量决定,选中移动从来不改尺寸,所以选中路径根本不该碰窗框。
+    /// 🔬 对位笔(2026-09-21,查"换 app 时卡里的画面移了一下",**只在接外接屏时复现**):
+    /// 窗口帧没变(已量 ✓),所以动的是**行在窗里的位置**。行是**居中**排的 ⇒
+    /// 一换组(行宽变)⇒ 整行**左右平移** ✗ ⇒ 肉眼就是"错位/移动了一下" ✓(瞬时 ✓ 之后自动对齐 ✓)。
+    /// 这一支把"窗宽 / 行宽 / 行原点"三个数一起写出来 ⇒ 一眼看出移了多少 ✓。
+    /// 🔬 对位笔(2026-09-21,查"换 app 时卡里的画面移了一下",**只在接外接屏时复现**):
+    /// 窗口帧没变(已量 ✓),所以动的是**行在窗里的位置**;行是**居中**排的 ⇒
+    /// 一换组(行宽变)⇒ 整行**左右平移** ✗ ⇒ 肉眼就是"错位/移动了一下"(瞬时,之后自动对齐 ✓)。
+    /// 直接复用 `previewContentSize(for:)` 的口径,把"窗宽 / 行宽 / 行原点"一起写出来 ✓。
+    private func logRowAlignment(_ reason: String) {
+        guard isTraceEnabled, let panel = previewPanel, let g = currentGroup else { return }
+        let content = previewContentSize(for: g)          // 与真排布同一口径 ✓
+        let cardW = content.width - PanelMetrics.trayPadX * 2   // 行宽(去掉左右留白)
+        let f = panel.frame
+        let key = String(format: "%@|%.0f|%.0f", reason, f.width, cardW)
+        guard lastRowAlignKey != key else { return }
+        lastRowAlignKey = key
+        glog(String(format: "[对位] %@ 托盘窗 %.0fx%.0f @%.0f,%.0f · 行 %.0fx%.0f · 内容左缘=%.1f(左锚定 ⇒ 固定) · app=%@",
+                    reason, f.width, f.height, f.minX, f.minY, cardW, content.height,
+                    PanelMetrics.shadowPadPop + PanelMetrics.trayPadX, g.appName))
+    }
+    private var lastRowAlignKey: String = ""
+
     private func setFrameIfNeeded(_ panel: NSPanel, _ frame: NSRect?, caller: String = #function) {
         guard let frame, !panel.frame.nearlyEquals(frame) else { return }
         // ★★ 2026-09-21(分段计时抓到的最后一段账):`display: true` 会**当场**重绘 ✗
@@ -1233,7 +1289,7 @@ final class PanelController: ObservableObject {
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
         let sizes = Self.cardSizes(group.windows)
-        let widths = sizes.map(\.width)
+        let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
         let (rows, cols) = trayLayout(widths: widths)
         // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
         let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
@@ -1511,7 +1567,7 @@ final class PanelController: ObservableObject {
             // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
             guard let g = currentGroup else { return }
             let sizes = Self.cardSizes(g.windows)
-            let widths = sizes.map(\.width)
+            let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
             let (rows, cols) = trayLayout(widths: widths)
             // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
             var r = 0
@@ -1850,6 +1906,7 @@ final class PanelController: ObservableObject {
     }
 
     func hoverApp(_ i: Int, source: String = "指针 hover", strict: Bool = true) {
+        DispatchQueue.main.async { [weak self] in self?.logRowAlignment("换组") }
         FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 换 app 打点
         // ★ 热区内缩:指针只蹭到格子边缘 = "路过",不算选中(2026-09-19 用户裁定)。
         //   点按路径传 strict:false —— 点击目标仍是整格,精度要求不同
@@ -2066,7 +2123,7 @@ final class PanelController: ObservableObject {
         var cum: CGFloat = 0
         var hit: Int?
         for (i, w) in g.windows.enumerated() {
-            let cw = PanelMetrics.thumbWidth(aspect: w.aspect)
+            let cw = slotWidth                          // ★ 方案 A:命中按槽(与排布同源)
             if localX < cum + cw { hit = i; break }
             cum += cw + PanelMetrics.thumbGap
         }
