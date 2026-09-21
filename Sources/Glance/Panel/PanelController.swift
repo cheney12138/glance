@@ -1945,7 +1945,12 @@ final class PanelController: ObservableObject {
     /// 跨段过渡的时长。窗口(AppKit)与内容(SwiftUI)用**同一根曲线同一段时长**,
     /// 两边才会读成一次变形而不是两层各动各的。系统"减弱动态效果"时 MotionPolicy 给 nil ⇒ 双边都瞬时。
     /// (0.22 → 0.18:双系统相位差的表现随帧数走,短一点抖动窗口就小 —— 2026-09-18 抖动病例)
-    private static let segmentAnimation = MotionPolicy.animation(.easeInOut(duration: 0.18))
+    private static var segmentAnimation: Animation? {
+        // 🔬 消元开关:确认"换段动画"是不是那个把托盘卡片动画着挪位置的元凶。
+        //   `defaults write com.cheney12138.macswitcher debug.noSegmentAnim -bool true`
+        if UserDefaults.standard.bool(forKey: "debug.noSegmentAnim") { return nil }
+        return MotionPolicy.animation(.easeInOut(duration: 0.18))
+    }
 
     /// 段切换的唯一入口(模型 C):状态翻转走 withAnimation(SwiftUI 侧玻璃/内容跟着变形),
     /// 窗框走 applyRingSwap(animated:) 同一根曲线 —— 内容与玻璃一次变形完成。
