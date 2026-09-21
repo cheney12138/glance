@@ -677,6 +677,22 @@ final class PanelController: ObservableObject {
     /// 分布必须与 thumbGrid 的 HStack 完全一致(按数量均分、末行左对齐)—— 两处各算各的必然漂。
     /// 间隙取**取值那一刻**的 `thumbGap`:∞ 窗口内调用得基准值,正常 cap 下调用得缩放值,
     /// 与传入的 widths 口径自动一致
+    /// 一组窗口的**卡片尺寸**(唯一来源:min(真窗, 上限) ⇒ `PanelMetrics.thumbSize`)。
+    /// 行高不再有常量 —— 一行里最高的那张卡决定这一行的高度(卡片可大小不一,用户 2026-09-21 拍板)。
+    static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
+        windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
+    }
+    
+    /// 分行后**每行的最大高度**(内容尺寸 / 命中判定 / 视图三处共用同一套数)
+    static func rowHeights(_ sizes: [CGSize], rows: Int, cols: Int) -> [CGFloat] {
+        (0..<rows).map { r in
+            let start = r * cols
+            let end = min(start + cols, sizes.count)
+            guard start < end else { return 0 }
+            return sizes[start..<end].map(\.height).max() ?? 0
+        }
+    }
+    
     private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
         var widest: CGFloat = 0
         for r in 0..<rows {
@@ -1214,13 +1230,15 @@ final class PanelController: ObservableObject {
     /// T88:卡宽随窗比例,尺寸按每张卡的实际宽算(不再有 count × 定尺的省事)
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
-        let widths = group.windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }
+        let sizes = Self.cardSizes(group.windows)
+        let widths = sizes.map(\.width)
         let (rows, cols) = trayLayout(widths: widths)
-        let r = CGFloat(max(rows, 1))
+        // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
+        let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
         return NSSize(
             width: Self.maxRowWidth(widths, rows: rows, cols: cols) + PanelMetrics.trayPadX * 2,
             height: PanelMetrics.trayPadTop
-                + r * PanelMetrics.thumbH + max(r - 1, 0) * PanelMetrics.trayRowGap
+                + rowH.reduce(0, +) + max(CGFloat(max(rows, 1)) - 1, 0) * PanelMetrics.trayRowGap
                 + PanelMetrics.trayPadBottom
         )
     }
@@ -1346,8 +1364,15 @@ final class PanelController: ObservableObject {
         //   ⇒ 指针 hover 换 app 时一次都不用算(原来每换一次重算高斯模糊 ⇒ 主线程 12–24ms ✗)。
         //   注:缓存以"第一次拿到的快照"为准 —— 它只是一层**模糊**过的底,内容略有更新看不出来。
         // 卡片底图同样预缩放到"卡片像素尺寸"⇒ 托盘重建时不再 decode/缩放(见 CardImageCache)
-        let shots = groups.flatMap { $0.windows }.compactMap { w in
-            Snapshotter.shared.cache[w.wid].map { (wid: w.wid, source: $0) }
+        // 目标尺寸 = 卡片那套"不放大"的口径(与视图里的 imageBox 同一算法,免得预热出的图与绘制不一致)
+        let shots = groups.flatMap { $0.windows }.compactMap { w -> (wid: CGWindowID, source: NSImage, target: CGSize)? in
+            guard let img = Snapshotter.shared.cache[w.wid] else { return nil }
+            let cardW = PanelMetrics.thumbWidth(aspect: w.aspect)
+            let win = w.bounds.size
+            let s = (win.width > 1 && win.height > 1)
+                ? min(1, max(cardW / win.width, PanelMetrics.shotH / win.height)) : 1
+            return (wid: w.wid, source: img,
+                    target: CGSize(width: max(1, win.width * s), height: max(1, win.height * s)))
         }
         CardImageCache.shared.prewarm(shots)
         SeatImageCache.shared.prewarm(
@@ -1481,9 +1506,18 @@ final class PanelController: ObservableObject {
             // 窗口卡:T88 卡宽随窗比例,按**每张卡的实际宽**走查命中;
             // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
             guard let g = currentGroup else { return }
-            let widths = g.windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }
+            let sizes = Self.cardSizes(g.windows)
+            let widths = sizes.map(\.width)
             let (rows, cols) = trayLayout(widths: widths)
-            let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.thumbH + PanelMetrics.trayRowGap)))
+            // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
+            var r = 0
+            var rowTop: CGFloat = 0
+            let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
+            for k in 0..<max(rows, 1) where yUp >= rowTop + rowH[k] + PanelMetrics.trayRowGap {
+                rowTop += rowH[k] + PanelMetrics.trayRowGap
+                r = k + 1
+            }
+            r = min(max(rows, 1) - 1, r)
             let start = r * cols
             let end = min(start + cols, widths.count)
             guard start < end else { return }
