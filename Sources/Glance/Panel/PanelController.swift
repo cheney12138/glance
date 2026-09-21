@@ -209,7 +209,7 @@ final class PanelController: ObservableObject {
     /// 就地折返(moveApp 的 else 分支照旧取模绕回),段只能靠 ↓/↑ 进出 —— 模型 C 的"逻辑一条环"
     /// 在这条开关下退化成"两条独立环"。滚轮走 handle(.next/.prev) 同路,自动跟着这个开关走
     private var tabEntersLaunchSection: Bool {
-        UserDefaults.standard.object(forKey: "panel.tabEntersLaunchSection") as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.panelTabEntersLaunchSection) as? Bool ?? true
     }
 
     // (2026-09-19)「悬停回退单」机制整段退役 —— 病例:四指/键盘进段后,指针不在面板上,
@@ -413,7 +413,7 @@ final class PanelController: ObservableObject {
         // 新一局回到"主环第一格"的语义:上一局若停在启动区,这一局不带过去(主环才是本产品的主世界)
         entrySelected = false
         launchIndex = nil
-        if UserDefaults.standard.object(forKey: "panel.showLaunchables") as? Bool ?? true {
+        if UserDefaults.standard.object(forKey: Keys.panelShowLaunchables) as? Bool ?? true {
             // ⚠️ 2026-09-17 病例:除了 bundle id,**把 bundle 的路径也放进"在跑"的集合**。
             // 有些 Dock 常驻项取不到 bundleID(`DockApps.launchables` 里会退化成用 **path** 当 id),
             // 那时"在跑"的集合里只有 id ⇒ 两边**永远对不上** ⇒ 明明在跑的 App 也被列成"未启动"。
@@ -451,7 +451,7 @@ final class PanelController: ObservableObject {
         //   · 正向 Tab  → 更早的… → 最久没用的 → 最后才轮到当前 App(与原生同序)
         //   · 反向 ⇧Tab → 直接到队尾 = 当前 App(原生也是这样:从第 2 格往回一格就是第 1 格)
         // 交换只能改两格的相对位置,旋转改的是整条环 —— 这是两种完全不同的操作。
-        let advanceOnOpen = UserDefaults.standard.object(forKey: "switch.advanceOnOpen") as? Bool ?? true
+        let advanceOnOpen = UserDefaults.standard.object(forKey: Keys.switchAdvanceOnOpen) as? Bool ?? true
         // ★ 2026-09-15 三修:前两版都在"重排顺序"上找答案,都是错的(见 LandingRule 文档里的三段历史)。
         // 正解是什么都不做 —— MRU 原序天然就是原生的第一眼版式:
         //   第一格 = 当前 App(它在,但没被选中),第二格 = 上一个 App(高亮落这里 = 唤起即切换),
@@ -845,7 +845,7 @@ final class PanelController: ObservableObject {
             // 病例:为了白光排查,这里一次唤起连抓 12 帧 `CGWindowListCreateImage`(单次 10–50ms ✗),
             // 而 debug.trace 一开它就一直在跑 ⇒ 唤起/早期交互的卡顿有它一份,还污染所有测量。
             // 纪律:重型诊断必须有自己的开关 + 默认关(见 AGENTS.md「诊断开关」)。
-            if isTraceEnabled, UserDefaults.standard.bool(forKey: "debug.screenProbe") {
+            if isTraceEnabled, UserDefaults.standard.bool(forKey: Keys.debugScreenProbe) {
                 self?.probeShownFrames(panel)
             }
             // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
@@ -1394,7 +1394,7 @@ final class PanelController: ObservableObject {
         // 🔬 调试键 debug.hideTray:整个托盘不出现(用来**单测纯环上浮**是否掉帧)。
         //   放在门口(与下面那批守卫同一处)—— 打在这里,任何调用方都绕不过去。
         //   `defaults write com.cheney12138.macswitcher debug.hideTray -bool true` / delete 即装回
-        guard !UserDefaults.standard.bool(forKey: "debug.hideTray") else { return nil }
+        guard !UserDefaults.standard.bool(forKey: Keys.debugHideTray) else { return nil }
         guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
               let area = contextScreen?.visibleFrame else { return nil }
         // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
@@ -1627,7 +1627,7 @@ final class PanelController: ObservableObject {
     /// 滑杆线性映射的是**速度**而不是间隔 —— 否则慢端几乎不动(两者是倒数关系)。
     /// 默认 10 次/秒 = 原来的 0.10s,升级后手感不变。
     private var scrollInterval: TimeInterval {
-        let speed = UserDefaults.standard.object(forKey: "panel.scrollSpeed") as? Double ?? 10
+        let speed = UserDefaults.standard.object(forKey: Keys.panelScrollSpeed) as? Double ?? 10
         return 1.0 / max(3, min(20, speed))
     }
 
@@ -1638,7 +1638,7 @@ final class PanelController: ObservableObject {
         guard panel?.isVisible == true else { return }   // 双保险:面板不在就什么都不做
         // 设置开关(默认开)。用 object(forKey:) 取,而不是 bool(forKey:) —— 后者的
         // "没写过"和"写成 false"是同一个值,默认值就没法表达(与 switch.advanceOnOpen 同一处理)。
-        guard UserDefaults.standard.object(forKey: "switch.scrollMovesSelection") as? Bool ?? true else { return }
+        guard UserDefaults.standard.object(forKey: Keys.switchScrollMovesSelection) as? Bool ?? true else { return }
         guard e.momentumPhase == [] else { return }
         let dx = e.scrollingDeltaX, dy = e.scrollingDeltaY
         let d = abs(dy) >= abs(dx) ? dy : dx
@@ -2021,7 +2021,7 @@ final class PanelController: ObservableObject {
     private static var segmentAnimation: Animation? {
         // 🔬 消元开关:确认"换段动画"是不是那个把托盘卡片动画着挪位置的元凶。
         //   `defaults write com.cheney12138.macswitcher debug.noSegmentAnim -bool true`
-        if UserDefaults.standard.bool(forKey: "debug.noSegmentAnim") { return nil }
+        if UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) { return nil }
         return MotionPolicy.animation(.easeInOut(duration: 0.18))
     }
 
@@ -2144,7 +2144,7 @@ final class PanelController: ObservableObject {
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+    private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: Keys.debugPinPanelOnRelease) }
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 

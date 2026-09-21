@@ -123,7 +123,7 @@ final class HzCompare {
     private var started = false
 
     /// 只在调试键打开时做一次:`defaults write com.cheney12138.macswitcher debug.hzProbe -bool true`
-    static var enabled: Bool { UserDefaults.standard.bool(forKey: "debug.hzProbe") }
+    static var enabled: Bool { UserDefaults.standard.bool(forKey: Keys.debugHzProbe) }
 
     /// 面板上屏后调一次。`panelView` = 面板的内容视图(hosting view)
     func run(panelView: NSView) {
