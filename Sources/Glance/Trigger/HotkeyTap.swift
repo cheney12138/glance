@@ -145,7 +145,7 @@ final class HotkeyTapCenter {
     }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
-    private var pinPanel: Bool { UserDefaults.standard.bool(forKey: Keys.debugPinPanelOnRelease) }
+    private var pinPanel: Bool { DebugFlags.pinPanelOnRelease }
 
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
