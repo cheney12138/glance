@@ -91,3 +91,95 @@ final class FrameProbe: NSObject {
         intervals.append(now - last)
     }
 }
+
+// MARK: - 120Hz 调查:A/B 对比(临时诊断,2026-09-21)
+
+/// **同一个 App、同一块屏**,只差"窗口是谁":
+///   A. 我们面板(NSHostingView,SwiftUI)
+///   B. 同一 App 里临时开的一扇普通 NSView 窗口(同样的 borderless+nonactivating+.popUpMenu 配置)
+/// 背景(实验结论,见对话记录):同样的窗口配置在**独立测试 App** 里能拿到 **120Hz** ✓,
+///   而我们面板的 display link 只有 **60Hz** ✗ ⇒ 差别在本 App 内部 ⇒ 这个 A/B 用来定性:
+///   · A=60,B=120 ⇒ 问题在"面板这扇窗 / 这个视图" ✓;
+///   · A=60,B=60  ⇒ 问题是 **App 级**的(某个全局设置 / 某个东西压着帧率)✓。
+@MainActor
+final class HzCompare {
+    static let shared = HzCompare()
+    private var window: NSWindow?
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var a: [Double] = []      // A:面板
+    private var b: [Double] = []      // B:临时普通窗口
+    private var started = false
+
+    /// 只在调试键打开时做一次:`defaults write com.cheney12138.macswitcher debug.hzProbe -bool true`
+    static var enabled: Bool { UserDefaults.standard.bool(forKey: "debug.hzProbe") }
+
+    /// 面板上屏后调一次。`panelView` = 面板的内容视图(hosting view)
+    func run(panelView: NSView) {
+        guard Self.enabled, !started, #available(macOS 14.0, *) else { return }
+        started = true
+        let screen = panelView.window?.screen ?? NSScreen.main
+        glog("[Hz] A/B 开始:面板屏 maxFps=\(screen?.maximumFramesPerSecond ?? -1)"
+             + " 本地化名=\(screen?.localizedName ?? "?") 共 \(NSScreen.screens.count) 块屏")
+
+        // A:面板自己的 display link
+        let la = panelView.displayLink(target: self, selector: #selector(tickA(_:)))
+        la.add(to: .main, forMode: .common)
+        aLink = la
+
+        // B:同 App 里临时开一扇"普通 NSView"窗口(配置与面板一致)
+        let r = NSRect(x: (screen?.frame.minX ?? 0) + 80, y: (screen?.frame.minY ?? 0) + 80,
+                       width: 420, height: 300)
+        let w = NSPanel(contentRect: r, styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+        w.isFloatingPanel = true
+        w.level = .popUpMenu
+        w.backgroundColor = .clear
+        w.isOpaque = false
+        w.hasShadow = false
+        w.hidesOnDeactivate = false
+        w.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle]
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 300))
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.15).cgColor
+        w.contentView = v
+        w.orderFrontRegardless()
+        window = w
+        let lb = v.displayLink(target: self, selector: #selector(tickB(_:)))
+        lb.add(to: .main, forMode: .common)
+        bLink = lb
+
+        // 1.6s 后收摊 + 打印
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in self?.report() }
+    }
+
+    private var aLink: CADisplayLink?
+    private var bLink: CADisplayLink?
+
+    @objc private func tickA(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        if last > 0 { a.append((now - last) * 1000) }
+        last = now
+    }
+    @objc private func tickB(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        if bLast > 0 { b.append((now - bLast) * 1000) }
+        bLast = now
+    }
+    private var bLast: CFTimeInterval = 0
+
+    private func report() {
+        aLink?.invalidate(); bLink?.invalidate()
+        aLink = nil; bLink = nil
+        window?.orderOut(nil); window = nil
+        func s(_ v: [Double]) -> String {
+            guard !v.isEmpty else { return "无回调" }
+            let x = v.sorted(); let p50 = x[x.count / 2]
+            return String(format: "n=%d P50 %.1fms(≈%.0fHz) min %.1f max %.1f",
+                          x.count, p50, p50 > 0 ? 1000 / p50 : 0, x.first!, x.last!)
+        }
+        glog("[Hz] A 面板(hostingView): \(s(a))")
+        glog("[Hz] B 同 App 普通 NSView 窗: \(s(b))")
+        glog("[Hz] 结论: \(a.isEmpty || b.isEmpty ? "样本不足" : "见上两行")")
+    }
+}
