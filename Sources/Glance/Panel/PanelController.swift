@@ -512,8 +512,6 @@ final class PanelController: ObservableObject {
             return
         }
         // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
-        cachedSlotWidth = 0                      // 本局组集合变了 ⇒ 槽宽/卡面重算
-        cachedSlotHeight = 0
         applySessionScaleCap(on: screen)
         // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
         // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
@@ -691,25 +689,6 @@ final class PanelController: ObservableObject {
     // 口径:**卡仍按真窗比例画**(形状跟真窗走 ✓ 保住用户的设计 ✓),但它**占的槽位固定** = 本局最宽那张卡。
     //   ⇒ 换组时位置一个像素不动 ✓。代价:窄卡两侧留白(实测最窄 195 vs 最宽 274 ⇒ 左右各 ≈40pt ✓),
     //     且整行变宽 ⇒ 会话缩放比相应略降(卡片整体略小一点 ✓)。
-    private var cachedSlotWidth: CGFloat = 0
-    private var cachedSlotHeight: CGFloat = 0
-    var slotWidth: CGFloat {
-        if cachedSlotWidth > 0 { return cachedSlotWidth }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.width) }
-        cachedSlotWidth = all.max() ?? PanelMetrics.thumbMinW
-        return cachedSlotWidth
-    }
-    /// C′ 的卡面高度 = 本局最高那张卡(与 `slotWidth` 同源同缓存)
-    var slotHeight: CGFloat {
-        if cachedSlotHeight > 0 { return cachedSlotHeight }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.height) }
-        cachedSlotHeight = all.max() ?? PanelMetrics.shotH
-        return cachedSlotHeight
-    }
-    /// 布局用的宽度数组:**一律槽宽** ⇒ 尺寸账 / 排布 / 命中三处不再各算各的 ✓
-    private func slotWidths(_ count: Int) -> [CGFloat] {
-        Array(repeating: slotWidth, count: count)
-    }
 
     static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
         windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
@@ -1275,7 +1254,8 @@ final class PanelController: ObservableObject {
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
         let sizes = Self.cardSizes(group.windows)
-        let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+        // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
+        let widths = sizes.map(\.width)
         let (rows, cols) = trayLayout(widths: widths)
         // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
         let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
@@ -1549,7 +1529,7 @@ final class PanelController: ObservableObject {
             // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
             guard let g = currentGroup else { return }
             let sizes = Self.cardSizes(g.windows)
-            let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+            let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
             let (rows, cols) = trayLayout(widths: widths)
             // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
             var r = 0
@@ -2104,8 +2084,9 @@ final class PanelController: ObservableObject {
         guard let g = currentGroup, !g.windows.isEmpty else { return }
         var cum: CGFloat = 0
         var hit: Int?
-        for (i, w) in g.windows.enumerated() {
-            let cw = slotWidth                          // ★ 方案 A:命中按槽(与排布同源)
+        let sizes = Self.cardSizes(g.windows)
+        for i in g.windows.indices {
+            let cw = sizes[i].width                     // 卡有多宽就命中多宽(与视图同源)
             if localX < cum + cw { hit = i; break }
             cum += cw + PanelMetrics.thumbGap
         }
