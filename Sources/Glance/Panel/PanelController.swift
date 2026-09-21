@@ -1610,6 +1610,10 @@ final class PanelController: ObservableObject {
 
     private func moveApp(_ delta: Int) {
         guard !groups.isEmpty else { return }
+        // ★ 键盘换选中也要打"选中变更"点(2026-09-21 修):原来只有指针 hover 会打 ⇒
+        //   用户实报的复现是**「tab 切到大象那一拍掉帧」**,而这条路径**从不打点** ✗
+        //   ⇒ 我们前几轮量到的长帧全是指针那一路的,压根没量到用户报的那一下 ✗✗
+        FrameProbe.lastHoverMark = CACurrentMediaTime()
         traceCost("键盘换选中") {
             // 模型 C(ADR-0013):**逻辑上只有一条环** —— 主环走完 `Tab` 自然进入未启动段,
             // 未启动段走完接回主环;`⇧Tab` 反向对称。两条旧裁定(2026-09-16「不经 Tab 到达」、
@@ -1760,6 +1764,7 @@ final class PanelController: ObservableObject {
         guard n > 1 else { return }
         // 补记账(2026-09-15):日志里出现过一局 `长帧 4(6%)`,全部落在连按 ←→ 的那 3 秒里 ——
         // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
+        FrameProbe.lastHoverMark = CACurrentMediaTime()   // 同"键盘换选中":选中一变就打点
         traceCost("窗口选中") {
             winIndex = (winIndex + delta + n) % n
             traceCost("  ↳拍图") { refreshSnapshotForSelection() }
