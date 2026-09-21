@@ -687,6 +687,17 @@ final class ThreeFingerTap {
         static let palmMajorAxis: Float = 22
         static let palmSize: Float = 4.5
 
+        /// ★ 账本卡死自愈上限(2026-09-20「三指四指又失效了」的病根):
+        /// 账本只在"收口帧"判卷,而收口条件一旦满足不了,账本就**无限期撑开** ——
+        /// 之后所有触摸全被吸进同一条账本,手指数/时长/位移全爆表,判卷永远失败,
+        /// 而且**一条日志都不留**(判卷不跑 = 沉默失效)。实锤:
+        /// ```text
+        /// [5049394ms] [指点按] 5 指(豁免掌 1) 2941951ms … size=4.6 → 不动作
+        /// ```
+        /// 一条按压持续 **49 分钟**(size=4.6 = 掌缘):掌搭在板上打字,收口帧永远等不来。
+        /// 1.0s = 点按 ≤0.30s、按压触发 ≤0.25s 之后的三倍余量 —— 真手势到不了 1s 还不收口。
+        static let stuckLedgerAfter: Double = 1.0
+
         private(set) var maxTouches = 0
         /// **去重手指 id 数**(2026-09-18 补,治「不灵敏」):极快的轻点(实测 ~50ms)里,
         /// 四根手指可能**从未同帧落齐** —— 按"同帧最大手指数"就数成 2/3,判成不动作。
@@ -701,6 +712,9 @@ final class ThreeFingerTap {
         private(set) var statesSeen: Set<Int32> = []   // 本轮见过的 state 档(判"漏在哪档"的量尺)
         private var beganAt: CFAbsoluteTime = 0
         private var pressActive = false
+        /// 本轮**真手指**是否已经落板(掌不算)。掌先落时表不掐,真手指落的这帧才掐 ——
+        /// 掌缘搭着打字时,"搭着"的时长不该算进点按时长
+        private var sawRealTouch = false
         private var firstNorm: [Int32: MTPoint] = [:]
         private var firstAbs: [Int32: MTPoint] = [:]
 
@@ -712,11 +726,26 @@ final class ThreeFingerTap {
             case rejected(String)                    // 不动作(带原因,进日志)
         }
 
-        /// 喂一帧。返回"当前正在触摸的手指数"(>0 = 这一轮还没结束)。
+        /// 喂一帧。返回"当前正在触摸的**真手指**数"(>0 = 这一轮还没结束)。
         /// 线程纪律:只在 MultitouchSupport 的回调线程跑,只碰自己的标量;判卷在抬手帧同步出。
         mutating func feed(nFingers: Int, data: UnsafeMutableRawPointer?) -> Int {
             var touching = 0
             var palmTouching = 0
+            // ★ 卡死自愈:账本超过 stuckLedgerAfter 还没收口 ⇒ 整本作废重来。
+            //   (丢收口帧/幽灵触点常驻都会把账本撑成毒账本 —— 见 stuckLedgerAfter 的病历)
+            if pressActive, CFAbsoluteTimeGetCurrent() - beganAt > Self.stuckLedgerAfter {
+                let stale = CFAbsoluteTimeGetCurrent() - beganAt
+                pressActive = false
+                pressFired = false
+                maxTouches = 0; distinctIDs.removeAll()
+                maxNormMove = 0; maxAbsMove = 0
+                palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
+                statesSeen.removeAll(); sawRealTouch = false
+                firstNorm.removeAll(); firstAbs.removeAll()
+                DispatchQueue.main.async {
+                    glog(String(format: "[指点按] 账本 %.1fs 未收口 ⇒ 强制重置(丢帧/幽灵触点自愈)", stale))
+                }
+            }
             if let data, nFingers > 0 {
                 for i in 0..<nFingers {
                     let f = data.assumingMemoryBound(to: Finger.self)[i]
@@ -748,8 +777,7 @@ final class ThreeFingerTap {
                     }
                 }
             }
-            let total = touching + palmTouching
-            if total > 0 {
+            if touching > 0 || palmTouching > 0 {
                 if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
                     pressActive = true
                     beganAt = CFAbsoluteTimeGetCurrent()
@@ -757,10 +785,23 @@ final class ThreeFingerTap {
                     maxNormMove = 0; maxAbsMove = 0
                     palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
                     statesSeen.removeAll()
+                    sawRealTouch = false
+                }
+                if touching > 0, !sawRealTouch {
+                    // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
+                    //   2026-09-20 病例:掌搭着打字,掐表从掌落起,0.3s 上限必爆)
+                    sawRealTouch = true
+                    beganAt = CFAbsoluteTimeGetCurrent()
+                    firstNorm.removeAll(); firstAbs.removeAll()
+                    maxNormMove = 0; maxAbsMove = 0
+                    maxTouches = 0
                 }
                 maxTouches = max(maxTouches, touching)
                 palmCount = max(palmCount, palmTouching)
-                return total
+                // ★ 返回**真手指数**,不是 total:掌还搭着不该挡收口 ——
+                //   (2026-09-20 病例:收口条件曾是"total == 0",掌缘搭板 = 账本永不收口,
+                //   后续三/四指点按全部被无声吞掉,这正是「三指四指又失效了」的主病根)
+                return touching
             }
             pressActive = false
             return 0
@@ -859,6 +900,7 @@ final class ThreeFingerTap {
                     tap.lastTapAt = now
                     glog("[指点按] 四指按压 0.25s → 唤起并直接进未启动环(钉住)")
                     if tap.enabledFour { tap.onFireFour?() }
+                    Haptics.fire(.summonFourFinger)
                 }
             }
             return 0   // 按压还没结束
@@ -870,6 +912,7 @@ final class ThreeFingerTap {
         case .rejected(""):
             break                              // 一指的普通点按:不进账
         case .rejected(let why):
+        if !why.isEmpty { Haptics.fire(.gestureRejected, trace: String(why.prefix(48))) }
             DispatchQueue.main.async { glog("[指点按] \(why)") }
         case .slide(let norm):
             DispatchQueue.main.async {
@@ -888,6 +931,7 @@ final class ThreeFingerTap {
                 glog(String(format: "[指点按] 三指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
                             held, norm, absMove))
                 if tap.enabled { tap.onFire?() }
+                Haptics.fire(.summonThreeFinger)
             }
         case .fireFour(let held, let norm, let absMove):
             DispatchQueue.main.async {
@@ -901,6 +945,7 @@ final class ThreeFingerTap {
                 glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
                             held, norm, absMove))
                 if tap.enabledFour { tap.onFireFour?() }
+                Haptics.fire(.summonFourFinger)
             }
         }
         return 0
