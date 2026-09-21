@@ -18,7 +18,7 @@ final class PanelController: ObservableObject {
     /// 那种情况下上膛反而要提前,见 showPanel。
     @Published private(set) var selectionArmed = false
     /// 托底的入场偏移(纵向,内容坐标系,渐近到 0)。只在"从底部升起"模式下非零
-    /// 本局托盘窗口开的**最大**内容尺寸(见 `previewSize()`)。
+    /// 本局托盘窗口开的**最大**内容尺寸(喂给 `TrayGeometry`,窗口尺寸由它算出)。
     ///
     /// 病例(2026-09-15 实测量到):`[工] 托盘改尺寸 主线程 23.3ms`,而外层 `键盘换选中` 26.3ms
     /// —— 每按一次 Tab,托盘卡片数变 → 窗口尺寸变 → `setFrame` 同步窗口布局,吃掉 1–1.5 帧,
@@ -1260,19 +1260,9 @@ final class PanelController: ObservableObject {
         return entrySelected ? previewContentSize(launchCount: launchables.count) : previewContentSize(for: currentGroup)
     }
 
-    /// 托盘**窗口**尺寸:本局最大布局 + 两侧呼吸区。
-    /// 用它(而不是当前组的内容)是为了让窗口在整局里**只 setFrame 一次**(病例见 `trayMaxContentSize`)。
-    private func previewSize() -> NSSize {
-        let c = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
-        let pad = PanelMetrics.shadowPadPop * 2
-        // ★★ 2026-09-21 真凶之二(日志 [窗框] 托盘窗 **1082x406 → 1081x405** 反复 100+ 次):
-        //   卡片宽度是带小数的(thumbWidth 里有缩放系数 k())⇒ 我们算出的目标尺寸是 **1081.5 之类的分数**,
-        //   而 AppKit 那边 SwiftUI 内容视图按固有尺寸把窗口**向上取整**到 1082 ⇒ 我做一次 setFrame,
-        //   它又撑回去 ⇒ **1pt 的 ping-pong**,每次都伴随一次真窗口重排 ✗。
-        //   ⇒ 采用**与 AppKit 相同的取整规则(向上)** ⇒ 两边要的是同一个整数 ⇒ 不再互相改 ✓。
-        return NSSize(width: (c.width + pad).rounded(.up), height: (c.height + pad).rounded(.up))
-    }
-
+    /// 托盘窗几何的**唯一来源**(P0-2):尺寸与原点都在 `TrayGeometry` 里算,这里只负责喂输入。
+    /// 原来这里有一份"窗口尺寸"的算法 —— 它与 `previewFrame()` 的 x、与视图的内容尺寸是三本账,
+    /// 只要取整规则或取数来源差一点就互相改(实机:一局 100+ / 104 / 335 次重排)⇒ 已并入 TrayGeometry ✓。
     /// 面板**内容**(玻璃)在本屏坐标里的矩形。面板窗口 = 内容 + 四周 shadowPadStrip,所以窗口往内收
     /// 一圈就是玻璃。与 `previewContentRect()` 同一个口径(ADR-0006 的推论:凡判"指针/点击在不在"都用内容矩形)。
     func panelContentRect() -> NSRect? {
@@ -1327,32 +1317,15 @@ final class PanelController: ObservableObject {
         guard !UserDefaults.standard.bool(forKey: "debug.hideTray") else { return nil }
         guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
               let area = contextScreen?.visibleFrame else { return nil }
-        let size = previewSize()
-        let contentW = previewContentSize().width
-        // ★★ 2026-09-21 真凶之三([窗框] 托盘窗 一局 **335 次**重排,而尺寸打印出来完全一样 ⇒ 是 x 在动):
-        //   原来 x 用 `(size.width - contentW)/2` 补偿"当前组内容比窗口小"的偏移 ✗
-        //   ⇒ **每换一个 app,x 就变一次** ⇒ 窗口左右滑 ⇒ 每次都触发一轮真窗口重排 + 后备存储。
-        //   ⇒ x 只认**整局最大尺寸**(与窗口尺寸同源)✓。视觉不变:内容本来就在窗内居中
-        //   (SwiftUI 根视图默认居中),窗口居中 ⇒ 内容也居中 —— 与原来算出来的是同一个位置 ✓。
-        var x = panel.frame.midX - size.width / 2 // 窗口居中 ⇒ 内容随之居中(与长条同轴)
-        let margin = PanelMetrics.screenMargin
-        if size.width <= area.width - margin * 2 {
-            x = min(max(x, area.minX + margin), area.maxX - margin - size.width)
-        } else if !trayOverflowLogged {
+        // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
+        //   取整规则(尺寸向上、原点向下)住在那个类型里,别处改了也不会分叉 ✓。
+        let maxContent = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
+        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
+        if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
             trayOverflowLogged = true
-            glog("[尺寸] 托盘玻璃 \(Int(contentW))pt > 可用 \(Int(area.width - margin * 2))pt,已居中(两端会被切)")
+            glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")
         }
-        // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip - 帧距,
-        // 反解出帧距 = padPop + padStrip - seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
-        let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
-        let y = panel.frame.maxY - frameGap
-        // ★★ 2026-09-21 最后一段(账里看得一清二楚):
-        //   `[窗框] 托盘窗(updatePreview()) 418.0,527.0 → **418.5,527.2**` —— 我算的原点是 418.5,527.2,
-        //   而 AppKit 把窗口原点**吸附到整数**(存回来是 418.0,527.0)✗ ⇒ 每次比较都"不等" ⇒ 一局 104 次重排 ✗。
-        //   ⇒ 原点**向下取整**(与 AppKit 的吸附规则一致)。
-        //   ⚠️ 只取整**原点**,**不动尺寸** —— 白天我取整过窗口框(连同尺寸),结果与内容+padding 的账不一致
-        //      ⇒ 面板整块空白 ✗。尺寸那一本账留给 P0-2(TrayGeometry)统一,这次不碰 ✓。
-        return NSRect(x: x.rounded(.down), y: y.rounded(.down), width: size.width, height: size.height)
+        return geo.frame
     }
 
 
