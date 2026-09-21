@@ -135,7 +135,7 @@ final class PanelController: ObservableObject {
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
         let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom)
         guard x >= 0, yUp >= 0 else { return }
-        let c = max(0, min(cols - 1, Int(x / pitch)))
+        let c = max(0, min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)))
         let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
         let i = r * cols + c
         guard launchables.indices.contains(i), i != launchIndex else { return }
@@ -166,7 +166,7 @@ final class PanelController: ObservableObject {
         //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
         let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
-        let i = Int(x / PanelMetrics.pitch)
+        let i = RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
         guard pointerInRingHotZone(i) else { return }
         // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
         let current = entrySelected ? (launchIndex ?? -1) : appIndex
@@ -512,8 +512,6 @@ final class PanelController: ObservableObject {
             return
         }
         // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
-        cachedSlotWidth = 0                      // 本局组集合变了 ⇒ 槽宽/卡面重算
-        cachedSlotHeight = 0
         applySessionScaleCap(on: screen)
         // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
         // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
@@ -691,50 +689,19 @@ final class PanelController: ObservableObject {
     // 口径:**卡仍按真窗比例画**(形状跟真窗走 ✓ 保住用户的设计 ✓),但它**占的槽位固定** = 本局最宽那张卡。
     //   ⇒ 换组时位置一个像素不动 ✓。代价:窄卡两侧留白(实测最窄 195 vs 最宽 274 ⇒ 左右各 ≈40pt ✓),
     //     且整行变宽 ⇒ 会话缩放比相应略降(卡片整体略小一点 ✓)。
-    private var cachedSlotWidth: CGFloat = 0
-    private var cachedSlotHeight: CGFloat = 0
-    var slotWidth: CGFloat {
-        if cachedSlotWidth > 0 { return cachedSlotWidth }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.width) }
-        cachedSlotWidth = all.max() ?? PanelMetrics.thumbMinW
-        return cachedSlotWidth
-    }
-    /// C′ 的卡面高度 = 本局最高那张卡(与 `slotWidth` 同源同缓存)
-    var slotHeight: CGFloat {
-        if cachedSlotHeight > 0 { return cachedSlotHeight }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.height) }
-        cachedSlotHeight = all.max() ?? PanelMetrics.shotH
-        return cachedSlotHeight
-    }
-    /// 布局用的宽度数组:**一律槽宽** ⇒ 尺寸账 / 排布 / 命中三处不再各算各的 ✓
-    private func slotWidths(_ count: Int) -> [CGFloat] {
-        Array(repeating: slotWidth, count: count)
-    }
 
     static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
         windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
     }
     
     /// 分行后**每行的最大高度**(内容尺寸 / 命中判定 / 视图三处共用同一套数)
+    /// 算式在 `GlanceCore.TrayGrid`(可单测);这里只把"这一局的尺子"喂进去。
     static func rowHeights(_ sizes: [CGSize], rows: Int, cols: Int) -> [CGFloat] {
-        (0..<rows).map { r in
-            let start = r * cols
-            let end = min(start + cols, sizes.count)
-            guard start < end else { return 0 }
-            return sizes[start..<end].map(\.height).max() ?? 0
-        }
+        TrayGrid.rowHeights(sizes, rows: rows, cols: cols)
     }
-    
+
     private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
-        var widest: CGFloat = 0
-        for r in 0..<rows {
-            let start = r * cols
-            let end = min(start + cols, widths.count)
-            guard start < end else { continue }
-            let w = widths[start..<end].reduce(0, +) + CGFloat(end - start - 1) * PanelMetrics.thumbGap
-            widest = max(widest, w)
-        }
-        return widest
+        TrayGrid.maxRowWidth(widths, rows: rows, cols: cols, gap: PanelMetrics.thumbGap)
     }
 
     /// 托盘的行 × 列 —— **唯一来源**:视图排网格与 `previewContentSize` 都取它。
@@ -752,17 +719,11 @@ final class PanelController: ObservableObject {
     /// (调用方在当前 cap 下用 `PanelMetrics.thumbWidth(aspect:)` 算好),
     /// 行数判定用"该分布下最宽那行"(`maxRowWidth`,分布与视图的 HStack 一致)
     func trayLayout(widths ws: [CGFloat]) -> (rows: Int, cols: Int) {
-        guard !ws.isEmpty else { return (0, 1) }
-        let n = ws.count
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if Self.maxRowWidth(ws, rows: r, cols: c) + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
-        // (由调用方按"内容居中 + 两端对称地切"兜底)也不往上堆成一面墙
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(widths: ws,
+                         gap: PanelMetrics.thumbGap,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
@@ -1293,7 +1254,8 @@ final class PanelController: ObservableObject {
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
         let sizes = Self.cardSizes(group.windows)
-        let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+        // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
+        let widths = sizes.map(\.width)
         let (rows, cols) = trayLayout(widths: widths)
         // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
         let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
@@ -1324,15 +1286,11 @@ final class PanelController: ObservableObject {
     /// 启动行的行 × 列:与 `trayLayout` 同一套"放得下的最少行数"逻辑,只是格距换成图标节距。
     /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
     func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
-        guard n > 0 else { return (0, 1) }
-        let pitch = PanelMetrics.pitch
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if CGFloat(c) * pitch + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(count: n,
+                         cellPitch: PanelMetrics.pitch,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
@@ -1561,7 +1519,7 @@ final class PanelController: ObservableObject {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
             let (rows, cols) = launchLayout(count: count)
             let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let i = r * cols + min(cols - 1, Int(x / PanelMetrics.pitch))
+            let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
@@ -1571,7 +1529,7 @@ final class PanelController: ObservableObject {
             // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
             guard let g = currentGroup else { return }
             let sizes = Self.cardSizes(g.windows)
-            let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+            let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
             let (rows, cols) = trayLayout(widths: widths)
             // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
             var r = 0
@@ -2126,8 +2084,9 @@ final class PanelController: ObservableObject {
         guard let g = currentGroup, !g.windows.isEmpty else { return }
         var cum: CGFloat = 0
         var hit: Int?
-        for (i, w) in g.windows.enumerated() {
-            let cw = slotWidth                          // ★ 方案 A:命中按槽(与排布同源)
+        let sizes = Self.cardSizes(g.windows)
+        for i in g.windows.indices {
+            let cw = sizes[i].width                     // 卡有多宽就命中多宽(与视图同源)
             if localX < cum + cw { hit = i; break }
             cum += cw + PanelMetrics.thumbGap
         }

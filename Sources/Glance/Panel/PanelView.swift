@@ -315,7 +315,7 @@ struct PanelView: View {
     private var puckOffsetX: CGFloat {
         // T91 v2:托底只属于已启动的主环(换环后它不上场)⇒ 永远跟 appIndex
         let i = controller.appIndex
-        return CGFloat(max(i, 0)) * PanelMetrics.pitch
+        return RingGrid.puckOffsetX(appIndex: i, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
     }
 
     /// 顶缘一道**极窄的**受光边(深色专用)。
