@@ -516,7 +516,9 @@ final class LivePreviewPool: ObservableObject {
     private var handles: [CGWindowID: Handle] = [:]
     private var wanted: Set<CGWindowID> = []
     private var idleSince: [CGWindowID: CFAbsoluteTime] = [:]
-    private var pending: Set<CGWindowID> = []          // 正在起(错峰排队中)
+    private var pending: Set<CGWindowID> = []
+    /// 推迟起流的定时器(hover 稳定 150ms 后才真起)
+    private var startDebounce: DispatchWorkItem?          // 正在起(错峰排队中)
     private var activeGens: Set<Int> = []
     private var gen = 0
     private var startedAt: [CGWindowID: CFAbsoluteTime] = [:]
@@ -538,13 +540,31 @@ final class LivePreviewPool: ObservableObject {
             if Set(wids) == self.wanted, self.pending.isEmpty { return }
             self.wanted = Set(wids)
             for w in wids { self.idleSince[w] = nil }
-            self.reconcile(items, selected: selected)
+            // ★ 先把"停"做完(停是便宜的、而且必须立刻做),**"起"推迟 150ms**。
+            // 病例(2026-09-21,日志实证):hover 到"还没起过流的窗口"时,
+            //   `SCStream` 创建(几十毫秒的系统级工作)正好压在 hover 那一拍上 ⇒ 丢 1 拍 ✗
+            //   · 36977ms hover 到 Ghostty(冷)
+            //   · 37001ms [悬停拍] +24.3ms ✗(下一拍 +8.9ms ⇒ 24.3+8.9 = 2 拍)
+            //   · 37021ms [直播] 首帧 44ms wid=161378 ⇒ 流就是 36977ms 那一刻开始建的
+            //   · 37293ms 再次 hover 到它(已热)⇒ **+18.1ms 正常,不丢拍** ✓
+            // ⇒ 判据:丢拍**只在"要新建流"时发生** ✓
+            // 修法:hover 稳定 150ms 之后才起 ⇒ 用户看到的是**静默态(淡 App 图标)约 200ms**
+            //      而不是"卡一下" ✓ 换档(重启两条)同理,一起推迟 ✓
+            self.reconcile(items, selected: selected, starts: false)
             self.scheduleSweep()
+            self.startDebounce?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, Set(wids) == self.wanted else { return }   // 又变了 ⇒ 这轮作废
+                self.reconcile(items, selected: selected, starts: true)
+            }
+            self.startDebounce = work
+            self.queue.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
     }
 
     /// 面板收场:停掉全部流。**帧保留**(跨会话复用 ⇒ 下一次唤起第一眼就是活画面)。
     func stopAll(reason: String) {
+        startDebounce?.cancel(); startDebounce = nil
         queue.async { [weak self] in
             guard let self else { return }
             let n = self.handles.count
@@ -572,7 +592,10 @@ final class LivePreviewPool: ObservableObject {
         }
     }
 
-    private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)], selected: CGWindowID?) {
+    /// - Parameter starts: `false` = **这一轮只停/不启**。用于把"起流"挪出 hover 那一拍
+    ///   (病例:`SCStream` 创建是系统级重活 ⇒ 放在 hover 路径上会丢 1 拍 ✗,见 sync 的头注)。
+    private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)], selected: CGWindowID?,
+                           starts: Bool = true) {
         // ① 记闲置时间(不再立刻停流 —— 见 keepAlive)
         let now = CFAbsoluteTimeGetCurrent()
         for wid in handles.keys where !wanted.contains(wid) {
@@ -585,12 +608,15 @@ final class LivePreviewPool: ObservableObject {
         }
         // ③ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
         // ★ 分档:选中 = 用户档位,其余 = lowFps。帧率变了就重启**那一条**(帧保留 ⇒ 不闪)✓
-        for item in items.prefix(Self.maxStreams) {
-            let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
-            if let h = handles[item.wid], h.fps != want {
-                stopStream(item.wid, why: "换档 \(h.fps)->\(want)fps")
+        if starts {
+            for item in items.prefix(Self.maxStreams) {
+                let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
+                if let h = handles[item.wid], h.fps != want {
+                    stopStream(item.wid, why: "换档 \(h.fps)->\(want)fps")
+                }
             }
         }
+        guard starts else { return }
         var delay = 0.0
         for item in items.prefix(Self.maxStreams) where handles[item.wid] == nil && !pending.contains(item.wid) {
             pending.insert(item.wid)

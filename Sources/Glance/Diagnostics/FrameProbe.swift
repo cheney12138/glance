@@ -84,11 +84,22 @@ final class FrameProbe: NSObject {
         intervals.removeAll()
     }
 
+    /// **悬停打点**(2026-09-21):hover / 换 app 那一刻记一下时刻。
+    /// 为什么需要它:整局帧账会把"偶尔那几下"冲淡(实测整局长帧只有 1%),而用户感觉到的
+    /// 恰恰是"hover 那一下" ⇒ 所以要看的是**含悬停的那几拍**花了多少,不是平均值。
+    static var lastHoverMark: CFTimeInterval = 0
+
     @objc private func tick(_ link: CADisplayLink) {
         let now = CACurrentMediaTime()
         defer { last = now }
         guard last > 0 else { return }
-        intervals.append(now - last)
+        let dt = now - last
+        intervals.append(dt)
+        // 悬停后 200ms 内的每一拍都单独记一行 ⇒ hover 的真实代价(含 SwiftUI 重建卡片/取图/布局/绘制)
+        let sinceHover = now - Self.lastHoverMark
+        if Self.lastHoverMark > 0, sinceHover < 0.2 {
+            glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms)", dt * 1000, sinceHover * 1000))
+        }
     }
 }
 
