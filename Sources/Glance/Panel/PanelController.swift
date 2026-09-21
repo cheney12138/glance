@@ -1850,6 +1850,7 @@ final class PanelController: ObservableObject {
     }
 
     func hoverApp(_ i: Int, source: String = "指针 hover", strict: Bool = true) {
+        FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 换 app 打点
         // ★ 热区内缩:指针只蹭到格子边缘 = "路过",不算选中(2026-09-19 用户裁定)。
         //   点按路径传 strict:false —— 点击目标仍是整格,精度要求不同
         if strict && !pointerInRingHotZone(i) { return }
@@ -2049,6 +2050,7 @@ final class PanelController: ObservableObject {
             trace("[T6] hover 到窗 [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)(闸:\(pointerMayTakeOver() ? "开" : "关"))")
         }
         guard hoverAllowedByGate() else { return }
+        FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 悬停打点(量"含悬停那几拍")
         winIndex = i
         if let g = currentGroup, g.windows.indices.contains(i) {
             trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
