@@ -152,7 +152,7 @@ struct PanelView: View {
         // 投影:长条用 .strip;芯片(说话局)换 .puck —— .strip 的深色 α .62 是大面板的配重,
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
-        .elevation(controller.hintText == nil ? .strip : .puck)
+        .elevation(controller.hintText == nil ? .strip : .puck, active: !DebugFlags.noStripShadow)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         .focusEffectDisabled(true)   // ★ 窗口根:切换器面板永不出现焦点环
         // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
