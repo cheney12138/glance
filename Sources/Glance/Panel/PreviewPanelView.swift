@@ -121,6 +121,10 @@ struct PreviewPanelView: View {
 
     private func thumb(at i: Int) -> some View {
         let w = windows[i]
+        // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
+        _ = CardSizeLog.once(record: w,
+                             cardW: PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect).width,
+                             cardH: PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect).height)
         return WindowThumb(
             record: w,
             bundleID: controller.currentGroup?.bundleID,
@@ -275,6 +279,19 @@ private struct WindowThumb<Overlay: View>: View {
     /// 卡片、模糊层、芯片、文字截断宽全走这一个值 —— 一卡一宽,不许各算各的。
     /// 优先用**截图自己的比例**:透明衬边裁切(T88 v2)后内容会比窗框瘦一圈,
     /// 所见即所得;无图(占位中)退回窗框比例,图落地那一刻宽度微调一次,与图同帧出现
+    /// 图与「座」的**绘制尺寸**(pt)—— 唯一来源。
+    ///
+    /// 口径(用户 2026-09-21 拍板,方案 A「不放大」):
+    ///   · 真窗**比卡片大** ⇒ 按 `.fill` 缩到填满(超出的部分由卡片 `clipped()` 裁掉)—— 与以前一致 ✓;
+    ///   · 真窗**比卡片小** ⇒ 缩放**封顶 1.0** ⇒ 按真实大小居中,四周露卡片底色 ✓。
+    /// 病例:`[卡尺寸] 真窗 320x210pt / 卡片 207x146pt ⇒ 缩放 1.10x` —— 原来 `.fill` 会把小窗**放大**塞满,
+    /// 用户看着"截图比我的窗口还大" ✗;而"最大卡片尺寸"(thumbMaxW/thumbMaxAspect)只封了**上限**,
+    /// 没封"不要放大" ✗ ⇒ 在这里补上。live 帧走的是同一条铺法 ⇒ 两条路一起受益 ✓(与数据源无关)。
+    private var imageBox: CGSize {
+        // 卡片尺寸 = min(真窗, 上限)(见 PanelMetrics.thumbSize 的用户口径)
+        PanelMetrics.thumbSize(real: record.bounds.size, aspect: record.aspect)
+    }
+
     private var cardW: CGFloat {
         if let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             return PanelMetrics.thumbWidth(aspect: CGFloat(cg.width) / CGFloat(cg.height))
@@ -289,7 +306,9 @@ private struct WindowThumb<Overlay: View>: View {
             card
             chip
         }
-        .frame(width: cardW, height: PanelMetrics.thumbH)
+        // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
+        .frame(width: imageBox.width,
+               height: imageBox.height + (PanelMetrics.thumbH - PanelMetrics.shotH))
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
@@ -305,13 +324,15 @@ private struct WindowThumb<Overlay: View>: View {
                 //   ⇒ 实机:托盘更新平时 0.1–0.3ms,一换 app 就 10–27ms(滑块那一帧掉帧)。
                 //   没缩好时先用原图,下一次渲染就走缓存 ✓
                 Group {
-                    if let prepared = CardImageCache.shared.image(wid: record.wid, source: image) {
+                    if let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
+                                                                  target: imageBox) {
                         Image(decorative: prepared.cg, scale: prepared.scale).resizable()
                     } else {
                         Image(nsImage: image).resizable()
                     }
                 }
-                    .aspectRatio(contentMode: .fill)
+                    // ★ 方案 A(不放大):定尺 = imageBox(不是卡片框)—— 小窗按真实大小居中 ✓
+                    .frame(width: imageBox.width, height: imageBox.height)
                     // 压到 30%,统一底色(`PanelColors.thumbBg`)接管卡面 —— 一排过去不再深浅乱跳;
                     // 选中/悬停的那张恢复原样。压色量挂在卡片末尾同一条
                     // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
@@ -323,7 +344,7 @@ private struct WindowThumb<Overlay: View>: View {
                     .foregroundStyle(PanelColors.txt2)
             }
         }
-        .frame(width: cardW, height: PanelMetrics.shotH)
+        .frame(width: imageBox.width, height: imageBox.height)
         .clipped()
         // 「座」= **毛玻璃的渐变**:把这张截图自己再画一份、模糊掉,再用纵向渐变遮成"上糊下清"。
         // 三版才走到这里,记下来免得重走:
@@ -339,9 +360,8 @@ private struct WindowThumb<Overlay: View>: View {
             if let image, let seat = SeatImageCache.shared.seat(wid: record.wid, source: image) {
                 Image(decorative: seat, scale: 1)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: cardW, height: PanelMetrics.shotH)
-                    .clipped()
+                    // 座与底图**同一把尺子**(imageBox):错一像素就露馅(见上面座的三版病历)
+                    .frame(width: imageBox.width, height: imageBox.height)
                     // 毛玻璃条随底图一起压色:它就是这张截图自己,底图压了它不压,顶部会浮出一截"实"的
                     .opacity(selected ? 1 : PanelMetrics.thumbWash)
                     .mask(alignment: .top) {
@@ -393,7 +413,7 @@ private struct WindowThumb<Overlay: View>: View {
                 .truncationMode(.middle)
         }
             // 文字宽度上限里要扣掉圆点与间距,否则整枚芯片会超出卡片宽
-            .frame(maxWidth: cardW - 18 - PanelMetrics.chipDot - 5)
+            .frame(maxWidth: imageBox.width - 18 - PanelMetrics.chipDot - 5)
             .padding(.horizontal, 9)
             .padding(.vertical, 2)
             .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
@@ -689,6 +709,24 @@ final class SeatImageCache {
 /// 卡片只有 ~207×122pt,而快照是 720px 宽 ⇒ 每次重建都要 decode + 缩放(主线程 ✗)。
 /// 病例(2026-09-21):托盘更新平时 0.1–0.3ms,一换 app 就 **10–27ms** ⇒ 同帧滑块弹簧掉帧。
 /// 现在:后台按**卡片设备像素尺寸**缩放一次并缓存;顺带与实时帧同一规格(1:1)。
+/// 卡片尺寸 vs 真实窗口尺寸的**一次性账**(每扇窗一条) —— 用来判定"卡片把窗口放大了多少"。
+private enum CardSizeLog {
+    static var seen: Set<CGWindowID> = []
+    @discardableResult
+    static func once(record: WindowRecord, cardW: CGFloat, cardH: CGFloat) -> Bool {
+        guard !seen.contains(record.wid) else { return false }
+        seen.insert(record.wid)
+        let win = record.bounds.size            // 真实窗口尺寸(pt)
+        guard win.width > 1, win.height > 1 else { return false }
+        let s = max(cardW / win.width, cardH / win.height)   // .fill 的缩放倍数(>1 = 放大 ✗)
+        let cropW = (win.width * s - cardW) / max(1, win.width * s)
+        let cropH = (win.height * s - cardH) / max(1, win.height * s)
+        glog(String(format: "[卡尺寸] wid=%d 真窗 %.0fx%.0fpt / 卡片 %.0fx%.0fpt ⇒ **缩放 %.2fx** 裁掉 %.0f%%x%.0f%%",
+                    record.wid, win.width, win.height, cardW, cardH, s, cropW * 100, cropH * 100))
+        return true
+    }
+}
+
 final class CardImageCache {
     struct Prepared { let cg: CGImage; let scale: CGFloat }
     static let shared = CardImageCache()
@@ -697,7 +735,7 @@ final class CardImageCache {
     private var inFlight: Set<CGWindowID> = []
     private let queue = DispatchQueue(label: "glance.cardimg", qos: .utility)
 
-    func image(wid: CGWindowID, source: NSImage) -> Prepared? {
+    func image(wid: CGWindowID, source: NSImage, target: CGSize) -> Prepared? {
         lock.lock()
         if let p = store[wid] { lock.unlock(); return p }
         let busy = inFlight.contains(wid)
@@ -706,9 +744,9 @@ final class CardImageCache {
         guard !busy else { return nil }
         guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let aspect = CGFloat(cg.width) / CGFloat(max(1, cg.height))
-        let pxW = max(2, Int((PanelMetrics.thumbWidth(aspect: aspect) * scale).rounded()))
-        let pxH = max(2, Int((PanelMetrics.shotH * scale).rounded()))
+        // 目标尺寸由调用方给(方案 A:小窗不放大 ⇒ 目标可能小于卡片框)
+        let pxW = max(2, Int((target.width * scale).rounded()))
+        let pxH = max(2, Int((target.height * scale).rounded()))
         queue.async { [weak self] in
             guard let self else { return }
             var out: CGImage?
@@ -734,7 +772,7 @@ final class CardImageCache {
         return nil
     }
 
-    func prewarm(_ items: [(wid: CGWindowID, source: NSImage)]) {
-        for it in items { _ = image(wid: it.wid, source: it.source) }
+    func prewarm(_ items: [(wid: CGWindowID, source: NSImage, target: CGSize)]) {
+        for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 }

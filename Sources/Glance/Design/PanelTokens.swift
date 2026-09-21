@@ -132,6 +132,23 @@ enum PanelMetrics {
     /// 卡宽 = 高 × 窗口比例(122 = `shotH` 的基准,同源勿各写各的),夹限后过会期缩放。
     /// 卡片比例与截图比例由此**按构造相等** —— `fill` 不再裁内容,竖窗(微信登录窗那种
     /// 自绘窗)不再塞在横卡里留大灰边(2026-09-17 用户实拍病例)
+    /// **卡片尺寸 = min(真实窗口尺寸, 设计上限)** —— 卡片尺寸的唯一来源。
+    ///
+    /// 用户口径(2026-09-21,连着三张截图讲清楚):
+    ///   · IDEA 那种**大**窗口 ⇒ 卡片**钉在上限**("按照 idea 这个大小, 限制死了")✓ 不许跟着变大;
+    ///   · Sublime 那种**被缩小过**的窗口 ⇒ 卡片**跟着真窗缩**("这个时候卡片自适应调整为跟真实窗口
+    ///     一样的形状, 是 ok 的")✓ —— 形状与真窗一致 ⇒ 渲染 1:1 ⇒ 既不放大也不裁 ✓;
+    ///   · **反之(大)就不行** ⇒ 上限永远管着 ✓。
+    /// 推论:一行里的卡片可以**大小不一**(用户接受"参差不齐" ⇒ 换来"所见即真窗大小");
+    ///       因此托盘的行高、内容高度、命中判定都必须按**每张卡的实际高度**算,不能再当常量 ✗。
+    static func thumbSize(real: CGSize, aspect: CGFloat) -> CGSize {
+        let capW = thumbWidth(aspect: aspect)          // 上限:沿用原来的"随比例自适应 + 夹上下限"
+        let capH = shotH
+        guard real.width > 1, real.height > 1 else { return CGSize(width: capW, height: capH) }
+        let s = min(1, capW / real.width, capH / real.height)   // 只许缩小,不许放大
+        return CGSize(width: (real.width * s).rounded(), height: (real.height * s).rounded())
+    }
+
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
         k(min(max(122 * max(aspect, 0.2), thumbMinW), thumbMaxW))
     }
