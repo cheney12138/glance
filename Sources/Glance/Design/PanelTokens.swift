@@ -55,6 +55,12 @@ enum PanelMetrics {
     static var selectionOverflow: CGFloat { icon * (iconScale - 1) / 2 }
     /// 格间间隙 = 净空 + 选中放大吃掉的单侧溢出
     static var iconGap: CGFloat { iconClearance + selectionOverflow }
+
+    /// ★ 一个属性一个源：格距 = 图标 + 间隙。
+    /// 改前这个加法在 4 个文件里**手算 12 次**（格宽 / 命中测试 / 悬停索引 / 托底位移 / 行宽）
+    /// ⇒ 谁少加一次就是"对不上"，而且这类错误**只在某些位置显形**
+    /// （历史上"托底不跟图标对齐"就是这么来的）。改为全仓库只此一处。
+    static var pitch: CGFloat { icon + iconGap }
     static var rowPadX: CGFloat { k(26) }
     static var rowPadY: CGFloat { k(22) }
     /// 环 hover 热区内缩(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求
@@ -571,7 +577,7 @@ enum PanelLayout {
         let n = CGFloat(max(appCount, 1))
         let stripW = n * PanelMetrics.icon + max(n - 1, 0) * PanelMetrics.iconGap
         return (contentWidth - stripW) / 2
-            + CGFloat(max(appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
+            + CGFloat(max(appIndex, 0)) * PanelMetrics.pitch
             + PanelMetrics.icon / 2
     }
 }

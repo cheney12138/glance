@@ -129,7 +129,7 @@ final class PanelController: ObservableObject {
         let p = NSEvent.mouseLocation
         guard glass.contains(p) else { return }
         let (rows, cols) = launchLayout(count: launchables.count)
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
@@ -166,7 +166,7 @@ final class PanelController: ObservableObject {
         //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
         let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
-        let i = Int(x / (PanelMetrics.icon + PanelMetrics.iconGap))
+        let i = Int(x / PanelMetrics.pitch)
         guard pointerInRingHotZone(i) else { return }
         // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
         let current = entrySelected ? (launchIndex ?? -1) : appIndex
@@ -1314,7 +1314,7 @@ final class PanelController: ObservableObject {
         let c = CGFloat(cols)
         let r = CGFloat(max(rows, 1))
         return NSSize(
-            width: c * (PanelMetrics.icon + PanelMetrics.iconGap) - PanelMetrics.iconGap
+            width: c * PanelMetrics.pitch - PanelMetrics.iconGap
                 + PanelMetrics.trayPadX * 2,
             height: PanelMetrics.trayPadTop + r * PanelMetrics.icon
                 + max(r - 1, 0) * PanelMetrics.trayRowGap + PanelMetrics.trayPadBottom
@@ -1325,7 +1325,7 @@ final class PanelController: ObservableObject {
     /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
     func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
         guard n > 0 else { return (0, 1) }
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap
         for r in 1...min(n, PanelMetrics.trayMaxRows) {
             let c = (n + r - 1) / r
@@ -1561,7 +1561,7 @@ final class PanelController: ObservableObject {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
             let (rows, cols) = launchLayout(count: count)
             let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let i = r * cols + min(cols - 1, Int(x / (PanelMetrics.icon + PanelMetrics.iconGap)))
+            let i = r * cols + min(cols - 1, Int(x / PanelMetrics.pitch))
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
@@ -1899,7 +1899,7 @@ final class PanelController: ObservableObject {
     /// 几何与 iconStrip 同源:首格左缘 = 玻璃左 + rowPadX − iconGap/2,格宽 = icon + iconGap
     private func pointerInRingHotZone(_ i: Int) -> Bool {
         guard let glass = panelContentRect() else { return false }
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let tileLeft = glass.minX + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
         let rect = CGRect(
             x: tileLeft + PanelMetrics.hoverInsetX,
@@ -2080,7 +2080,7 @@ final class PanelController: ObservableObject {
     /// `onContinuousHover` 不走 tracking area:指针只要在行内移动就持续回调**位置**,我们自己算格子,
     /// 因此不存在"事件丢失"。位置 → 下标是纯几何:x 按格距分列,y 按行高分行。
     func hoverLaunchAt(x: CGFloat, y: CGFloat, count: Int, cols: Int, rows: Int) {
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         let c = max(0, min(cols - 1, Int(floor(x / pitch))))
         let r = max(0, min(max(rows - 1, 0), Int(floor(y / rowH))))

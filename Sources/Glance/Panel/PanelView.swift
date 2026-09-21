@@ -200,7 +200,7 @@ struct PanelView: View {
                         // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
                         motion: controller.selectionAnimation(PanelMotion.select)
                     )
-                    .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                    .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
                     // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
                     // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
                     // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
@@ -251,7 +251,7 @@ struct PanelView: View {
         .scaleEffect(sel ? PanelMetrics.iconScale : 1)
         .offset(y: sel ? controller.contentEntryRise - PanelMetrics.iconLift : 0)
         .elevation(.icon, active: sel)
-        .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+        .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
         .contentShape(Rectangle())
         .onHover { inside in if inside { controller.hoverApp(i) } }
         .onTapGesture { controller.launchAt(i) }
@@ -315,7 +315,7 @@ struct PanelView: View {
     private var puckOffsetX: CGFloat {
         // T91 v2:托底只属于已启动的主环(换环后它不上场)⇒ 永远跟 appIndex
         let i = controller.appIndex
-        return CGFloat(max(i, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
+        return CGFloat(max(i, 0)) * PanelMetrics.pitch
     }
 
     /// 顶缘一道**极窄的**受光边(深色专用)。
