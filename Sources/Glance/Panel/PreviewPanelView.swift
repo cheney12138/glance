@@ -34,6 +34,13 @@ struct PreviewPanelView: View {
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
+        // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效」。
+        // 病例(3 个窗口时左右两边各自滑进来):换段走的是 `withAnimation(segmentAnimation) { … }`
+        //   (PanelController:1954),而托盘内容依赖 currentGroup ⇒ 它跟着那次事务**一起重排** ✗
+        //   ⇒ 卡片被"动画地"挪到各自新位置(视觉上就是从两边滑入)。
+        //   性能那批把托盘**窗口**改成整局不动之后,原本被窗口位移掩盖的内容重排动画就露出来了 ✓
+        // ⇒ 托盘内容**不参与任何外层动画**:换 app 是"当场换成新内容"(与"内容本身变化"这件事无关)。
+        .transaction { $0.animation = nil }
         .background(GlassBackground(cornerRadius: PanelMetrics.rTray))
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rTray, style: .continuous))
         // 顶缘受光边:与长条同一道(深色靠它交代厚度;浅色透明)—— 同样挂总闸
@@ -131,7 +138,12 @@ struct PreviewPanelView: View {
                     closeDisabled: w.pid == ProcessInfo.processInfo.processIdentifier
                 )
             },
-            motion: MotionPolicy.animation(PanelMotion.thumb)
+            // ★★ 2026-09-21 用户裁定「任何场景下都不要这个动效」:
+            //   原来是 `.animation(_:value: selected)` 用的 motion —— 它的语义是
+            //   "**selected 变时,给这棵子树的所有变化**加动画" ✗ ⇒ hover 换 app 时多张卡的 selected
+            //   同时翻转,而同一拍里整行的**重新居中**也在发生 ⇒ 卡片自己的**位置变化**被吃进这行动画
+            //   ⇒ 视觉上"从左右两边各自滑到新位置" ✓。⇒ 传 nil:卡片不再自己播任何动效(位移是"当场"的)。
+            motion: nil
         )
         .onHover { inside in if inside { controller.hoverWindow(i) } }
         // (点击已由**行级手势**接管:cardTapped 把行内空隙也归属最近卡片,见 thumbGrid)
