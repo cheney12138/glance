@@ -77,9 +77,16 @@ final class FrameProbe: NSObject {
             .joined(separator: " ")
         // 判定基准非 60Hz 时标出来 —— 否则读日志的人会拿 25ms 的口径去理解 120Hz 屏的数据
         let judge = fps == 60 ? "" : String(format: " [按 %.0fHz 判定:>%.1fms]", fps, longFrame * 1000)
+        // ★ 量尺自带语境（2026-09-21）：把**当前打开的重型开关**写进汇总行。
+        //   为什么：A/B 对照时我们俩上一次就因为这个白跑一轮 —— 日志是**多进程交错追加**的，
+        //   而时间戳是“进程内相对时间”⇒ 两趟之间**切不开**，只能看聚合值 ✗。
+        //   现在每行汇总自带“我当时开着什么”⇒ 单行即可判定，不用重启当分界。
+        let heavy = DebugFlags.heavySwitches.filter { $0.isOn }.map { $0.name.replacingOccurrences(of: "debug.", with: "") }
+        let ctx = heavy.isEmpty ? "重型开关:无" : "重型开关:" + heavy.joined(separator: ",")
         print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%) %@| 探针起点=%.0fms%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
                      long, Double(long) / Double(sorted.count) * 100, where_, startUptimeMs, judge))
+        print("[帧]   ↳语境 \(ctx)")
         if jitter > 1.5 { print(String(format: "[帧]   ↳节奏抖动 ±%.1fms(P90,中位 %.1fms)—— 均匀的慢看不出,忽快忽慢才是肉眼里的卡", jitter, medv * 1000)) }
         intervals.removeAll()
     }
