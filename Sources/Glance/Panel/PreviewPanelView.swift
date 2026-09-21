@@ -230,7 +230,7 @@ struct PreviewPanelView: View {
         .scaleEffect(selected ? PanelMetrics.iconScale : 1)
         .offset(y: selected ? -PanelMetrics.iconLift : 0)
             .elevation(.icon, active: selected)   // 帧率优先:只有选中的那颗有投影(与主环同款)
-            .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+            .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
             // **不要托底了**(用户 2026-09-16 裁定):启动行只要"上浮"这一层反馈。
             // 托盘里本来就是"悬停才展开的大预览",再加一枚托底 = 两套选中语言打在一起。
             // (launchPuck 保留未用:它是"每格一枚"的旧方案,若将来又要,别再从零写)
