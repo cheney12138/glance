@@ -897,20 +897,24 @@ final class PanelController: ObservableObject {
     /// 一换组(行宽变)⇒ 整行**左右平移** ✗ ⇒ 肉眼就是"错位/移动了一下" ✓(瞬时 ✓ 之后自动对齐 ✓)。
     /// 这一支把"窗宽 / 行宽 / 行原点"三个数一起写出来 ⇒ 一眼看出移了多少 ✓。
     /// 🔬 对位笔(2026-09-21,查"换 app 时卡里的画面移了一下",**只在接外接屏时复现**):
-    /// 窗口帧没变(已量 ✓),所以动的是**行在窗里的位置**;行是**居中**排的 ⇒
-    /// 一换组(行宽变)⇒ 整行**左右平移** ✗ ⇒ 肉眼就是"错位/移动了一下"(瞬时,之后自动对齐 ✓)。
-    /// 直接复用 `previewContentSize(for:)` 的口径,把"窗宽 / 行宽 / 行原点"一起写出来 ✓。
+    /// 用户诉求(已确认):「选中 app 默认选中的就是第一个窗口,别的都有蒙层 ⇒
+    /// **只要保证第一个容器里的卡片不动**就算解决」✓
+    /// ⇒ 这一支直接报**屏幕绝对 x**:第一张卡(应当恒定 ✓)与第二张卡(应当随组变 ✓)。
+    /// 口径:`窗左缘 + shadowPadPop + trayPadX`,再按槽宽/间隙推第二张。
     private func logRowAlignment(_ reason: String) {
         guard isTraceEnabled, let panel = previewPanel, let g = currentGroup else { return }
-        let content = previewContentSize(for: g)          // 与真排布同一口径 ✓
-        let cardW = content.width - PanelMetrics.trayPadX * 2   // 行宽(去掉左右留白)
+        let content = previewContentSize(for: g)
+        let rowW = content.width - PanelMetrics.trayPadX * 2
         let f = panel.frame
-        let key = String(format: "%@|%.0f|%.0f", reason, f.width, cardW)
+        // 口径:居中(内容在托盘窗里居中)⇒ 第一张卡左缘 = 窗左缘 + (窗宽−行宽)/2 + 留白
+        let x0 = (f.minX + (f.width - rowW) / 2 + PanelMetrics.shadowPadPop - PanelMetrics.shadowPadPop + PanelMetrics.trayPadX).rounded()
+        let sizes = Self.cardSizes(g.windows)
+        let x1 = sizes.first.map { first in (x0 + first.width + PanelMetrics.thumbGap).rounded() }
+        let key = String(format: "%@|%.0f|%.0f", reason, x0, x1 ?? -1)
         guard lastRowAlignKey != key else { return }
         lastRowAlignKey = key
-        glog(String(format: "[对位] %@ 托盘窗 %.0fx%.0f @%.0f,%.0f · 行 %.0fx%.0f · 内容左缘=%.1f(左锚定 ⇒ 固定) · app=%@",
-                    reason, f.width, f.height, f.minX, f.minY, cardW, content.height,
-                    PanelMetrics.shadowPadPop + PanelMetrics.trayPadX, g.appName))
+        glog(String(format: "[对位] %@ 托盘窗 %.0fx%.0f @%.0f,%.0f · 第一张卡屏幕x=%.0f(应恒定 ✓) · 第二张屏幕x=%.0f(应随组变 ✓) · 行宽 %.0f · app=%@",
+                    reason, f.width, f.height, f.minX, f.minY, x0, x1 ?? -1, rowW, g.appName))
     }
     private var lastRowAlignKey: String = ""
 

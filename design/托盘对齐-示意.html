@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>托盘对齐示意:居中 vs 左端固定</title>
+<style>
+  :root{
+    --bg:#11140f; --tray:#1d2119; --edge:#3a4033; --card:#2a2f24;
+    --ink:#e8ead9; --dim:#9aa08c; --accent:#5ac8fa; --warn:#ff6b57;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 32px;background:var(--bg);color:var(--ink);
+       font:14px/1.7 -apple-system,"PingFang SC",sans-serif}
+  h1{font-size:18px;margin:0 0 6px}
+  .sub{color:var(--dim);margin-bottom:22px}
+  .controls{display:flex;gap:10px;align-items:center;margin-bottom:22px;flex-wrap:wrap}
+  button{background:#232820;color:var(--ink);border:1px solid var(--edge);
+         border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}
+  button.on{background:var(--accent);color:#06121a;border-color:transparent;font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  .panel{background:#171b13;border:1px solid var(--edge);border-radius:12px;padding:16px 18px}
+  .panel h2{font-size:14px;margin:0 0 4px}
+  .panel .tag{font-size:12px;color:var(--dim);margin-bottom:14px}
+  .bad{color:var(--warn)}
+  .good{color:#7ede8a}
+  /* 托盘窗口 = 一局的固定尺寸(不随内容变) */
+  .tray{position:relative;height:118px;border:1px dashed var(--edge);
+        border-radius:10px;background:var(--tray);overflow:hidden}
+  .tray .label{position:absolute;top:-9px;left:10px;background:var(--bg);
+               padding:0 6px;font-size:11px;color:var(--dim)}
+  /* 钉死的参照线 */
+  .pin{position:absolute;top:0;bottom:0;width:0;border-left:2px solid var(--accent);
+       opacity:.9}
+  .pin span{position:absolute;bottom:4px;left:6px;font-size:11px;color:var(--accent);white-space:nowrap}
+  .row{position:absolute;bottom:14px;display:flex;gap:8px;transition:none}
+  .card{background:var(--card);border:1px solid var(--edge);border-radius:8px;
+        height:74px;display:flex;align-items:center;justify-content:center;
+        font-size:11px;color:var(--dim);flex:0 0 auto}
+  .card.sel{border-color:var(--accent);background:#22303a;color:var(--ink)}
+  .card.wash{opacity:.45}
+  .delta{margin-top:12px;font-size:12px;color:var(--dim)}
+  .delta b{color:var(--ink)}
+  .note{margin-top:26px;padding:14px 16px;border-left:3px solid var(--accent);
+        background:#171b13;border-radius:0 8px 8px 0;color:var(--dim)}
+  .note b{color:var(--ink)}
+</style>
+</head>
+<body>
+<h1>托盘对齐示意:居中 vs 左端固定</h1>
+<div class="sub">同一个托盘窗口(尺寸一局固定 ✓),内容换组后宽度会变。看两种对齐下"第一张卡"会不会动。</div>
+
+<div class="controls">
+  <span class="sub" style="margin:0">切换 App(改变这一行的宽度):</span>
+  <button data-i="0" class="on">App A(窗 2 张,窄)</button>
+  <button data-i="1">App B(窗 3 张,中)</button>
+  <button data-i="2">App C(窗 3 张,宽)</button>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>① 居中(改之前)</h2>
+    <div class="tag bad">整行在托盘里居中 ⇒ 行宽一变,<b>左端也被推走</b> ✗</div>
+    <div class="tray">
+      <div class="label">托盘窗口(位置/尺寸一局固定)</div>
+      <div class="pin" id="pin1"><span>第一张卡的左缘(会动 ✗)</span></div>
+      <div class="row" id="row1"></div>
+    </div>
+    <div class="delta">第一张卡左缘:<b id="d1">—</b></div>
+  </div>
+
+  <div class="panel">
+    <h2>② 左端固定(现在这版)</h2>
+    <div class="tag good">整行从固定的左端开始排 ⇒ <b>第一张卡永远不动</b> ✓</div>
+    <div class="tray">
+      <div class="label">托盘窗口(位置/尺寸一局固定)</div>
+      <div class="pin" id="pin2"><span>第一张卡的左缘(钉死 ✓)</span></div>
+      <div class="row" id="row2"></div>
+    </div>
+    <div class="delta">第一张卡左缘:<b id="d2">—</b></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>怎么读这张图:</b>两张图里,托盘窗口完全一样(位置、大小都不变 ✓)。<br>
+  · 左图(居中):App A → C 时,<b>蓝线(第一张卡的左缘)会左右移动</b> ✗ —— 这就是"换 App 时卡在动"的来源;<br>
+  · 右图(左端固定):蓝线<b>钉在原地</b> ✓,只有整排的右端在伸缩 ✓。<br>
+  <b>别的卡会不会动?</b>会 —— 第 2、3 张的左缘 = 前面卡的宽度之和,所以换 App 时它们会被推。
+  选中时"其他卡有蒙层"⇒ 你的注意力在选中那张上,而它就是第一张 ⇒ <b>它不动就够了</b> ✓。
+</div>
+
+<script>
+// 三个"App":每张卡自己的宽度(按真窗比例 ⇒ 各 App 不同)
+const APPS = [
+  { name:"App A", widths:[150, 210] },
+  { name:"App B", widths:[170, 130, 250] },
+  { name:"App C", widths:[260, 180, 300] },
+];
+const GAP = 8, TRAY_PAD = 18;
+
+function render(i){
+  const app = APPS[i];
+  const rowW = app.widths.reduce((a,b)=>a+b,0) + GAP*(app.widths.length-1);
+
+  // ① 居中:左端 = (托盘宽 − 行宽)/2
+  const trayW = document.querySelector('#row1').closest('.tray').clientWidth;
+  const leftCentered = Math.max(TRAY_PAD, (trayW - rowW)/2);
+
+  // ② 左端固定:左端 = 常量
+  const leftFixed = TRAY_PAD;
+
+  for (const [rowId, pinId, dId, left, label] of [
+      ['row1','pin1','d1', leftCentered, true],
+      ['row2','pin2','d2', leftFixed,   false]]){
+    const row = document.getElementById(rowId);
+    row.style.left = left + 'px';
+    row.innerHTML = app.widths.map((w, k) =>
+      `<div class="card ${k===0?'sel':(k>0?'wash':'')}" style="width:${w}px">${
+        k===0 ? app.name+' · 第1窗(选中)' : '第'+(k+1)+'窗'}</div>`).join('');
+    const pin = document.getElementById(pinId);
+    pin.style.left = left + 'px';
+    document.getElementById(dId).textContent =
+      Math.round(left) + ' px' + (label ? '(随行宽变 ✗)' : '(常量 ✓)');
+  }
+}
+document.querySelectorAll('button[data-i]').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('button[data-i]').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    render(+b.dataset.i);
+  };
+});
+window.addEventListener('resize', ()=>render(+document.querySelector('button.on').dataset.i));
+render(0);
+</script>
+</body>
+</html>

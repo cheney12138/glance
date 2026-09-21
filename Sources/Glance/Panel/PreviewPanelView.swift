@@ -61,14 +61,12 @@ struct PreviewPanelView: View {
         // 托盘窗口按**整局最大布局**开(见 PanelController.trayMaxContentSize):本组摆得小时,
         // 玻璃要**贴着窗口底边**(= 与今天等尺寸时的位置完全一致),水平居中由默认对齐负责。
         // 不这么摆的话内容会在更大的窗口里垂直居中 → 玻璃整体上浮一截,和长条之间的缝就变了
-        // ★★ 2026-09-21 用户裁定(方案 B「左锚定」):从 `.bottom`(水平居中)改成 `.bottomLeading`。
-        // 病例(日志实证,见 PanelController 的 `[对位]` 那几行):
-        //   托盘**窗**按"整局最大"开(固定 ✓),内容是**本组**的宽度 ⇒ 两者**居中**对齐 ⇒
-        //   一换组(行宽 195↔838)⇒ 整块内容**左右平移 200–300pt** ✗
-        //   —— 用户原话:"不是窗框移动,是里面的快照移动了" ✓(窗框确实没动 ✓)
-        //   左锚定后:**左缘固定 = 整局最大那条的左边** ✓ ⇒ 换组时只有右端伸缩 ✓
-        //   左侧(第一张卡、指针常待的位置)不再跳 ✓
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        // ★ 2026-09-21 用户实评:「你先这样固定完之后, 比如 DataGrip, 容器跟 App 的位置错了十万八千里」✗
+        //   ⇒ 左端锚定的代价被亲眼看到:托盘窗宽 = **本局最大行宽** ⇒ 单个窗口的 App(行宽 268 vs 窗口 838)
+        //     被钉在窗口最左边 ⇒ 卡片飘在远处、跟底部选中的图标**毫无视觉关系** ✗
+        //   ⇒ 回到**居中**:卡片始终落在托盘中轴附近 ✓(与图标圈的语义关联靠高亮承担 ✓);
+        //     代价是换组时整排平移 —— 这一条用户已明确接受(「保留形状,接受位移」✓ ADR-0014)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .opacity(controller.isVisible ? 1 : 0)
     }
 
@@ -343,10 +341,6 @@ private struct WindowThumb<Overlay: View>: View {
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
-    /// 🔬 临时消元开关(默认关):`plainCard=1` ⇒ 选中态**不放大/不加深阴影/不画环**。
-    /// 用来确认"换 app 时卡片画面缩一下"是否就是那个 **4.5% 选中放大**(`.scaleEffect`)。
-    private static var plainCard: Bool { UserDefaults.standard.bool(forKey: "debug.plainCard") }
-
     private var card: some View {
         ZStack {
             // ★ 分支条件必须是"有**任何一种**图":只看 image 会在"有实时帧、还没截图"时掉进静默态 ✗
@@ -441,11 +435,10 @@ private struct WindowThumb<Overlay: View>: View {
         .overlay(
             // demo .win-thumb.active 的 inset 0 0 0 2px:聚焦光走内圈,不抢玻璃亮边
             RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
-                .strokeBorder(PanelColors.thumbFocus,
-                              lineWidth: (selected && !Self.plainCard) ? 2 : 0)
+                .strokeBorder(PanelColors.thumbFocus, lineWidth: selected ? 2 : 0)
         )
-        .scaleEffect((selected && !Self.plainCard) ? 1.045 : 1)
-        .elevation((selected && !Self.plainCard) ? .thumbActive : .thumb)
+        .scaleEffect(selected ? 1.045 : 1)
+        .elevation(selected ? .thumbActive : .thumb)
         .animation(motion, value: selected)
     }
 
@@ -456,6 +449,14 @@ private struct WindowThumb<Overlay: View>: View {
             Circle()
                 .fill(selected ? PanelColors.chipDotOn : PanelColors.chipDotOff)
                 .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+            // ★ 方案 1:这枚小图标 = **这张卡属于哪个 App**(归属写在卡片自己身上 ✓)
+            //   取 `AppIconCache`(按 pid 缓存 ✓ 不进渲染路径的重活 ✗)
+            if let appIcon = AppIconCache.icon(pid: record.pid) {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
+            }
             Text(displayTitle)
                 // regular 而不是 medium:芯片要"轻",字重是最直接的一档(题头那边用 medium 是因为它是标题)
                 .font(.system(size: PanelMetrics.titleSize, weight: .regular))
@@ -465,7 +466,7 @@ private struct WindowThumb<Overlay: View>: View {
                 .truncationMode(.middle)
         }
             // 文字宽度上限里要扣掉圆点与间距,否则整枚芯片会超出卡片宽
-            .frame(maxWidth: box.width - 18 - PanelMetrics.chipDot - 5)
+            .frame(maxWidth: box.width - 18 - PanelMetrics.chipDot - PanelMetrics.chipIcon - 10)
             .padding(.horizontal, 9)
             .padding(.vertical, 2)
             .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
