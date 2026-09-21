@@ -148,15 +148,22 @@ enum PanelMetrics {
     /// 推论:一行里的卡片可以**大小不一**(用户接受"参差不齐" ⇒ 换来"所见即真窗大小");
     ///       因此托盘的行高、内容高度、命中判定都必须按**每张卡的实际高度**算,不能再当常量 ✗。
     static func thumbSize(real: CGSize, aspect: CGFloat) -> CGSize {
-        let capW = thumbWidth(aspect: aspect)          // 上限:沿用原来的"随比例自适应 + 夹上下限"
-        let capH = shotH
-        guard real.width > 1, real.height > 1 else { return CGSize(width: capW, height: capH) }
-        let s = min(1, capW / real.width, capH / real.height)   // 只许缩小,不许放大
-        return CGSize(width: (real.width * s).rounded(), height: (real.height * s).rounded())
+        // 算式在 `GlanceCore.CardSizing`(可单测);这里只负责**喂参数**:
+        // 两个帽都是"已经缩过"的(见 CardSizing.size 的注释:帽必须在外面乘 k,
+        // 否则会和原来的"先夹限后缩放"差一个 k)
+        CardSizing.size(real: real, capWidth: thumbWidth(aspect: aspect), capHeight: shotH)
     }
 
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
-        k(min(max(122 * max(aspect, 0.2), thumbMinW), thumbMaxW))
+        k(CardSizing.capWidth(aspect: aspect, metricBase))
+    }
+
+    /// 纯算式要的"基准尺"(未过 `k()`)。`thumbMinW/thumbMaxW` 本来就是基准值。
+    /// **必须按需构造**:`shotH` 等随 `scale`/`sessionCap` 变,缓存下来就是另一把尺子。
+    static var metricBase: CardMetrics {
+        CardMetrics(shotH: shotH, thumbMinW: thumbMinW, thumbMaxW: thumbMaxW,
+                    thumbGap: thumbGap, trayPadX: trayPadX,
+                    trayPadTop: trayPadTop, trayPadBottom: trayPadBottom, trayRowGap: trayRowGap)
     }
     // § 卡面压色(方案 D:统一底色 + 低透明度截图,`design/卡面实验台.html` 对照图拍板 2026-09-16)
     /// 非选中卡的**截图不透明度**(选中/悬停 = 1,恢复原样)。0.30 = 实验台默认值:
@@ -574,11 +581,8 @@ enum PanelLayout {
     /// **唯一来源**:确认涟漪的圆心、指针高光要挖的洞、以及托盘的横向锚点都取它。
     /// 三处各算一遍的话,只要有一处漏改就会错位(而且错得很小,看不出来但一直歪着)。
     static func iconCenterX(appIndex: Int, appCount: Int, contentWidth: CGFloat) -> CGFloat {
-        let n = CGFloat(max(appCount, 1))
-        let stripW = n * PanelMetrics.icon + max(n - 1, 0) * PanelMetrics.iconGap
-        return (contentWidth - stripW) / 2
-            + CGFloat(max(appIndex, 0)) * PanelMetrics.pitch
-            + PanelMetrics.icon / 2
+        RingGrid.iconCenterX(appIndex: appIndex, appCount: appCount, contentWidth: contentWidth,
+                             icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
     }
 }
 

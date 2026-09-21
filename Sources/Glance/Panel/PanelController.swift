@@ -135,7 +135,7 @@ final class PanelController: ObservableObject {
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
         let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom)
         guard x >= 0, yUp >= 0 else { return }
-        let c = max(0, min(cols - 1, Int(x / pitch)))
+        let c = max(0, min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)))
         let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
         let i = r * cols + c
         guard launchables.indices.contains(i), i != launchIndex else { return }
@@ -166,7 +166,7 @@ final class PanelController: ObservableObject {
         //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
         let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
-        let i = Int(x / PanelMetrics.pitch)
+        let i = RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
         guard pointerInRingHotZone(i) else { return }
         // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
         let current = entrySelected ? (launchIndex ?? -1) : appIndex
@@ -716,25 +716,13 @@ final class PanelController: ObservableObject {
     }
     
     /// 分行后**每行的最大高度**(内容尺寸 / 命中判定 / 视图三处共用同一套数)
+    /// 算式在 `GlanceCore.TrayGrid`(可单测);这里只把"这一局的尺子"喂进去。
     static func rowHeights(_ sizes: [CGSize], rows: Int, cols: Int) -> [CGFloat] {
-        (0..<rows).map { r in
-            let start = r * cols
-            let end = min(start + cols, sizes.count)
-            guard start < end else { return 0 }
-            return sizes[start..<end].map(\.height).max() ?? 0
-        }
+        TrayGrid.rowHeights(sizes, rows: rows, cols: cols)
     }
-    
+
     private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
-        var widest: CGFloat = 0
-        for r in 0..<rows {
-            let start = r * cols
-            let end = min(start + cols, widths.count)
-            guard start < end else { continue }
-            let w = widths[start..<end].reduce(0, +) + CGFloat(end - start - 1) * PanelMetrics.thumbGap
-            widest = max(widest, w)
-        }
-        return widest
+        TrayGrid.maxRowWidth(widths, rows: rows, cols: cols, gap: PanelMetrics.thumbGap)
     }
 
     /// 托盘的行 × 列 —— **唯一来源**:视图排网格与 `previewContentSize` 都取它。
@@ -752,17 +740,11 @@ final class PanelController: ObservableObject {
     /// (调用方在当前 cap 下用 `PanelMetrics.thumbWidth(aspect:)` 算好),
     /// 行数判定用"该分布下最宽那行"(`maxRowWidth`,分布与视图的 HStack 一致)
     func trayLayout(widths ws: [CGFloat]) -> (rows: Int, cols: Int) {
-        guard !ws.isEmpty else { return (0, 1) }
-        let n = ws.count
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if Self.maxRowWidth(ws, rows: r, cols: c) + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
-        // (由调用方按"内容居中 + 两端对称地切"兜底)也不往上堆成一面墙
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(widths: ws,
+                         gap: PanelMetrics.thumbGap,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
@@ -1324,15 +1306,11 @@ final class PanelController: ObservableObject {
     /// 启动行的行 × 列:与 `trayLayout` 同一套"放得下的最少行数"逻辑,只是格距换成图标节距。
     /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
     func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
-        guard n > 0 else { return (0, 1) }
-        let pitch = PanelMetrics.pitch
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if CGFloat(c) * pitch + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(count: n,
+                         cellPitch: PanelMetrics.pitch,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
@@ -1561,7 +1539,7 @@ final class PanelController: ObservableObject {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
             let (rows, cols) = launchLayout(count: count)
             let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let i = r * cols + min(cols - 1, Int(x / PanelMetrics.pitch))
+            let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
