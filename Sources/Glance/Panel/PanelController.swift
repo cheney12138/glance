@@ -1382,21 +1382,23 @@ final class PanelController: ObservableObject {
         )
         __mark("预热")
         if !entrySelected {
-            // ★ S1.2:交给池的是**整个环的窗口**(不只当前组)。
-            // 依据:起流本身要几十~几百毫秒的系统级工作 ⇒ 放在 hover 路径上必然卡
-            //(实测:同一窗口被反复起停 21 次)。⇒ 唤起时一次预热完,之后 hover 不产生任何流操作。
-            // 顺序:当前组在前(先出画面的就是用户在看的这一组)。
-            var ordered: [WindowRecord] = currentGroup?.windows ?? []
-            for g in groups where g.appName != (currentGroup?.appName ?? "") {
-                ordered.append(contentsOf: g.windows)
-            }
-            var seen = Set<CGWindowID>()
-            let items = ordered.filter { seen.insert($0.wid).inserted }
-                                      .map { (wid: $0.wid, aspect: $0.aspect) }
+            // ★★ 2026-09-21 修正(S1.2 → S1.3):**只预热"当前这一组"的窗口**,不再预热整个环。
+            // 病历(用户实报「卡的,要死,不仅唤起切换不流畅,选中之后打开也会卡半秒」):
+            //   预热整个环 ⇒ 一局起 **13 条**捕获会话 ✗ ⇒
+            //     ① 开场:13×40ms 错峰起流 ≈ 520ms(唤起不流畅)
+            //     ② 收场:13 条会话一起拆(系统级工作)⇒ **确认后卡半秒**(日志 `全部停流 … 共 13 条`)
+            //     ③ 稳态:13 条在采 ⇒ 切换不流畅
+            //   ⇒ 换来的只是"hover 到任意 app 都零延迟";而池本来就有 **5s keepAlive** ✓ ⇒
+            //     在同一批 app 之间来回 hover 根本不会重启流 ✓ —— 那个收益**不需要**全环预热 ✓。
+            //   代价:第一次进某个 app,卡片会先显示静默态(实测首帧 36–74ms)✓ 可接受。
+            let items = (currentGroup?.windows ?? []).map { (wid: $0.wid, aspect: $0.aspect) }
             if items.isEmpty {
                 LivePreviewPool.shared.stopAll(reason: "环里没有窗口")
             } else {
-                LivePreviewPool.shared.sync(items)
+                // 选中的那一扇按用户档位,其余 5fps(成本 = 1×档位 + (N-1)×5fps)
+            let sel = currentGroup?.windows.indices.contains(winIndex) == true
+                ? currentGroup?.windows[winIndex].wid : nil
+            LivePreviewPool.shared.sync(items, selected: sel)
             }
         } else {
             LivePreviewPool.shared.stopAll(reason: "入口槽选中(启停生活动)")

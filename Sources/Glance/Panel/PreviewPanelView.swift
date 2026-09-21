@@ -13,6 +13,7 @@ import GlanceCore
 struct PreviewPanelView: View {
     @ObservedObject var controller: PanelController
     @ObservedObject var snapshotter: Snapshotter
+    // (S2.1)托盘**不再**观察整个池:每张卡各自观察自己那一个帧盒子 ⇒ 只重绘那一张卡 ✓
     /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
     @AppStorage("panel.sheen") private var glow = true
 
@@ -129,6 +130,7 @@ struct PreviewPanelView: View {
             record: w,
             bundleID: controller.currentGroup?.bundleID,
             image: snapshotter.cache[w.wid],
+            liveBox: LivePreviewPool.shared.box(for: w.wid),
             selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
             traffic: {
                 // 三粒灯的动作 T14 就实现了(WindowFocuser.close/minimize/zoom),
@@ -265,6 +267,8 @@ private struct WindowThumb<Overlay: View>: View {
     /// 决定标题显示什么:终端要 tab 名、编辑器要工程名(见 `GlanceCore.WindowTitle`)
     let bundleID: String?
     let image: NSImage?
+    /// 这一扇窗的**帧盒子**(只观察它自己 ⇒ 别的窗口来帧不会重绘本卡 ✓)
+    @ObservedObject var liveBox: LiveFrameBox
     let selected: Bool
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
     @ViewBuilder let traffic: () -> Overlay
@@ -314,7 +318,9 @@ private struct WindowThumb<Overlay: View>: View {
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
     private var card: some View {
         ZStack {
-            if let image {
+            // ★ 分支条件必须是"有**任何一种**图":只看 image 会在"有实时帧、还没截图"时掉进静默态 ✗
+            //   (S3 摘掉截图之后,那种情况就是常态 ✓)
+            if liveBox.image != nil || image != nil {
                 // **fill 定版**(2026-09-14 试过 fit,退回):
                 // fit 虽然不裁内容,但卡片是**定尺**的窗口卡,而红绿灯锚在卡片左上角 ——
                 // 宽窗(终端 1.83)被 fit 上下留出"信纸边"后,三粒灯就落在浅色空边上,
@@ -324,10 +330,15 @@ private struct WindowThumb<Overlay: View>: View {
                 //   ⇒ 实机:托盘更新平时 0.1–0.3ms,一换 app 就 10–27ms(滑块那一帧掉帧)。
                 //   没缩好时先用原图,下一次渲染就走缓存 ✓
                 Group {
-                    if let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
-                                                                  target: imageBox) {
+                    if let liveFrame = liveBox.image {
+                        // ★ S2:实时帧优先。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
+                        //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
+                        Image(decorative: liveFrame, scale: 1).resizable()
+                    } else if let image,
+                              let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
+                                                                        target: imageBox) {
                         Image(decorative: prepared.cg, scale: prepared.scale).resizable()
-                    } else {
+                    } else if let image {
                         Image(nsImage: image).resizable()
                     }
                 }
@@ -338,10 +349,19 @@ private struct WindowThumb<Overlay: View>: View {
                     // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
                     .opacity(selected ? 1 : PanelMetrics.thumbWash)
             } else {
-                Rectangle().fill(Color.gray.opacity(0.15))
-                Text("截图中…")
-                    .font(.system(size: PanelMetrics.titleSize))
-                    .foregroundStyle(PanelColors.txt2)
+                // ★ 静默态(2026-09-21 定版):**该窗所属 App 的淡图标**。
+                //   为什么不是深色块:用户实报"像没加载出来/黑窗" ✗;为什么不是"截图中…":那是 loading 文案 ✗。
+                //   淡图标自解释"这是谁的窗",而且它是**静默**的(不闪、不变、没有进度感)✓。
+                //   出现时机:本次运行里这扇窗还没有过任何一帧(实测 ≈40–150ms)⇒ 一闪而过。
+                ZStack {
+                    Rectangle().fill(PanelColors.thumbBg)
+                    if let icon = AppIconCache.icon(pid: record.pid) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: imageBox.height * 0.34, height: imageBox.height * 0.34)
+                            .opacity(0.35)
+                    }
+                }
             }
         }
         .frame(width: imageBox.width, height: imageBox.height)
@@ -455,11 +475,35 @@ final class LivePreviewPool: ObservableObject {
     /// 流数上限:**必须 ≥ 环里的窗口数**(实测环里 ~14 窗)⇒ 给 24 是防呆,不是节流阀。
     /// 教训(2026-09-21):上限小于环的规模 ⇒ LRU 永远在互相淘汰 ⇒ 同一窗口被反复起停 21 次 ⇒ hover 卡死。
     /// 成本由**帧率**控制(S4 分档),不由"砍流数"控制。
+    /// **非选中**窗口的帧率(分档,S4 核心)。
+    /// 依据(实测):13 条流全按用户档位(10fps)= ~26% CPU ✗,而鼠标只看得到**一张卡**在动。
+    /// 5fps 的依据:缩略图尺寸下"有动静"就够(用户看的是选中那张);再低(2fps)会像卡住。
+    static let lowFps = 5
     static let maxStreams = 24
     /// 闲置多久才停:局内**不靠它节流**(环里的窗口全程保留),它只回收"已经不在环里"的窗口。
     static let keepAlive: Double = 5.0
 
-    @Published private(set) var frames: [CGWindowID: CGImage] = [:]
+    /// **每扇窗一个可观察帧**(替代原来的 `@Published frames`)。
+    /// 两个理由,一个比一个重要:
+    ///   ① **崩溃**(2026-09-21 实测 SIGABRT):原来 `frames`/`wanted`/`frameOrder` 被
+    ///      「池的串行队列」与「ingest 的主队列回调」同时读写 ⇒ Dictionary 被写坏 ⇒
+    ///      崩溃栈 `doesNotRecognizeSelector ← Dictionary._Variant.lookup ← LivePreviewPool.ingest` ✓。
+    ///      ⇒ 现在:**可变账本只归池的队列**,主线程只**接收一张图**(写进 box)✓ 两个线程不共享容器 ✓;
+    ///   ② **性能**:原来任何一扇窗来帧 ⇒ 整个托盘(观察者)重建 ⇒ 13 条流时 70 次/秒 × N 张卡 ✗。
+    ///      ⇒ 现在每张卡**只观察自己那一个 box** ⇒ 只重绘那一张卡 ✓(DockDoor 同款结构 ✓)。
+    private var boxes: [CGWindowID: LiveFrameBox] = [:]      // 只在主线程碰
+    /// 池队列独占:最新一帧与淘汰顺序(主线程不读它)
+    private var latest: [CGWindowID: CGImage] = [:]
+    private var latestOrder: [CGWindowID] = []
+
+    /// 主线程:取这一扇窗的帧盒子(没有就建一个,身份稳定 ⇒ 卡片用它当 @ObservedObject)
+    @MainActor
+    func box(for wid: CGWindowID) -> LiveFrameBox {
+        if let b = boxes[wid] { return b }
+        let b = LiveFrameBox()
+        boxes[wid] = b
+        return b
+    }
 
     private struct Handle {
         let gen: Int
@@ -485,7 +529,7 @@ final class LivePreviewPool: ObservableObject {
     private var sweepScheduled = false
 
     /// 把"当前界面上该活的窗口"交给池。池负责开/停到一致(对象池 reconcile)。
-    func sync(_ items: [(wid: CGWindowID, aspect: CGFloat)]) {
+    func sync(_ items: [(wid: CGWindowID, aspect: CGFloat)], selected: CGWindowID?) {
         guard Self.enabled else { return }
         let wids = items.map { $0.wid }
         queue.async { [weak self] in
@@ -494,7 +538,7 @@ final class LivePreviewPool: ObservableObject {
             if Set(wids) == self.wanted, self.pending.isEmpty { return }
             self.wanted = Set(wids)
             for w in wids { self.idleSince[w] = nil }
-            self.reconcile(items)
+            self.reconcile(items, selected: selected)
             self.scheduleSweep()
         }
     }
@@ -508,7 +552,7 @@ final class LivePreviewPool: ObservableObject {
             self.handles.removeAll(); self.wanted.removeAll(); self.activeGens.removeAll()
             self.startedAt.removeAll(); self.firstFrameLogged.removeAll()
             self.idleSince.removeAll(); self.pending.removeAll()
-            glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.frames.count) 张")
+            glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.latest.count) 张")
         }
     }
 
@@ -528,7 +572,7 @@ final class LivePreviewPool: ObservableObject {
         }
     }
 
-    private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)]) {
+    private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)], selected: CGWindowID?) {
         // ① 记闲置时间(不再立刻停流 —— 见 keepAlive)
         let now = CFAbsoluteTimeGetCurrent()
         for wid in handles.keys where !wanted.contains(wid) {
@@ -540,6 +584,13 @@ final class LivePreviewPool: ObservableObject {
             stopStream(wid, why: "已不在环内 \(Int(now - since))s")
         }
         // ③ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
+        // ★ 分档:选中 = 用户档位,其余 = lowFps。帧率变了就重启**那一条**(帧保留 ⇒ 不闪)✓
+        for item in items.prefix(Self.maxStreams) {
+            let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
+            if let h = handles[item.wid], h.fps != want {
+                stopStream(item.wid, why: "换档 \(h.fps)->\(want)fps")
+            }
+        }
         var delay = 0.0
         for item in items.prefix(Self.maxStreams) where handles[item.wid] == nil && !pending.contains(item.wid) {
             pending.insert(item.wid)
@@ -548,7 +599,8 @@ final class LivePreviewPool: ObservableObject {
                 guard let self else { return }
                 self.pending.remove(item.wid)
                 guard self.wanted.contains(item.wid), self.handles[item.wid] == nil else { return }
-                self.start(item.wid, aspect: item.aspect)
+                let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
+                self.start(item.wid, aspect: item.aspect, fps: want)
             }
         }
     }
@@ -572,11 +624,10 @@ final class LivePreviewPool: ObservableObject {
         return winCache[wid]
     }
 
-    private func start(_ wid: CGWindowID, aspect: CGFloat) {
+    private func start(_ wid: CGWindowID, aspect: CGFloat, fps: Int) {
         gen += 1
         let g = gen
         activeGens.insert(g)
-        let fps = Self.tierFps
         Task { [weak self] in
             guard let self else { return }
             guard let win = await self.window(wid) else {
@@ -624,20 +675,27 @@ final class LivePreviewPool: ObservableObject {
         VTCreateCGImageFromCVPixelBuffer(pb, options: nil, imageOut: &raw)
         guard let img = raw else { return }
         let now = CFAbsoluteTimeGetCurrent()
+        // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
+        if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
+            firstFrameLogged.insert(wid)
+            glog(String(format: "[直播] 首帧 %.0fms wid=%d", (now - t0) * 1000, wid))
+        }
+        if latest[wid] == nil { latestOrder.append(wid) }
+        latest[wid] = img
+        while latestOrder.count > 10 {
+            let old = latestOrder.removeFirst()
+            if !wanted.contains(old) { latest[old] = nil }
+        }
+        // 只把这一张图交给主线程 ⇒ 每张卡各自重绘(不重建整个托盘 ✓)
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if let t0 = self.startedAt[wid], !self.firstFrameLogged.contains(wid) {
-                self.firstFrameLogged.insert(wid)
-                glog(String(format: "[直播] 首帧 %.0fms wid=%d", (now - t0) * 1000, wid))
-            }
-            if self.frames[wid] == nil { self.frameOrder.append(wid) }
-            self.frames[wid] = img
-            while self.frameOrder.count > 10 {
-                let old = self.frameOrder.removeFirst()
-                if !self.wanted.contains(old) { self.frames[old] = nil }
-            }
+            self?.boxes[wid]?.image = img
         }
     }
+}
+
+/// 一扇窗的"最新一帧盒子" —— 卡片 `@ObservedObject` 它,只在自己这扇窗来帧时重绘 ✓
+final class LiveFrameBox: ObservableObject {
+    @Published var image: CGImage?
 }
 
 /// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
@@ -709,6 +767,21 @@ final class SeatImageCache {
 /// 卡片只有 ~207×122pt,而快照是 720px 宽 ⇒ 每次重建都要 decode + 缩放(主线程 ✗)。
 /// 病例(2026-09-21):托盘更新平时 0.1–0.3ms,一换 app 就 **10–27ms** ⇒ 同帧滑块弹簧掉帧。
 /// 现在:后台按**卡片设备像素尺寸**缩放一次并缓存;顺带与实时帧同一规格(1:1)。
+/// App 图标缓存(按 pid)—— 静默态用。
+/// 为什么缓存:`NSRunningApplication(processIdentifier:)` 是系统查询,不该在渲染路径里反复问 ✗
+private enum AppIconCache {
+    private static let lock = NSLock()
+    private static var store: [pid_t: NSImage] = [:]
+    static func icon(pid: pid_t) -> NSImage? {
+        lock.lock()
+        if let i = store[pid] { lock.unlock(); return i }
+        lock.unlock()
+        guard let i = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
+        lock.lock(); store[pid] = i; lock.unlock()
+        return i
+    }
+}
+
 /// 卡片尺寸 vs 真实窗口尺寸的**一次性账**(每扇窗一条) —— 用来判定"卡片把窗口放大了多少"。
 private enum CardSizeLog {
     static var seen: Set<CGWindowID> = []
