@@ -786,6 +786,29 @@ final class ThreeFingerTap {
         static let palmMajorAxis: Float = 22
         static let palmSize: Float = 4.5
 
+        // ★★ 2026-09-22 照 **LumaRing** 的 `TapRecognizer.c` 补三条纪律(用户指向了那个实现 ✓):
+        //   LumaRing 判 tap 的核心是 **只在"全部手指离开"那一帧 fire** ✓,外加三条窗口;
+        //   我们的病恰恰是"手指还在板上就开火"(pressFireIfDue ✗)⇒ 拖/滑全被误判 ✓
+        /// ① 帧间隔上限:超了就**直接拒**。LumaRing 原文注释:"A missing/reordered frame
+        ///    could hide a swipe" ✓ —— 用户机器日志里满是"账本未收口 ⇒ 强制重置" ⇒ 丢帧是常态 ✗,
+        ///    而丢帧会让**位移量不出来**(位移是"每根手指相对它落点的距离" ✓ 中间帧丢了就偏小 ✗)
+        static let maxFrameGap: Double = 0.12
+        /// ② 抬手窗口:第一根手指离开后,其余必须在这么久内抬完(LumaRing:4 指 0.10s / 3 指 0.16s ✓)
+        ///    —— 这正是用户那句话:"点按有一个**明确的手指离开过程**" ✓;拖拽是慢慢松开的 ✗
+        static let maxReleaseSpan: Double = 0.12
+        /// ③ "按住"的时长上限:四指按住(不移动)也算一次意图 ⇒ 抬手指时判它 ✓
+        ///    (0.45s 起算按住的资格;上限 1.2s —— 再长多半是手搭在板上 ✓)
+        static let pressHoldRange: ClosedRange<Double> = 0.45...1.2
+
+        /// 上一帧的时间(判丢帧 ✓)
+        var lastFrameAt: Double = 0
+        /// 这一轮里出现过 > maxFrameGap 的帧间隔 ⇒ 直接拒(位移不可信 ✓)
+        var sawFrameGap = false
+        /// 第一根手指离开的时刻(判抬手窗口 ✓)
+        var firstLiftAt: Double = 0
+        /// 上一帧"在板上"的触点 id 集合(用来发现"有人抬手了" ✓)
+        var activeIDs: Set<Int32> = []
+
         /// ★ 账本卡死自愈上限(2026-09-20「三指四指又失效了」的病根):
         /// 账本只在"收口帧"判卷,而收口条件一旦满足不了,账本就**无限期撑开** ——
         /// 之后所有触摸全被吸进同一条账本,手指数/时长/位移全爆表,判卷永远失败,
@@ -854,6 +877,12 @@ final class ThreeFingerTap {
                     glog(String(format: "[指点按] 账本 %.1fs 未收口 ⇒ 强制重置(丢帧/幽灵触点自愈)", stale))
                 }
             }
+            // ★ 帧间隔(照 LumaRing:丢帧 ⇒ 位移不可信 ⇒ 这轮直接拒)
+            let frameNow = CFAbsoluteTimeGetCurrent()
+            if pressActive, lastFrameAt > 0, frameNow - lastFrameAt > Self.maxFrameGap {
+                sawFrameGap = true
+            }
+            lastFrameAt = frameNow
             if let data, nFingers > 0 {
                 for i in 0..<nFingers {
                     let f = data.assumingMemoryBound(to: Finger.self)[i]
@@ -885,6 +914,12 @@ final class ThreeFingerTap {
                     }
                 }
             }
+            // ★ 抬手时刻(照 LumaRing 的 release 窗口):本帧在板上的 id 比上帧少 ⇒ 有人抬手了
+            let nowIDs = distinctIDs
+            if pressActive, !activeIDs.isEmpty, nowIDs.count < activeIDs.count, firstLiftAt == 0 {
+                firstLiftAt = frameNow
+            }
+            activeIDs = nowIDs
             if touching > 0 || palmTouching > 0 {
                 if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
                     pressActive = true
@@ -895,6 +930,9 @@ final class ThreeFingerTap {
                     statesSeen.removeAll()
                     sawRealTouch = false
                     countedSince = 0
+                    sawFrameGap = false
+                    firstLiftAt = 0
+                    activeIDs = []
                 }
                 if touching > 0, !sawRealTouch {
                     // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
@@ -930,6 +968,7 @@ final class ThreeFingerTap {
         /// 被合并、id 累到 4,三指点按就被误当"四指按压"唤起了未启动环。
         /// 同帧 4 指 = 真的"四根手指此刻都在板上",三指点按永远凑不齐这个条件。
         /// 防误触其余双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
+        /// ⚠️ **已作废**(2026-09-22):中途开火是误触的病根 ✗ —— 保留只为留档,不要再调用 ✓
         mutating func pressFireIfDue() -> Bool {
             guard !pressFired, maxTouches >= 4, distinctIDs.count >= 4,
                   // ★ 2026-09-22 由 0.25s 拉长到 0.45s(用户实报「四指下滑也会唤起」):
@@ -966,8 +1005,32 @@ final class ThreeFingerTap {
                 }
                 return .rejected("")   // 一指的普通点按:不进账
             }
+            // ★ LumaRing 的三条纪律(2026-09-22 补):
+            //   ① 丢帧 ⇒ 位移不可信 ⇒ 拒(LumaRing:"missing frame could hide a swipe" ✓)
+            if sawFrameGap {
+                return .rejected(String(format: "%d 指 帧间隔 >%.0fms(丢帧 ⇒ 位移不可信)⇒ 不动作",
+                                        n, Self.maxFrameGap * 1000))
+            }
+            //   ② 抬手窗口:第一根手指离开后,其余要在 %.0fms 内抬完 ——
+            //      "点按一定有明确的手指离开过程"(用户原话 ✓);慢慢松开的是拖拽 ✗
+            let releaseSpan = firstLiftAt > 0 ? CFAbsoluteTimeGetCurrent() - firstLiftAt : 0
+            if releaseSpan > Self.maxReleaseSpan {
+                return .rejected(String(format: "%d 指 抬手用了 %.0fms(>%.0fms)⇒ 不是点按",
+                                        n, releaseSpan * 1000, Self.maxReleaseSpan * 1000))
+            }
+            //   ③ 位移(照旧)
             if maxNormMove > ThreeFingerTap.maxMove {
                 return .slide(norm: maxNormMove)
+            }
+            //   ④ "按住"的时长窗口:超过点按上限但落在 pressHoldRange 内,且几乎没动 ⇒ 算"按住"✓
+            //      (原来这条是**中途开火**的 ✗ ⇒ 现在也只在抬手帧认领 ✓)
+            if held > ThreeFingerTap.maxDuration {
+                guard n == 4, Self.pressHoldRange.contains(held) else {
+                    return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",
+                                            n, held * 1000, ThreeFingerTap.maxDuration * 1000,
+                                            Self.pressHoldRange.lowerBound, Self.pressHoldRange.upperBound))
+                }
+                return .fireFour(held: held * 1000, norm: maxNormMove, abs: maxAbsMove)
             }
             let heldMs = held * 1000
             return n == 4 ? .fireFour(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
@@ -1106,82 +1169,11 @@ final class ThreeFingerTap {
     private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
         let tap = ThreeFingerTap.shared
         if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
-            // 按压路径:四指齐压到时 ⇒ 当场生效(点按失手的兜底,不必抬手)
-            if tap.press.pressFireIfDue() {
-                DispatchQueue.main.async {
-                    let tap = ThreeFingerTap.shared
-                    let now = CFAbsoluteTimeGetCurrent()
-                    guard now - tap.lastTapAt > 0.35 else { return }
-                    tap.lastTapAt = now
-                    if ThreeFingerTap.gestureBlockedByCapture("四指按压") { return }
-                    // 带上**位移真值**(下次"下滑有没有被误判"一眼可判 ✓;阈值就靠它定 ✓)
-                    glog(String(format: "[指点按] 四指按压 0.45s → 唤起(手指位移 %.4f ≤ 阈值 %.3f ✓)",
-                                tap.press.maxNormMove, ThreeFingerTap.maxMove))
-                    if tap.enabledFour { tap.onFireFour?() }
-                    Haptics.fire(.summonFourFinger)
-                    ThreeFingerTap.logPostFirePointerDrift("四指按压")
-                    // ★ 四指**按压**挂拖拽/滑动撤销(与四指**轻点**不同 ✓):
-                    //   按住路径是**手指还在板上**时开火的 ⇒ 若它其实是"四指下滑",下滑会继续 ⇒
-                    //   事件监听/位移检查会当场把它撤掉 ✓(四指轻点则不挂:轻点之后拖东西是正当用法 ✓)
-                    ThreeFingerTap.cancelIfDragStarted(reason: "四指按压")
-                }
-            }
-            return 0   // 按压还没结束
-        }
-        // 全部抬起 ⇒ 判卷(账本换新,下一轮从零记)
-        let outcome = tap.press.judge()
-        tap.press = Press()
-        switch outcome {
-        case .rejected(""):
-            break                              // 一指的普通点按:不进账
-        case .rejected(let why):
-        if !why.isEmpty { Haptics.fire(.gestureRejected, trace: String(why.prefix(48))) }
-            DispatchQueue.main.async { glog("[指点按] \(why)") }
-        case .slide(let norm):
-            DispatchQueue.main.async {
-                glog(String(format: "[指点按] 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
-                            norm, ThreeFingerTap.maxMove))
-            }
-        case .fireThree(let held, let norm, let absMove):
-            DispatchQueue.main.async {
-                let tap = ThreeFingerTap.shared
-                let now = CFAbsoluteTimeGetCurrent()
-                guard now - tap.lastTapAt > 0.35 else {
-                    glog(String(format: "[指点按] 三指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
-                    return
-                }
-                tap.lastTapAt = now
-                if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
-                if tap.enabled { tap.onFire?() }
-                Haptics.fire(.summonThreeFinger)
-                ThreeFingerTap.logPostFirePointerDrift("三指点按")
-                ThreeFingerTap.cancelIfDragStarted(reason: "三指点按")
-            }
-        case .fireFour(let held, let norm, let absMove):
-            DispatchQueue.main.async {
-                let tap = ThreeFingerTap.shared
-                let now = CFAbsoluteTimeGetCurrent()
-                guard now - tap.lastTapAt > 0.35 else {
-                    glog(String(format: "[指点按] 四指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
-                    return
-                }
-                tap.lastTapAt = now
-                if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
-                if tap.enabledFour { tap.onFireFour?() }
-                Haptics.fire(.summonFourFinger)
-                ThreeFingerTap.logPostFirePointerDrift("四指点按")
-                // ⚠️ **不给四指挂"拖拽撤销"** ✗(2026-09-22 查证后收窄):
-                //   冲突的**唯一来源**是系统的「三指拖移」✓(`TrackpadThreeFingerDrag = 1`);
-                //   系统没有任何"四指拖移"(这台机器上四指手势只有 捏合 / 横竖扫 ✓ 都是**大位移**动作 ✓
-                //   ⇒ 已被 0.03 位移判据挡住 ✓)。
-                //   而日志里那次四指被撤销(`四指点按 … 指针又移动 41pt` ✓)其实是**误撤** ✗ ——
-                //   真四指唤起未启动环之后,用户接着拖了个东西 ⇒ 好端端的面板被收掉 ✗
-                //   ⇒ 撤销只保留给**三指**那条(它才与拖移共用同一个动作 ✓)
-            }
+            // ⚠️ 2026-09-22 这里原本有一条"**中途开火**":四指齐压满 0.25s 就当场生效(不必抬手)✗
+            //   四指下滑的前 0.25s 与"四指按住"完全一样 ⇒ 拖/滑被误判(用户实报三次 ✓)。
+            //   照 LumaRing 的做法:**只在全部手指离开那一帧判**(`judge()` ✓)——
+            //   "按住"这个意图改由时长窗口 `pressHoldRange` 在抬手时认领 ✓
+            //   (LumaRing 的原文只剩一句:`if (!activeCount) { fire = matched && ... }` ✓)
         }
         return 0
     }

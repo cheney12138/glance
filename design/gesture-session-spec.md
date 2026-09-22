@@ -165,3 +165,20 @@ defaults write com.cheney12138.macswitcher panel.showLaunchables -bool true    #
   · 顺序按"**这块屏**的最近用过"排:`ScreenRecency` —— 每块屏一本账 ✓
     (观测 `didActivateApplicationNotification` + 归属屏判定 ✓);
     否则在别的屏用过 App 会把这块屏的"上一个"带跑 ✗
+
+## 判卷纪律:照 **LumaRing 的 TapRecognizer.c** 对齐(2026-09-22)
+
+用户原话:「点按是有一个明确的手指离开的过程啊。拖拽我的手都没离开触摸板, 怎么会区分不出来呢」
+—— 对的 ✓。对照同作者的 LumaRing(`Sources/TrackpadInput/TapRecognizer.c`,176 行)后补了三条:
+
+| 纪律 | LumaRing | 我们(改前 ✗ → 改后 ✓) |
+|---|---|---|
+| **只在"全部手指离开"那一帧判** | `if (!activeCount) { fire = matched && … }` ✓ | ✗ 另有一条"四指齐压 0.25s 就**中途开火**" ⇒ 四指下滑前三秒与"按住"同形 ⇒ 误判 ✓ → **已删** ✓ |
+| **帧间隔 > 0.12s ⇒ 拒** | 注释:"A missing/reordered frame could hide a swipe" ✓ | ✗ 无(而本机日志里满是"账本未收口 ⇒ 强制重置" ⇒ 丢帧是常态)⇒ **已补** ✓ |
+| **抬手窗口**(第一根抬起后其余须在 0.10–0.16s 内抬完) | `release = 4 指 0.10 / 3 指 0.16` ✓ | ✗ 无 ⇒ **已补 0.12s** ✓ |
+| 落齐窗口(assembly) | `4 指 0.09s / 3 指 0.15s` ✓ | 已有近似(`countedSince` 每变多一次重掐表 ✓) |
+| 位移门 | `4 指 0.025 / 3 指 0.035` ✓ | 0.03(同一量级 ✓) |
+| 连击防抖 | `lastTap` 0.35s ✓ | 已有 ✓ |
+
+★ 最重要的一条:**丢帧会让位移"量不出来"** ✓ —— 位移是"每根手指相对它**落点**的距离",
+  中间帧丢了就偏小 ⇒ 判据看着像轻点 ✗。这正是"三指/四指拖拽误触"屡修不好的底层原因 ✓。
