@@ -12,3 +12,8 @@ Packages/*/.build/
 # agent 技能文件(域建模 / 评审那几个 skill):本地工具用,不进仓库
 # (2026-09-22 用户要求:「这些不要提交上去, 从远端删除, ignore一下」)
 .agents/
+
+# agent 的本地工具文件:规矩(AGENTS.md)与领域词表(CONTEXT.md)
+# (2026-09-22 用户:「这2个文件也没必要带上去」⇒ 与 .agents/ 同类:本地留着,不进仓库 ✓)
+AGENTS.md
+CONTEXT.md
