@@ -1018,12 +1018,20 @@ final class ThreeFingerTap {
     ///     代价诚实说:真轻点唤起后 0.3s 内如果**恰好**有拖拽在进行,这次唤起会被收掉 ✗。
     @MainActor
     static func cancelIfDragStarted(reason: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            let dragging = NSEvent.pressedMouseButtons != 0
-            if dragging {
-                glog("[指点按] ⚠️ \(reason) 之后系统在拖拽(按键按下) ⇒ **撤销这次唤起**")
-                onDragMisfire?()
-            }
+        // ⚠️ 第一版用的是 `NSEvent.pressedMouseButtons != 0` —— **错的信号** ✗:
+        //   它反映的是**物理**按键状态,而"三指拖移"是系统**合成**的拖动 ⇒ 它一直是 0 ✗
+        //   (用户当场报"拖拽还是误触了" ✓;日志里那条位移诊断同时抓到了真凭实据:
+        //    `⚠️ 三指点按 生效后 250ms 指针又移动 **399pt**` ✓ 而真轻点那一刻指针几乎不动 ✓)
+        // ⇒ 换成**指针位移**:轻点的位移 ≈ 0(实测 0.1–0.8pt ✓),拖拽是几百 pt ✓ —— 同一台机器上量出来的 ✓
+        let p0 = NSEvent.mouseLocation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let p1 = NSEvent.mouseLocation
+            let moved = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
+            // 15pt:真轻点那一下指针连 1pt 都不动(实测 0.1–0.8 ✓)⇒ 15pt 是**30 倍**余量 ✓
+            guard moved > 15 else { return }
+            glog(String(format: "[指点按] ⚠️ %@ 之后 250ms 指针又移动 %.0fpt ⇒ **撤销这次唤起(拖拽误触)**",
+                        reason, moved))
+            onDragMisfire?()
         }
     }
 
