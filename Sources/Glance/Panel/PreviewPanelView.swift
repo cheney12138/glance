@@ -765,7 +765,7 @@ final class LivePreviewPool: ObservableObject {
                     self.startedAt[wid] = CFAbsoluteTimeGetCurrent()
                 }
                 try await s.startCapture()
-                glog(String(format: "[直播] 起流池 += wid=%d %dx%d @%dfps 池内=%d",
+                glog(String(format: "[直播] 起流池 += wid=%u %dx%d @%dfps 池内=%d",
                             wid, Int(size.width), Int(size.height), fps, self.handles.count))
             } catch {
                 glog("[直播] 起流失败 wid=\(wid): \(error.localizedDescription)")
@@ -783,7 +783,7 @@ final class LivePreviewPool: ObservableObject {
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
             firstFrameLogged.insert(wid)
-            glog(String(format: "[直播] 首帧 %.0fms wid=%d", (now - t0) * 1000, wid))
+            glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
@@ -921,7 +921,7 @@ private enum CardRulerLog {
             guard let x, boxA > 0 else { return "  -" }
             return String(format: "%+.0f%%", (x / boxA - 1) * 100)
         }
-        glog(String(format: "[尺子] wid=%d 源=%@ · 盒 %.0fx%.0f(%.2f) · 图 %@%@ · 快照 %@%@",
+        glog(String(format: "[尺子] wid=%u 源=%@ · 盒 %.0fx%.0f(%.2f) · 图 %@%@ · 快照 %@%@",
                     wid, source, box.width, box.height, boxA, a, d(imageAspect), s, d(shotAspect)))
     }
 }
@@ -983,7 +983,7 @@ private enum CardSizeLog {
            abs(old.height - now.height) < 0.5 { return }
         let old = lastSize[record.wid]
         lastSize[record.wid] = now
-        glog(String(format: "[卡变] wid=%d 卡片 %.0fx%.0f → %.0fx%.0f (真窗 %.0fx%.0f)",
+        glog(String(format: "[卡变] wid=%u 卡片 %.0fx%.0f → %.0fx%.0f (真窗 %.0fx%.0f)",
                     record.wid, old?.width ?? -1, old?.height ?? -1, cardW, cardH,
                     record.bounds.width, record.bounds.height))
     }
@@ -996,7 +996,7 @@ private enum CardSizeLog {
         let s = max(cardW / win.width, cardH / win.height)   // .fill 的缩放倍数(>1 = 放大 ✗)
         let cropW = (win.width * s - cardW) / max(1, win.width * s)
         let cropH = (win.height * s - cardH) / max(1, win.height * s)
-        glog(String(format: "[卡尺寸] wid=%d 真窗 %.0fx%.0fpt / 卡片 %.0fx%.0fpt ⇒ **缩放 %.2fx** 裁掉 %.0f%%x%.0f%%",
+        glog(String(format: "[卡尺寸] wid=%u 真窗 %.0fx%.0fpt / 卡片 %.0fx%.0fpt ⇒ **缩放 %.2fx** 裁掉 %.0f%%x%.0f%%",
                     record.wid, win.width, win.height, cardW, cardH, s, cropW * 100, cropH * 100))
         return true
     }

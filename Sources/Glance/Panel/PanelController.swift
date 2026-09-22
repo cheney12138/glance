@@ -164,7 +164,7 @@ final class PanelController: ObservableObject {
         guard glass.contains(p) else { return }
         // ★ **热区内缩**(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求指针
         //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
-        let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
+        let x = p.x - glass.minX - ringContentLeftInset - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
         let i = RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
         guard pointerInRingHotZone(i) else { return }
@@ -1009,6 +1009,17 @@ final class PanelController: ObservableObject {
         let w = ringContentWidth(launch: entrySelected)
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
         return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+    }
+
+    /// 环内容在**玻璃**里的左缘(2026-09-22)。
+    ///
+    /// 病例:窗框宽度改成"两环更宽者"之后(为了换环不抖 ✓),**未启动环**比窗框窄 ⇒ 内容居中 ✓,
+    ///   而命中区/帧拍仍在按"内容从玻璃左缘开始"算 ✗ ⇒ 整排选中**右移**,
+    ///   用户实报:「目前未启动环指针 hover 选中的位置, 跟 app 是对不齐的」✓
+    /// ⇒ 命中的横坐标必须**同时**扣掉这个居中偏移(主环偏移为 0 ⇒ 只有未启动环看得出 ✓)。
+    private var ringContentLeftInset: CGFloat {
+        let w = ringContentWidth(launch: entrySelected)
+        return (ringWindowWidth() - w) / 2
     }
 
     /// 某一环的**内容宽**(纯算术,与 entrySelected 无关 ⇒ 可以随时问"另一环多宽")。
@@ -1897,7 +1908,7 @@ final class PanelController: ObservableObject {
     private func pointerInRingHotZone(_ i: Int) -> Bool {
         guard let glass = panelContentRect() else { return false }
         let pitch = PanelMetrics.pitch
-        let tileLeft = glass.minX + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
+        let tileLeft = glass.minX + ringContentLeftInset + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
         let rect = CGRect(
             x: tileLeft + PanelMetrics.hoverInsetX,
             y: glass.minY + PanelMetrics.rowPadY + PanelMetrics.hoverInsetY,
