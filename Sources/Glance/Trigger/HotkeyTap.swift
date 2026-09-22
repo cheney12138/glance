@@ -1018,20 +1018,38 @@ final class ThreeFingerTap {
     ///     代价诚实说:真轻点唤起后 0.3s 内如果**恰好**有拖拽在进行,这次唤起会被收掉 ✗。
     @MainActor
     static func cancelIfDragStarted(reason: String) {
-        // ⚠️ 第一版用的是 `NSEvent.pressedMouseButtons != 0` —— **错的信号** ✗:
-        //   它反映的是**物理**按键状态,而"三指拖移"是系统**合成**的拖动 ⇒ 它一直是 0 ✗
-        //   (用户当场报"拖拽还是误触了" ✓;日志里那条位移诊断同时抓到了真凭实据:
-        //    `⚠️ 三指点按 生效后 250ms 指针又移动 **399pt**` ✓ 而真轻点那一刻指针几乎不动 ✓)
-        // ⇒ 换成**指针位移**:轻点的位移 ≈ 0(实测 0.1–0.8pt ✓),拖拽是几百 pt ✓ —— 同一台机器上量出来的 ✓
+        // 判据演进(2026-09-22,用户三次实报"拖拽误触"):
+        //   ① `pressedMouseButtons != 0` —— **错的信号** ✗(物理按键;三指拖移是系统**合成**的拖动 ⇒ 恒为 0)
+        //   ② 250ms 内指针位移 > 15pt —— 抓到了一部分 ✓,但**窗口太短** ✗:
+        //      带"拖移锁定"的用法是「轻点起拖 → 停一下 → 再拖」⇒ 移动发生在 250ms **之后** ✗
+        //   ③ 现在:**直接盯"系统在拖"这件事** —— 装一个短命全局监听收 `leftMouseDragged` ✓
+        //      (三指拖移在系统里就是拖动 ⇒ 一定有 dragged 事件 ✓),窗口给 1.2s ✓;
+        //      同时保留指针位移这条当兜底(便宜 ✓,窗口也拉长到 0.8s ✓)
+        let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        var monitor: Any?
+        var fired = false
+        func cancelOnce(how: String) {
+            guard !fired else { return }
+            fired = true
+            glog("[指点按] ⚠️ \(reason) 之后系统在拖拽(\(how)) ⇒ **撤销这次唤起(拖拽误触)**")
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            onDragMisfire?()
+        }
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
+            DispatchQueue.main.async { cancelOnce(how: "收到拖拽事件") }
+        }
+        // 兜底:指针位移(0.8s 窗口 —— 覆盖"停一下再拖"的用法 ✓)
         let p0 = NSEvent.mouseLocation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             let p1 = NSEvent.mouseLocation
             let moved = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
-            // 15pt:真轻点那一下指针连 1pt 都不动(实测 0.1–0.8 ✓)⇒ 15pt 是**30 倍**余量 ✓
-            guard moved > 15 else { return }
-            glog(String(format: "[指点按] ⚠️ %@ 之后 250ms 指针又移动 %.0fpt ⇒ **撤销这次唤起(拖拽误触)**",
-                        reason, moved))
-            onDragMisfire?()
+            if moved > 15 { cancelOnce(how: String(format: "指针移动 %.0fpt", moved)) }
+        }
+        // 1.2s 后收工(不留监听 ✓)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if !fired, let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
         }
     }
 

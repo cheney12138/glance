@@ -23,6 +23,18 @@ struct SettingsView: View {
     /// ⚠️ 系统开了「三指拖移」时必须**如实说**:拖拽的起手拍与轻点在触控板上是同一个动作 ✗
     /// (实测这台机器 `TrackpadThreeFingerDrag = 1` ✓,内置域与蓝牙域各一份 ⇒ 两个都看 ✓)
     /// 我们能做的兜底:真起拖了就把这次唤起收掉(见 `ThreeFingerTap.cancelIfDragStarted` ✓)
+    /// 悬停才展开的长解释(小字只留一句结论 ✓)
+    static var threeFingerTapHelp: String {
+        """
+        系统开着「三指拖移」时，「三指轻点」与「三指起拖」在触控板上是同一个动作 —— \
+        拖窗/选字的起手那一下会被识别成一次轻点。
+
+        兜底:唤出后 1.2 秒内若系统真的开始拖拽，这次唤起会被自动收起(会看到面板闪一下)。
+
+        不想被它打扰:系统设置 → 辅助功能 → 指针控制 → 关闭「使用触控板拖移」。
+        """
+    }
+
     static var threeFingerTapDesc: String {
         let base = "三指轻点触控板唤起切换面板,该局不随松手散场。"
         func dragOn(_ domain: String) -> Bool {
@@ -31,8 +43,9 @@ struct SettingsView: View {
         let dragging = dragOn("com.apple.AppleMultitouchTrackpad")
             || dragOn("com.apple.driver.AppleBluetoothMultitouch.trackpad")
         guard dragging else { return base }
-        return base + "⚠️ 系统开了「三指拖移」:拖窗/选字时起手会顺带唤醒一次"
-            + "(检测到真在拖拽会自动收起)。不想被它打扰,可在 系统设置 → 辅助功能 → 指针控制 里关掉三指拖移。"
+        // ★ 2026-09-22 用户:「描述敢再长一点吧, 如果太长了就做成问号hover的表达吧」——
+        //   小字只留**一句结论** ✓;细节(为什么、怎么关、兜底怎么做)全搬进 `.help` hover ✓
+        return base + "⚠️ 系统开着「三指拖移」:拖窗起手可能顺带唤醒(会自动收起)"
     }
 
     @ObservedObject var store: SettingsStore
@@ -291,6 +304,9 @@ struct SettingsView: View {
                             desc: Self.threeFingerTapDesc) {
                     BeamSwitch(isOn: $threeFingerTapPanel)
                 }
+                // ★ 长解释搬进 hover(用户:「如果太长了就做成问号hover的表达吧」✓)
+                //   `.help` = macOS 原生的 tooltip ⇒ 鼠标停上去才展开 ✓ 小字保持一句话 ✓
+                .help(Self.threeFingerTapHelp)
                 SettingsRow(title: "四指点按进未启动环",
                             desc: "四指轻点触控板,唤起并直接进入未启动环。",
                             hairline: false) {
