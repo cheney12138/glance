@@ -62,6 +62,8 @@ struct SettingsView: View {
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
     /// 悬停触感(键名来自 `GlanceCore.HapticPolicy.defaultsKey` ✓ 一个源,不写两遍 ✓)
+    /// 触感强度档("light"/"medium"/"strong")
+    @AppStorage(Keys.hapticStrength) private var hapticStrength = "medium"
     @AppStorage(Keys.hapticEnabled) private var hapticEnabled = false
 
     /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
@@ -283,9 +285,17 @@ struct SettingsView: View {
             //   ("指针挪到别的东西上了")⇒ 拆成两条只会让人多读一行 ✓(要拆随时说 ✓)
             SettingsGroup(label: "触感", anchor: Page.general.anchor("触感")) {
                 SettingsRow(title: "悬停触感",
-                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板轻震一下。",
-                            hairline: false) {
+                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板震一下。") {
                     BeamSwitch(isOn: $hapticEnabled)
+                }
+                // ★ 2026-09-22 用户报「没感受到震感, 是不是强度太低了」——
+                //   实话:触感 API **没有强度参数**,只有三档离散手感;而且**设备差异比档位差异还大**
+                //   (同一档:外接板很弱、内置板清晰)。所以把档位摆出来,你自己按手感和设备选 ✓
+                SettingsRow(title: "触感强度",
+                            desc: "触感只有这三档(没有更细的强度可调);设备不同,手感差别很大。",
+                            hairline: false) {
+                    BeamSegmented(options: HapticStrength.allCases.map { .init(id: $0.rawValue, label: $0.label) },
+                                  value: $hapticStrength)
                 }
             }
 
@@ -720,7 +730,9 @@ struct ShortcutPane: View {
                     BeamSwitch(isOn: $graveTakeover)
                 }
                 SettingsRow(title: "⌘` 以哪块屏为准",
-                            desc: "指针所在屏:跟你看的地方走。前台窗口所在屏:跟当前这扇窗走。") {
+                            // ★ 2026-09-22 用户看这条「没懂」⇒ 换成人话:讲"两块屏上各有什么、你要跟谁"
+                            desc: "两块屏都有同一个 App 的窗口时,⌘` 在哪块屏里跳:"
+                                + "跟着鼠标停的那块屏走,还是跟着你正在用的那扇窗走。") {
                     BeamSegmented(options: [.init(id: "pointer", label: "指针所在屏"),
                                             .init(id: "front", label: "前台窗口所在屏")],
                                   value: $graveScreenBasis)
