@@ -1,4 +1,5 @@
 import AppKit
+import GlanceCore
 import QuartzCore
 
 /// 帧间隔探针 —— 只在 `GLANCE_TRACE=1` 时挂上。
@@ -15,8 +16,17 @@ final class FrameProbe: NSObject {
     /// 2026-09-15 用户问"跟我外接显示器刷新率有关系吗",顺势发现:在 120Hz 屏(如 ProMotion 的 XDR)上,
     /// 12–25ms 的卡顿会被这阈值**漏掉** ✗。改成按面板所在屏的实际刷新率判定:
     /// 60Hz → 25ms 算长帧;120Hz → 12.5ms 就算。
-    private var fps: Double = 60
-    private var longFrame: Double { 1.5 / fps }
+    /// **屏幕标称**刷新率 —— 只作两用:样本不足时的回落值 ✓ + 汇总行里的语境 ✓
+    private var nominalFps: Double = 60
+    /// 长帧阈值:**按实测节拍算**(纯函数在 `GlanceCore.FrameBudgetPolicy`,有单测 ✓)
+    ///
+    /// ⚠️ 2026-09-22 事故:原来是 `1.5 / 屏幕标称` ⇒ 内建 120Hz **标称**120,而接了外接屏之后
+    ///    App 实际只拿到 60Hz 的节拍(§18 已知环境项)⇒ 每一帧 16.7ms 都 > 12.5ms 阈值
+    ///    ⇒ 汇总打出「**长帧 661(99%)**」✗ —— **量尺自己说谎,而且说得很响**。
+    ///    口径改正:节拍要**量出来**(低分位,既不被长帧抬高、也不被偶发快帧带跑)✓
+    private var longFrame: Double { FrameBudgetPolicy.longFrameThreshold(intervals: intervals, nominalFps: nominalFps) }
+    /// 实测节拍(ms),给汇总行做语境
+    private var cadenceMs: Double { FrameBudgetPolicy.cadence(intervals: intervals, nominalFps: nominalFps) * 1000 }
     private var link: CADisplayLink?
     private var intervals: [Double] = []
     private var last: CFTimeInterval = 0
@@ -31,7 +41,7 @@ final class FrameProbe: NSObject {
         self.label = label
         startUptimeMs = glanceUptimeMs()
         // 面板在哪块屏上,就按哪块屏的节拍判定(`maximumFramesPerSecond`,macOS 12+)
-        fps = Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
+        nominalFps = Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
         last = 0
         intervals.removeAll(keepingCapacity: true)
         let l = view.displayLink(target: self, selector: #selector(tick(_:)))
@@ -75,8 +85,13 @@ final class FrameProbe: NSObject {
                 String(format: "%d-%ds×%d(max %.0fms)", pair.key, pair.key + 1, pair.value.count, pair.value.worst)
             }
             .joined(separator: " ")
-        // 判定基准非 60Hz 时标出来 —— 否则读日志的人会拿 25ms 的口径去理解 120Hz 屏的数据
-        let judge = fps == 60 ? "" : String(format: " [按 %.0fHz 判定:>%.1fms]", fps, longFrame * 1000)
+        // 判定基准**总是**标出来(带实测节拍)—— 读日志的人才知道这行是按多少毫秒的口径判的 ✓
+        // 标称与实测差得远(>30%)时**大声说**:那就是"屏幕标称 120 但 App 只有 60"那种环境项 ✓
+        let nominalMs = 1000 / max(nominalFps, 1)
+        let mismatch = abs(cadenceMs - nominalMs) / nominalMs > 0.3
+        let judge = String(format: " [按实测节拍 %.1fms 判定:>%.1fms%@]",
+                           cadenceMs, longFrame * 1000,
+                           mismatch ? String(format: ";屏幕标称 %.0fHz ✗ 与实测不符", nominalFps) : "")
         // ★ 量尺自带语境（2026-09-21）：把**当前打开的重型开关**写进汇总行。
         //   为什么：A/B 对照时我们俩上一次就因为这个白跑一轮 —— 日志是**多进程交错追加**的，
         //   而时间戳是“进程内相对时间”⇒ 两趟之间**切不开**，只能看聚合值 ✗。
@@ -146,7 +161,7 @@ final class HzCompare {
         guard Self.enabled, !started, #available(macOS 14.0, *) else { return }
         started = true
         let screen = panelView.window?.screen ?? NSScreen.main
-        glog("[Hz] A/B 开始:面板屏 maxFps=\(screen?.maximumFramesPerSecond ?? -1)"
+        glog("[Hz] A/B 开始:面板屏标称 maxFps=\(screen?.maximumFramesPerSecond ?? -1)"
              + " 本地化名=\(screen?.localizedName ?? "?") 共 \(NSScreen.screens.count) 块屏")
 
         // A:面板自己的 display link
