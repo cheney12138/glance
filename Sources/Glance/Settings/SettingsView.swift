@@ -51,6 +51,8 @@ struct SettingsView: View {
     /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
     /// 子菜单点击 = 页内滚动定位。nil = 不定位
     @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
+    /// 程序化滚动(点导航)之后的一小段"静默期":期间不把滚动位置回写成导航高亮(见 onChange 的注释)
+    @State private var suppressNavSpyUntil: CFAbsoluteTime = 0
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
     @AppStorage(Keys.debugPinPanelOnRelease) private var pinPanel = false
@@ -162,9 +164,22 @@ struct SettingsView: View {
             // 侧栏子菜单点了 ⇒ 滚到对应组(锚点 id 由 SettingsGroup 挂)
             .onChange(of: navSelection) { _, sel in
                 guard let sel else { return }
+                // ★ 记下"这是程序化滚动":接下来 0.4s 内**不许**回写 navSelection,
+                //   否则回写会再触发本 onChange ⇒ 自己和自己打架(来回抖)✗
+                suppressNavSpyUntil = CFAbsoluteTimeGetCurrent() + 0.4
                 withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
                     proxy.scrollTo(sel, anchor: .top)
                 }
+            }
+            // ★ 反向:**滚动 → 左侧导航跟着走**(2026-09-22 用户实报后新增;此前只有单向 ✓→✗)
+            .coordinateSpace(name: SettingsScrollSpace.name)
+            .onPreferenceChange(GroupOffsetKey.self) { offsets in
+                guard CFAbsoluteTimeGetCurrent() > suppressNavSpyUntil else { return }   // 程序化滚动期间不回写
+                // 顶部预留带(scrollTopPad)下方 40pt 视为"已进入这一组"⇒ 在越过的组里取**最靠下**的那个 = 当前组 ✓
+                let passed = offsets.filter { $0.value <= 40 }
+                let current = passed.max { $0.value < $1.value }?.key
+                    ?? offsets.min { $0.value < $1.value }?.key          // 一个都没越过(最顶上)⇒ 取最靠上的
+                if let current, navSelection != current { navSelection = current }
             }
         }
     }
