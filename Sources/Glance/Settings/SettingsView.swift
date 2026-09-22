@@ -74,6 +74,7 @@ struct SettingsView: View {
                     liveTier = newValue.rounded()
                     // 写回既有键(档位只在"起流/换档"时被读 ⇒ 下一次路过即生效 ✓ 不用重启 ✓)
                     UserDefaults.standard.set(String(Int(liveTier)), forKey: Keys.livePreviewTier)
+                    LivePreviewPool.shared.tierChanged()   // ★ 面板开着也立刻生效(见池子的注释)
                 })
     }
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
@@ -288,7 +289,7 @@ struct SettingsView: View {
             //   ("指针挪到别的东西上了")⇒ 拆成两条只会让人多读一行 ✓(要拆随时说 ✓)
             SettingsGroup(label: "触感", anchor: Page.general.anchor("触感")) {
                 SettingsRow(title: "悬停触感",
-                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板震一下。") {
+                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板触发震动。") {
                     BeamSwitch(isOn: $hapticEnabled)
                 }
                 // ★ 2026-09-22 用户报「没感受到震感, 是不是强度太低了」——

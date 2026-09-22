@@ -123,6 +123,16 @@ enum Keys {
 ///
 /// ⚠️ 改这里只影响"从没写过这个键的人"(全新安装 ✓)——
 ///    已有用户的值一律不动(`object(forKey:) ?? 默认` 的语义 ✓)
+extension Keys {
+    /// 「保持面板打开」的**唯一读取点**(2026-09-22 病例:触发层读新键、面板层读**旧调试键** ✗
+    /// ⇒ 菜单里那个勾**只管一半** —— 用户点了"保持面板打开",面板外点击照样把它关掉 ✗)。
+    /// 启动参数 `-debug.pinPanelOnRelease 1` 是自动化测试的老路,仍然优先 ✓
+    static var pinOnRelease: Bool {
+        if ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") { return true }
+        return UserDefaults.standard.object(forKey: panelPinOnRelease) as? Bool ?? KeyDefaults.pinOnRelease
+    }
+}
+
 enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true

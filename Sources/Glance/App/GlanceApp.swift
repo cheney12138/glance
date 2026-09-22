@@ -80,6 +80,11 @@ struct GlanceApp: App {
                     MruEvidence.shared.start()
                     // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
                     ThumbnailRefresher.shared.start()
+                    // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
+                    //   (Trigger 不许反向依赖 App 层 ⇒ 只能在 App 层装配,见 SameAppScreenCycler 头注 ✓)
+                    hotkeys.onSameAppScreenCycle = { forward in
+                        Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+                    }
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
                     // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
@@ -234,7 +239,10 @@ private struct QuickSettingsMenu: View {
                     // 一组互斥的勾选行:`get` 比当前档、`set` 只认"选中"(点已选中的不动 ✓)
                     Toggle(LivePreviewPool.tierLabel(v), isOn: Binding(
                         get: { LivePreviewPool.tierFps == v },
-                        set: { if $0 { UserDefaults.standard.set(String(v), forKey: Keys.livePreviewTier) } }))
+                        set: { if $0 {
+                            UserDefaults.standard.set(String(v), forKey: Keys.livePreviewTier)
+                            LivePreviewPool.shared.tierChanged()   // ★ 立刻重排,不等下一次 sync ✓
+                        } }))
                 }
             }
             Section {

@@ -2221,7 +2221,10 @@ final class PanelController: ObservableObject {
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    private var pinPanelDebug: Bool { DebugFlags.pinPanelOnRelease }
+    /// ⚠️ 2026-09-22 修:这里原来读 `DebugFlags.pinPanelOnRelease`(**淘汰的调试键**)✗
+    /// ⇒ 设置/菜单里打开的「保持面板打开」,到这一句就断了:面板外点击照样关面板 ✗
+    /// 现在两个读取点都走 `Keys.pinOnRelease`(唯一来源 ✓)
+    private var pinPanel: Bool { Keys.pinOnRelease }
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 
@@ -2635,7 +2638,7 @@ final class PanelController: ObservableObject {
             self.notePointerClick()
             return self.dismissIfClickOutside() ? nil : event
         }
-        if pinPanelDebug { return }
+        if pinPanel { return }
 
         // 全局:别人的点击,吞不掉(全局监听没有返回值的权力)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

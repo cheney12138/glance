@@ -20,6 +20,11 @@ import GlanceCore
 /// 导航期 Q/W/M = 破坏性操作(处决即散场)。
 @MainActor
 final class HotkeyTapCenter {
+
+    /// ⌘` 接管:参数 = 是否向前(⇧ = 反向 ✓)。**由 App 层装配**(Trigger 不许反向依赖 App 层 ✗,
+    /// 见 `Sources/Glance/App/SameAppScreenCycler.swift` 的头注 ✓)
+    var onSameAppScreenCycle: ((Bool) -> Void)?
+
     enum State { case idle, armed, navigating }
 
     /// 导航期间的一次动作。T6 面板、T7 聚焦以后订阅这个出口,不直接碰事件层。
@@ -161,10 +166,7 @@ final class HotkeyTapCenter {
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
     // ★ 2026-09-22:从 `DebugFlags.pinPanelOnRelease`(调试键,每次启动被清 ✗)提升为**用户设置** ✓
     //   优先看启动参数(自动化测试用 ✓),否则看设置里那一行 ✓
-    private var pinPanel: Bool {
-        if ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") { return true }
-        return UserDefaults.standard.object(forKey: Keys.panelPinOnRelease) as? Bool ?? KeyDefaults.pinOnRelease
-    }
+    private var pinPanel: Bool { Keys.pinOnRelease }   // 唯一读取点(见 Keys.pinOnRelease)✓
 
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
@@ -419,7 +421,9 @@ final class HotkeyTapCenter {
             let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
             if mods == [.maskCommand] || mods == [.maskCommand, .maskShift] {
                 let forward = !event.flags.contains(.maskShift)
-                Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+                // ★ 不直接调 App 层的循环器(Trigger 不许反向依赖 ✗ 架构脚本会报 ✓)
+                //   ⇒ 走**闭包钩子**,由 GlanceApp 装配 ✓(输入管线的既有约定:onFire / onScroll 同一套 ✓)
+                onSameAppScreenCycle?(forward)
                 return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
             }
             return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓

@@ -31,6 +31,7 @@
 		5A0000000000000000000097 /* Stdout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000096 /* Stdout.swift */; };
 		5A00000000000000000000A7 /* PanelTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A3 /* PanelTokens.swift */; };
 		5A0000000000000000000C1 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000C0 /* ImageCache.swift */; };
+		5A0000000000000000000C3 /* SameAppScreenCycler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000C2 /* SameAppScreenCycler.swift */; };
 		5A00000000000000000000A8 /* PanelMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A4 /* PanelMotion.swift */; };
 		5A00000000000000000000A9 /* PanelGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A5 /* PanelGlass.swift */; };
 		5A00000000000000000000AA /* AppIconProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A6 /* AppIconProvider.swift */; };
@@ -74,6 +75,7 @@
 		5A0000000000000000000096 /* Stdout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stdout.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A3 /* PanelTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTokens.swift; sourceTree = "<group>"; };
 		5A0000000000000000000C0 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		5A0000000000000000000C2 /* SameAppScreenCycler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SameAppScreenCycler.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A4 /* PanelMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelMotion.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A5 /* PanelGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelGlass.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				5A00000000000000000000C3 /* UpdateChecker.swift */,
 				AA0000000000000000000F04 /* SingleInstanceGuard.swift */,
 				AA0000000000000000000101 /* Keys.swift */,
+				5A0000000000000000000C2 /* SameAppScreenCycler.swift */,
 				AA0000000000000000000111 /* DebugFlags.swift */,
 			);
 			path = App;
@@ -344,6 +347,7 @@
 				AA0000000000000000000F01 /* FrameProbe.swift in Sources */,
 				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
 				5A0000000000000000000C1 /* ImageCache.swift in Sources */,
+				5A0000000000000000000C3 /* SameAppScreenCycler.swift in Sources */,
 				5A00000000000000000000A8 /* PanelMotion.swift in Sources */,
 				5A00000000000000000000A9 /* PanelGlass.swift in Sources */,
 				5A00000000000000000000AA /* AppIconProvider.swift in Sources */,

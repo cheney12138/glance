@@ -16,7 +16,7 @@ struct PreviewPanelView: View {
     @ObservedObject var snapshotter: Snapshotter
     // (S2.1)托盘**不再**观察整个池:每张卡各自观察自己那一个帧盒子 ⇒ 只重绘那一张卡 ✓
     /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
-    @AppStorage(Keys.panelSheen) private var glow = true
+    @AppStorage(Keys.panelSheen) private var glow = KeyDefaults.sheen
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
@@ -598,6 +598,9 @@ final class LivePreviewPool: ObservableObject {
     private var frameOrder: [CGWindowID] = []
     /// 窗口枚举缓存:一个批次共用一次(短 TTL)
     private var winCache: [CGWindowID: SCWindow] = [:]
+    /// 最后一次 `sync` 的输入(窗口 + 选中)—— 给"档位被改了 ⇒ 立刻重排"用 ✓
+    private var lastItems: [(wid: CGWindowID, aspect: CGFloat)] = []
+    private var lastSelected: CGWindowID?
     private var winCacheAt: CFAbsoluteTime = 0
     private var sweepScheduled = false
 
@@ -609,6 +612,8 @@ final class LivePreviewPool: ObservableObject {
             guard let self else { return }
             // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
             if Set(wids) == self.wanted, self.pending.isEmpty { return }
+            self.lastItems = items
+            self.lastSelected = selected
             let added = Set(wids).subtracting(self.wanted)   // 刚变可见的那几张(下面补帧用)
             self.wanted = Set(wids)
             for w in wids { self.idleSince[w] = nil }
@@ -655,6 +660,27 @@ final class LivePreviewPool: ObservableObject {
             CardImageCache.shared.reset()
             SeatImageCache.shared.reset()
             self.stopAll(reason: "显示配置变化")
+        }
+    }
+
+    /// **档位被改了** ⇒ 立刻按新档重排(不必等下一次 `sync`)。
+    ///
+    /// 病例(2026-09-22,用户要求"你要保证跟代码是联动、是生效的"):
+    ///   档位确实是**现读**的 ✓,但 `reconcile` 只在**窗口集合变化**时才跑 ✗
+    ///   ⇒ 面板开着的时候从菜单/设置里改档位,那几条流会一直用旧档跑 —— 用户看到的是"改了没反应" ✗
+    /// 口径:档位改成 0 ⇒ **全停**(不建流);其余 ⇒ 按新档重排(会走策略的"换档 ⇒ 停+按新档重建" ✓,
+    /// 帧保留 ⇒ 不闪 ✓)。错峰 40ms 仍在执行那一侧 ⇒ 不会一次打一堆流 ✓
+    func tierChanged() {
+        queue.async { [weak self] in
+            guard let self, !self.lastItems.isEmpty else { return }
+            if !Self.enabled {                       // 档位 = 关
+                self.stopAll(reason: "档位改为关")
+                return
+            }
+            // 面板可能是在"档位 = 关"的时候开的(那时 wanted 是空的)⇒ 这里补上名单 ✓
+            self.wanted = Set(self.lastItems.map(\.wid))
+            for w in self.wanted { self.idleSince[w] = nil }
+            self.reconcile(self.lastItems, selected: self.lastSelected, starts: true)
         }
     }
 
