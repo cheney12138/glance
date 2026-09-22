@@ -8,3 +8,7 @@ Packages/*/.build/
 
 # AI 工具的本地产物(KM 报告等),不进仓库
 .skillspace/
+
+# agent 技能文件(域建模 / 评审那几个 skill):本地工具用,不进仓库
+# (2026-09-22 用户要求:「这些不要提交上去, 从远端删除, ignore一下」)
+.agents/
