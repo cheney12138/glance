@@ -49,8 +49,13 @@ public enum SessionViolation: Equatable, CustomStringConvertible {
 }
 
 public enum SessionInvariants {
-    /// 容差:几何是浮点累加出来的,0.5pt(与 `CardSizing` 同一条口径)
+    /// 容差:**环窗口宽度**用 0.5pt(与 `CardSizing` 同一条口径 —— 它是纯算出来的 ✓)
     public static let tolerance: CGFloat = 0.5
+    /// 窗框尺寸的容差放宽到 **2pt**:第一次冒烟实测到 `1259.0x375.0 → 1258.9x374.4`(0.6pt)✗ ——
+    /// 那是内容高度取整的噪声(App 名的字宽/图标行高累加 ✓),不是违反。
+    /// 真事故的量级完全不同:那个"抖"是 **634 → 1509**(几百 pt ✓)⇒ 阈值放宽到 2pt 依然抓得住 ✓
+    /// (量尺的第一原则:**宁可阈值宽、也不要天天报警** —— 天天报警的量尺最后会被无视 ✗)
+    public static let frameSizeTolerance: CGFloat = 2.0
 
     /// 一局内**不该变**的东西变了 ⇒ 报出来。
     ///
@@ -59,8 +64,8 @@ public enum SessionInvariants {
     ///   · 流的有无:开合流本来就是按组变化的 ✓;只有"跑着但在名单外"才算违反 ✗
     public static func violations(baseline: SessionSnapshot, now: SessionSnapshot) -> [SessionViolation] {
         var out: [SessionViolation] = []
-        if abs(now.frameSize.width - baseline.frameSize.width) > tolerance
-            || abs(now.frameSize.height - baseline.frameSize.height) > tolerance {
+        if abs(now.frameSize.width - baseline.frameSize.width) > frameSizeTolerance
+            || abs(now.frameSize.height - baseline.frameSize.height) > frameSizeTolerance {
             out.append(.frameSizeChanged(from: baseline.frameSize, to: now.frameSize))
         }
         if abs(now.ringWindowWidth - baseline.ringWindowWidth) > tolerance {

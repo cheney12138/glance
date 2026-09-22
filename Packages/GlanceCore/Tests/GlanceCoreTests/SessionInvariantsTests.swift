@@ -14,6 +14,11 @@ struct SessionInvariantsTests {
         let same = SessionSnapshot(frameSize: CGSize(width: 1383.9 + 0.3, height: 374.4), ringWindowWidth: 1509)
         #expect(SessionInvariants.violations(baseline: baseline, now: same).isEmpty, "0.3pt 在容差内(浮点累加)")
 
+        // 第一次冒烟实测的噪声:0.6pt(内容取整)⇒ 不许报警 ✓
+        let noise = SessionSnapshot(frameSize: CGSize(width: 1258.9, height: 374.4), ringWindowWidth: 1509)
+        let base2 = SessionSnapshot(frameSize: CGSize(width: 1259.0, height: 375.0), ringWindowWidth: 1509)
+        #expect(SessionInvariants.violations(baseline: base2, now: noise).isEmpty, "0.6pt 是取整噪声,不是违反")
+
         let changed = SessionSnapshot(frameSize: CGSize(width: 1509, height: 374.4), ringWindowWidth: 1509)
         let v = SessionInvariants.violations(baseline: baseline, now: changed)
         #expect(v == [.frameSizeChanged(from: baseline.frameSize, to: changed.frameSize)])
