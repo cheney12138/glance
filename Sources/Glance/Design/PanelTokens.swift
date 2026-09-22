@@ -46,7 +46,7 @@ enum PanelMetrics {
     /// 选中图标**放大之后**,它的画面与左右邻居画面之间还要留多少净空 —— 这才是"呼吸感"
     /// 真正的设计量,间隙由它倒推,不写死。可在设置 → 通用 里现场调(也随尺寸同比例缩放)。
     static var iconClearance: CGFloat {
-        let v = UserDefaults.standard.object(forKey: "panel.iconClearance") as? Double
+        let v = UserDefaults.standard.object(forKey: Keys.panelIconClearance) as? Double
         return k(v.map { CGFloat($0) } ?? 13)
     }
     /// 选中放大后,图标**画面**相对格子单侧溢出的量。
@@ -55,6 +55,12 @@ enum PanelMetrics {
     static var selectionOverflow: CGFloat { icon * (iconScale - 1) / 2 }
     /// 格间间隙 = 净空 + 选中放大吃掉的单侧溢出
     static var iconGap: CGFloat { iconClearance + selectionOverflow }
+
+    /// ★ 一个属性一个源：格距 = 图标 + 间隙。
+    /// 改前这个加法在 4 个文件里**手算 12 次**（格宽 / 命中测试 / 悬停索引 / 托底位移 / 行宽）
+    /// ⇒ 谁少加一次就是"对不上"，而且这类错误**只在某些位置显形**
+    /// （历史上"托底不跟图标对齐"就是这么来的）。改为全仓库只此一处。
+    static var pitch: CGFloat { icon + iconGap }
     static var rowPadX: CGFloat { k(26) }
     static var rowPadY: CGFloat { k(22) }
     /// 环 hover 热区内缩(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求
@@ -82,6 +88,9 @@ enum PanelMetrics {
     /// `k(16)`(上下各 8)→ **`k(22)`**(上下各 11):base 104 → 110、@1.2 实得 124.8 → **132pt**(+7.2)。
     /// 只动高度、宽度一格未碰(宽度 = `icon`,由格子决定)。
     /// 安全线:长条内容高 = `rowPadY*2 + icon` = 158.4pt @1.2,托底 132pt 仍在里面(上下各余 13.2)。
+    /// 托底高度。⚠️ 2026-09-22:我曾把它减半(icon + 22 → icon + 11)去对应"白色滑块只要有一半"，
+    /// **动错了对象** ✗ —— 用户实拍回:「没让你动这一块的像素啊」⇒ 原值还原 ✓
+    /// (那一句说的是别的东西;要改也必须先问清"是托底的哪一处" ✓)
     static var puckHeight: CGFloat { icon + k(22) }
     // § 指针跟随高光(demo `radial-gradient(220px circle …, transparent 60%)`)
     static var sheenExtent: CGFloat { k(220) } // 结束形状**半径**(不是直径!)
@@ -142,15 +151,22 @@ enum PanelMetrics {
     /// 推论:一行里的卡片可以**大小不一**(用户接受"参差不齐" ⇒ 换来"所见即真窗大小");
     ///       因此托盘的行高、内容高度、命中判定都必须按**每张卡的实际高度**算,不能再当常量 ✗。
     static func thumbSize(real: CGSize, aspect: CGFloat) -> CGSize {
-        let capW = thumbWidth(aspect: aspect)          // 上限:沿用原来的"随比例自适应 + 夹上下限"
-        let capH = shotH
-        guard real.width > 1, real.height > 1 else { return CGSize(width: capW, height: capH) }
-        let s = min(1, capW / real.width, capH / real.height)   // 只许缩小,不许放大
-        return CGSize(width: (real.width * s).rounded(), height: (real.height * s).rounded())
+        // 算式在 `GlanceCore.CardSizing`(可单测);这里只负责**喂参数**:
+        // 两个帽都是"已经缩过"的(见 CardSizing.size 的注释:帽必须在外面乘 k,
+        // 否则会和原来的"先夹限后缩放"差一个 k)
+        CardSizing.size(real: real, capWidth: thumbWidth(aspect: aspect), capHeight: shotH)
     }
 
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
-        k(min(max(122 * max(aspect, 0.2), thumbMinW), thumbMaxW))
+        k(CardSizing.capWidth(aspect: aspect, metricBase))
+    }
+
+    /// 纯算式要的"基准尺"(未过 `k()`)。`thumbMinW/thumbMaxW` 本来就是基准值。
+    /// **必须按需构造**:`shotH` 等随 `scale`/`sessionCap` 变,缓存下来就是另一把尺子。
+    static var metricBase: CardMetrics {
+        CardMetrics(shotH: shotH, thumbMinW: thumbMinW, thumbMaxW: thumbMaxW,
+                    thumbGap: thumbGap, trayPadX: trayPadX,
+                    trayPadTop: trayPadTop, trayPadBottom: trayPadBottom, trayRowGap: trayRowGap)
     }
     // § 卡面压色(方案 D:统一底色 + 低透明度截图,`design/卡面实验台.html` 对照图拍板 2026-09-16)
     /// 非选中卡的**截图不透明度**(选中/悬停 = 1,恢复原样)。0.30 = 实验台默认值:
@@ -568,11 +584,8 @@ enum PanelLayout {
     /// **唯一来源**:确认涟漪的圆心、指针高光要挖的洞、以及托盘的横向锚点都取它。
     /// 三处各算一遍的话,只要有一处漏改就会错位(而且错得很小,看不出来但一直歪着)。
     static func iconCenterX(appIndex: Int, appCount: Int, contentWidth: CGFloat) -> CGFloat {
-        let n = CGFloat(max(appCount, 1))
-        let stripW = n * PanelMetrics.icon + max(n - 1, 0) * PanelMetrics.iconGap
-        return (contentWidth - stripW) / 2
-            + CGFloat(max(appIndex, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
-            + PanelMetrics.icon / 2
+        RingGrid.iconCenterX(appIndex: appIndex, appCount: appCount, contentWidth: contentWidth,
+                             icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
     }
 }
 

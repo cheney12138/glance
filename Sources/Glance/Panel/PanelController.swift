@@ -114,6 +114,12 @@ final class PanelController: ObservableObject {
     /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
     @Published private(set) var segmentTravel: SegmentTravel = .direct
 
+    /// "换环进行中"的窗口(2026-09-22):托盘内容在换环那一拍要**当拍**换(与环的翻牌同步 ✓),
+    /// 而 hover 换组时要**滑**(用户实报「hover app 托盘只会闪现, 没有滑动了」✓)。
+    /// 用时间窗而不是开关:换环是同步一瞬间的事,没有"结束"回调可挂 ✓
+    private var ringSwapUntil: CFAbsoluteTime = 0
+    var isRingSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < ringSwapUntil }
+
     /// 启动行 hover 的**帧拍兜底**(与 SheenOverlay 同一哲学:非 key 窗口的事件投递靠不住
     /// —— 先"哑"后"迟钝"两次实咬 —— 每帧问一次全局指针位置,自己算格子,事件丢了也有帧拍)。
     /// 几何与 `hoverLaunchAt` 同源;由 PreviewPanelView 里的 TimelineView 每帧驱动,
@@ -129,13 +135,13 @@ final class PanelController: ObservableObject {
         let p = NSEvent.mouseLocation
         guard glass.contains(p) else { return }
         let (rows, cols) = launchLayout(count: launchables.count)
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
         let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom)
         guard x >= 0, yUp >= 0 else { return }
-        let c = max(0, min(cols - 1, Int(x / pitch)))
+        let c = max(0, min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)))
         let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
         let i = r * cols + c
         guard launchables.indices.contains(i), i != launchIndex else { return }
@@ -164,9 +170,9 @@ final class PanelController: ObservableObject {
         guard glass.contains(p) else { return }
         // ★ **热区内缩**(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求指针
         //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
-        let x = p.x - glass.minX - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
+        let x = p.x - glass.minX - ringContentLeftInset - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
         guard x >= 0 else { return }
-        let i = Int(x / (PanelMetrics.icon + PanelMetrics.iconGap))
+        let i = RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
         guard pointerInRingHotZone(i) else { return }
         // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
         let current = entrySelected ? (launchIndex ?? -1) : appIndex
@@ -209,7 +215,7 @@ final class PanelController: ObservableObject {
     /// 就地折返(moveApp 的 else 分支照旧取模绕回),段只能靠 ↓/↑ 进出 —— 模型 C 的"逻辑一条环"
     /// 在这条开关下退化成"两条独立环"。滚轮走 handle(.next/.prev) 同路,自动跟着这个开关走
     private var tabEntersLaunchSection: Bool {
-        UserDefaults.standard.object(forKey: "panel.tabEntersLaunchSection") as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.panelTabEntersLaunchSection) as? Bool ?? true
     }
 
     // (2026-09-19)「悬停回退单」机制整段退役 —— 病例:四指/键盘进段后,指针不在面板上,
@@ -413,7 +419,7 @@ final class PanelController: ObservableObject {
         // 新一局回到"主环第一格"的语义:上一局若停在启动区,这一局不带过去(主环才是本产品的主世界)
         entrySelected = false
         launchIndex = nil
-        if UserDefaults.standard.object(forKey: "panel.showLaunchables") as? Bool ?? true {
+        if UserDefaults.standard.object(forKey: Keys.panelShowLaunchables) as? Bool ?? true {
             // ⚠️ 2026-09-17 病例:除了 bundle id,**把 bundle 的路径也放进"在跑"的集合**。
             // 有些 Dock 常驻项取不到 bundleID(`DockApps.launchables` 里会退化成用 **path** 当 id),
             // 那时"在跑"的集合里只有 id ⇒ 两边**永远对不上** ⇒ 明明在跑的 App 也被列成"未启动"。
@@ -451,7 +457,7 @@ final class PanelController: ObservableObject {
         //   · 正向 Tab  → 更早的… → 最久没用的 → 最后才轮到当前 App(与原生同序)
         //   · 反向 ⇧Tab → 直接到队尾 = 当前 App(原生也是这样:从第 2 格往回一格就是第 1 格)
         // 交换只能改两格的相对位置,旋转改的是整条环 —— 这是两种完全不同的操作。
-        let advanceOnOpen = UserDefaults.standard.object(forKey: "switch.advanceOnOpen") as? Bool ?? true
+        let advanceOnOpen = UserDefaults.standard.object(forKey: Keys.switchAdvanceOnOpen) as? Bool ?? true
         // ★ 2026-09-15 三修:前两版都在"重排顺序"上找答案,都是错的(见 LandingRule 文档里的三段历史)。
         // 正解是什么都不做 —— MRU 原序天然就是原生的第一眼版式:
         //   第一格 = 当前 App(它在,但没被选中),第二格 = 上一个 App(高亮落这里 = 唤起即切换),
@@ -512,8 +518,6 @@ final class PanelController: ObservableObject {
             return
         }
         // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
-        cachedSlotWidth = 0                      // 本局组集合变了 ⇒ 槽宽/卡面重算
-        cachedSlotHeight = 0
         applySessionScaleCap(on: screen)
         // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
         // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
@@ -691,50 +695,19 @@ final class PanelController: ObservableObject {
     // 口径:**卡仍按真窗比例画**(形状跟真窗走 ✓ 保住用户的设计 ✓),但它**占的槽位固定** = 本局最宽那张卡。
     //   ⇒ 换组时位置一个像素不动 ✓。代价:窄卡两侧留白(实测最窄 195 vs 最宽 274 ⇒ 左右各 ≈40pt ✓),
     //     且整行变宽 ⇒ 会话缩放比相应略降(卡片整体略小一点 ✓)。
-    private var cachedSlotWidth: CGFloat = 0
-    private var cachedSlotHeight: CGFloat = 0
-    var slotWidth: CGFloat {
-        if cachedSlotWidth > 0 { return cachedSlotWidth }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.width) }
-        cachedSlotWidth = all.max() ?? PanelMetrics.thumbMinW
-        return cachedSlotWidth
-    }
-    /// C′ 的卡面高度 = 本局最高那张卡(与 `slotWidth` 同源同缓存)
-    var slotHeight: CGFloat {
-        if cachedSlotHeight > 0 { return cachedSlotHeight }
-        let all = groups.flatMap { Self.cardSizes($0.windows).map(\.height) }
-        cachedSlotHeight = all.max() ?? PanelMetrics.shotH
-        return cachedSlotHeight
-    }
-    /// 布局用的宽度数组:**一律槽宽** ⇒ 尺寸账 / 排布 / 命中三处不再各算各的 ✓
-    private func slotWidths(_ count: Int) -> [CGFloat] {
-        Array(repeating: slotWidth, count: count)
-    }
 
     static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
         windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
     }
     
     /// 分行后**每行的最大高度**(内容尺寸 / 命中判定 / 视图三处共用同一套数)
+    /// 算式在 `GlanceCore.TrayGrid`(可单测);这里只把"这一局的尺子"喂进去。
     static func rowHeights(_ sizes: [CGSize], rows: Int, cols: Int) -> [CGFloat] {
-        (0..<rows).map { r in
-            let start = r * cols
-            let end = min(start + cols, sizes.count)
-            guard start < end else { return 0 }
-            return sizes[start..<end].map(\.height).max() ?? 0
-        }
+        TrayGrid.rowHeights(sizes, rows: rows, cols: cols)
     }
-    
+
     private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
-        var widest: CGFloat = 0
-        for r in 0..<rows {
-            let start = r * cols
-            let end = min(start + cols, widths.count)
-            guard start < end else { continue }
-            let w = widths[start..<end].reduce(0, +) + CGFloat(end - start - 1) * PanelMetrics.thumbGap
-            widest = max(widest, w)
-        }
-        return widest
+        TrayGrid.maxRowWidth(widths, rows: rows, cols: cols, gap: PanelMetrics.thumbGap)
     }
 
     /// 托盘的行 × 列 —— **唯一来源**:视图排网格与 `previewContentSize` 都取它。
@@ -752,17 +725,11 @@ final class PanelController: ObservableObject {
     /// (调用方在当前 cap 下用 `PanelMetrics.thumbWidth(aspect:)` 算好),
     /// 行数判定用"该分布下最宽那行"(`maxRowWidth`,分布与视图的 HStack 一致)
     func trayLayout(widths ws: [CGFloat]) -> (rows: Int, cols: Int) {
-        guard !ws.isEmpty else { return (0, 1) }
-        let n = ws.count
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if Self.maxRowWidth(ws, rows: r, cols: c) + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        // 病理兜底:几十扇窗时行数顶穿 `trayMaxRows`,那时宁可让宽度溢出
-        // (由调用方按"内容居中 + 两端对称地切"兜底)也不往上堆成一面墙
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(widths: ws,
+                         gap: PanelMetrics.thumbGap,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.thumbGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
@@ -845,7 +812,7 @@ final class PanelController: ObservableObject {
             // 病例:为了白光排查,这里一次唤起连抓 12 帧 `CGWindowListCreateImage`(单次 10–50ms ✗),
             // 而 debug.trace 一开它就一直在跑 ⇒ 唤起/早期交互的卡顿有它一份,还污染所有测量。
             // 纪律:重型诊断必须有自己的开关 + 默认关(见 AGENTS.md「诊断开关」)。
-            if isTraceEnabled, UserDefaults.standard.bool(forKey: "debug.screenProbe") {
+            if isTraceEnabled, DebugFlags.screenProbe {
                 self?.probeShownFrames(panel)
             }
             // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
@@ -874,7 +841,18 @@ final class PanelController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
             guard let self, self.isVisible else { return }
             self.selectionArmed = true // 之后会话内的选中变化照常走弹簧
-            withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.contentEntryRise = 0 }
+            // ★ 2026-09-22 用户实报「托盘冒头比 app 上浮快,等 app 上浮完成才能遮住它,不要让它露出来」:
+            //   根因是**两者的运动不是同一种**——图标上浮是两根弹簧叠加
+            //   (`contentEntryRise` 入场 + 自己的 `-iconLift` 选中),托盘只有入场这一根 ✗
+            //   ⇒ 无论怎么对齐曲线,中间那几十毫秒都可能露 ✓
+            //   ⇒ 结构性修法:**托盘比图标晚到**(图标先抬起来让开,托盘再上来 ⇒ 物理上不可能露 ✓)
+            //   用已有的 `entryDelay`(0.06s),与"入场延迟"同一档参数 ✓
+            // `MotionPolicy.animation` 是 `Animation?`(系统"减弱动态"时给 nil ⇒ 瞬时 ✓)
+            if let rise = MotionPolicy.animation(PanelMotion.entrance) {
+                withAnimation(rise.delay(PanelMotion.entryDelay)) { self.contentEntryRise = 0 }
+            } else {
+                self.contentEntryRise = 0
+            }
         }
         // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
         if let hostingView { FrameProbe.shared.start(on: hostingView, label: "面板\(groups.count)App") }
@@ -1045,11 +1023,40 @@ final class PanelController: ObservableObject {
         // 开局就能算(纯算术,按键那一刻只是查表)。用户裁定:「肯定计算两套尺寸效果会更好」——
         // "少的后面全空着"与"多的把图标挤小"两条路都不接受。
         // 数量少时**靠左**(与主环第一格对齐 ⇒ 读作"环短了"),格子尺寸与间距一个都不动。
-        let count = CGFloat(max(entrySelected ? launchables.count : groups.count, 1))
-        let w = count * PanelMetrics.icon + max(count - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        let w = ringContentWidth(launch: entrySelected)
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
-        return NSSize(width: max(w, PanelMetrics.minStripWidth),
-                      height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+        return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+    }
+
+    /// 环内容在**玻璃**里的左缘(2026-09-22)。
+    ///
+    /// 病例:窗框宽度改成"两环更宽者"之后(为了换环不抖 ✓),**未启动环**比窗框窄 ⇒ 内容居中 ✓,
+    ///   而命中区/帧拍仍在按"内容从玻璃左缘开始"算 ✗ ⇒ 整排选中**右移**,
+    ///   用户实报:「目前未启动环指针 hover 选中的位置, 跟 app 是对不齐的」✓
+    /// ⇒ 命中的横坐标必须**同时**扣掉这个居中偏移(主环偏移为 0 ⇒ 只有未启动环看得出 ✓)。
+    private var ringContentLeftInset: CGFloat {
+        let w = ringContentWidth(launch: entrySelected)
+        return (ringWindowWidth() - w) / 2
+    }
+
+    /// 某一环的**内容宽**(纯算术,与 entrySelected 无关 ⇒ 可以随时问"另一环多宽")。
+    private func ringContentWidth(launch: Bool) -> CGFloat {
+        let count = CGFloat(max(launch ? launchables.count : groups.count, 1))
+        let w = count * PanelMetrics.icon + max(count - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        return max(w, PanelMetrics.minStripWidth)
+    }
+
+    /// **一局的窗框宽度** = 两环里**更宽**的那个(2026-09-22 用户实报后定)。
+    ///
+    /// 病例:「上下切的时候,环有抖动…这不还是左右吗,从左边向右延伸出来的」+
+    ///      「环是居中的,2 个环其中一个比另一个短的话,左端的延伸位置就会变化,很割裂」——
+    ///   真因:窗框(= 玻璃)宽度**当拍**换成新环的宽度 ✗(634 ↔ 1509),而环是**居中**的 ⇒
+    ///        左右两条边同时移动 ⇒ 读成"内容从左边长出来 / 左端在变" ✗ 且与内容动画不同拍 ⇒ 割裂 ✓
+    /// 口径:**一局的窗框宽度是不变量**(与 ADR-0006「窗口尺寸是一局的不变量」同源 ✓)——
+    ///        按两环更宽的那个开窗,换环只换**内容**(玻璃仍按各自环宽居中画 ✓),边缘一动不动 ✓
+    /// 说话局(只剩芯片)不参与:那是"表三"的另一套尺寸,不跟环互换 ✓
+    private func ringWindowWidth() -> CGFloat {
+        max(ringContentWidth(launch: false), ringContentWidth(launch: true))
     }
 
     /// 🔬 首帧探针(T91「一道白光」排查)——只回答一个问题:**上屏那一刻,我们的内容画上去了没有。**
@@ -1142,7 +1149,10 @@ final class PanelController: ObservableObject {
     private func paddedSize() -> NSSize {
         let c = contentSize()
         let pad = PanelMetrics.shadowPadStrip * 2
-        return NSSize(width: c.width + pad, height: c.height + pad)
+        // ★ 宽度取"一局的窗框宽度"(两环更宽者)⇒ 换环时窗框/玻璃尺寸**一个字都不变** ✓
+        //   (高度本来就没变:两环都是 icon 高 ✓)
+        let w = hintText != nil ? c.width : ringWindowWidth()
+        return NSSize(width: w + pad, height: c.height + pad)
     }
 
     // MARK: - 面板本体
@@ -1293,7 +1303,8 @@ final class PanelController: ObservableObject {
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
         let sizes = Self.cardSizes(group.windows)
-        let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+        // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
+        let widths = sizes.map(\.width)
         let (rows, cols) = trayLayout(widths: widths)
         // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
         let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
@@ -1314,7 +1325,7 @@ final class PanelController: ObservableObject {
         let c = CGFloat(cols)
         let r = CGFloat(max(rows, 1))
         return NSSize(
-            width: c * (PanelMetrics.icon + PanelMetrics.iconGap) - PanelMetrics.iconGap
+            width: c * PanelMetrics.pitch - PanelMetrics.iconGap
                 + PanelMetrics.trayPadX * 2,
             height: PanelMetrics.trayPadTop + r * PanelMetrics.icon
                 + max(r - 1, 0) * PanelMetrics.trayRowGap + PanelMetrics.trayPadBottom
@@ -1324,15 +1335,11 @@ final class PanelController: ObservableObject {
     /// 启动行的行 × 列:与 `trayLayout` 同一套"放得下的最少行数"逻辑,只是格距换成图标节距。
     /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
     func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
-        guard n > 0 else { return (0, 1) }
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
-        let padW = PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap
-        for r in 1...min(n, PanelMetrics.trayMaxRows) {
-            let c = (n + r - 1) / r
-            if CGFloat(c) * pitch + padW <= trayRoomW + 0.5 { return (r, c) }
-        }
-        let r = min(n, PanelMetrics.trayMaxRows)
-        return (r, (n + r - 1) / r)
+        TrayGrid.fitRows(count: n,
+                         cellPitch: PanelMetrics.pitch,
+                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap,
+                         roomW: trayRoomW,
+                         maxRows: PanelMetrics.trayMaxRows)
     }
 
     /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
@@ -1394,7 +1401,7 @@ final class PanelController: ObservableObject {
         // 🔬 调试键 debug.hideTray:整个托盘不出现(用来**单测纯环上浮**是否掉帧)。
         //   放在门口(与下面那批守卫同一处)—— 打在这里,任何调用方都绕不过去。
         //   `defaults write com.cheney12138.macswitcher debug.hideTray -bool true` / delete 即装回
-        guard !UserDefaults.standard.bool(forKey: "debug.hideTray") else { return nil }
+        guard !DebugFlags.hideTray else { return nil }
         guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
               let area = contextScreen?.visibleFrame else { return nil }
         // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
@@ -1561,7 +1568,7 @@ final class PanelController: ObservableObject {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
             let (rows, cols) = launchLayout(count: count)
             let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let i = r * cols + min(cols - 1, Int(x / (PanelMetrics.icon + PanelMetrics.iconGap)))
+            let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
@@ -1571,7 +1578,7 @@ final class PanelController: ObservableObject {
             // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
             guard let g = currentGroup else { return }
             let sizes = Self.cardSizes(g.windows)
-            let widths = slotWidths(sizes.count)      // ★ 方案 A:布局一律走槽宽
+            let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
             let (rows, cols) = trayLayout(widths: widths)
             // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
             var r = 0
@@ -1627,7 +1634,7 @@ final class PanelController: ObservableObject {
     /// 滑杆线性映射的是**速度**而不是间隔 —— 否则慢端几乎不动(两者是倒数关系)。
     /// 默认 10 次/秒 = 原来的 0.10s,升级后手感不变。
     private var scrollInterval: TimeInterval {
-        let speed = UserDefaults.standard.object(forKey: "panel.scrollSpeed") as? Double ?? 10
+        let speed = UserDefaults.standard.object(forKey: Keys.panelScrollSpeed) as? Double ?? 10
         return 1.0 / max(3, min(20, speed))
     }
 
@@ -1638,7 +1645,7 @@ final class PanelController: ObservableObject {
         guard panel?.isVisible == true else { return }   // 双保险:面板不在就什么都不做
         // 设置开关(默认开)。用 object(forKey:) 取,而不是 bool(forKey:) —— 后者的
         // "没写过"和"写成 false"是同一个值,默认值就没法表达(与 switch.advanceOnOpen 同一处理)。
-        guard UserDefaults.standard.object(forKey: "switch.scrollMovesSelection") as? Bool ?? true else { return }
+        guard UserDefaults.standard.object(forKey: Keys.switchScrollMovesSelection) as? Bool ?? true else { return }
         guard e.momentumPhase == [] else { return }
         let dx = e.scrollingDeltaX, dy = e.scrollingDeltaY
         let d = abs(dy) >= abs(dx) ? dy : dx
@@ -1652,6 +1659,10 @@ final class PanelController: ObservableObject {
 
     private func moveApp(_ delta: Int) {
         guard !groups.isEmpty else { return }
+        // ★ 键盘换选中也要打"选中变更"点(2026-09-21 修):原来只有指针 hover 会打 ⇒
+        //   用户实报的复现是**「tab 切到大象那一拍掉帧」**,而这条路径**从不打点** ✗
+        //   ⇒ 我们前几轮量到的长帧全是指针那一路的,压根没量到用户报的那一下 ✗✗
+        FrameProbe.lastHoverMark = CACurrentMediaTime()
         traceCost("键盘换选中") {
             // 模型 C(ADR-0013):**逻辑上只有一条环** —— 主环走完 `Tab` 自然进入未启动段,
             // 未启动段走完接回主环;`⇧Tab` 反向对称。两条旧裁定(2026-09-16「不经 Tab 到达」、
@@ -1663,7 +1674,7 @@ final class PanelController: ObservableObject {
                 let n = launchables.count
                 guard n > 0 else {              // 局中名单清空(最后一个也启动完了):段没了
                     appIndex = min(appIndex, groups.count - 1); winIndex = 0
-                    setSegment(false, travel: .direct, launchIndex: nil)
+                    setSegment(false, travel: .backward, launchIndex: nil)  // ↑ = 向上一环(反向滑)
                     trace("[T91] 段切换: 未启动名单已空 → 主环 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
                     return
                 }
@@ -1673,18 +1684,31 @@ final class PanelController: ObservableObject {
                 // 白名单 App 用键盘永远选不中 ⇒「没办法启动」。
                 let cur = launchIndex ?? (backward ? n : -1)
                 let next = cur + delta
-                if next < 0 {                   // 段头反向 → 主环最后一格
-                    appIndex = groups.count - 1; winIndex = 0
-                    setSegment(false, travel: .backward, launchIndex: nil)
-                    trace("[T91] 段切换(⇧Tab): 未启动 → 主环 [\(groups.count)/\(groups.count)] \(groups[appIndex].appName)")
-                } else if next >= n {           // 段尾正向 → 主环第一格(绕环不断)
-                    appIndex = 0; winIndex = 0
-                    setSegment(false, travel: .forward, launchIndex: nil)
-                    trace("[T91] 段切换(Tab): 未启动 → 主环 [1/\(groups.count)] \(groups[appIndex].appName)")
+                if next < 0 {                   // 段头反向
+                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环最后一格 ✓
+                        appIndex = groups.count - 1; winIndex = 0
+                        setSegment(false, travel: .backward, launchIndex: nil)
+                        trace("[T91] 段切换(⇧Tab): 未启动 → 主环 [\(groups.count)/\(groups.count)] \(groups[appIndex].appName)")
+                    } else {                    // ★ 设置关着 ⇒ 不跨段,在**段内绕回**末格(与主环绕回同一种手感 ✓)
+                        launchIndex = n - 1
+                        trace("[T6] 选中(键盘 Tab): 未启动 [\(n)/\(n)] \(launchables[n - 1].name)(段内绕回)")
+                    }
+                } else if next >= n {           // 段尾正向
+                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环第一格(绕环不断)✓
+                        appIndex = 0; winIndex = 0
+                        setSegment(false, travel: .forward, launchIndex: nil)
+                        trace("[T91] 段切换(Tab): 未启动 → 主环 [1/\(groups.count)] \(groups[appIndex].appName)")
+                    } else {                    // ★ 设置关着 ⇒ 段内绕回首格 ✓
+                        launchIndex = 0
+                        trace("[T6] 选中(键盘 Tab): 未启动 [1/\(n)] \(launchables[0].name)(段内绕回)")
+                    }
                 } else {
                     launchIndex = next
                     trace("[T6] 选中(键盘 Tab): 未启动 [\(next + 1)/\(n)] \(launchables[next].name)")
                 }
+            // ★ 2026-09-22 修「回得来、去不了」:门禁要**对称** ——
+            //   用户口径:设置关着时 Tab **两个方向都不该跨段**(进出口交给 ↑/↓ 与四指 ✓)。
+            //   而当时只有这一边挂了门禁、另一边从来没挂 ⇒ 才出现"去不了、回得来" ✗
             } else if !backward, appIndex == groups.count - 1, launchSectionEnabled, tabEntersLaunchSection {
                 setSegment(true, travel: .forward, launchIndex: 0)
                 trace("[T91] 段切换(Tab): 主环 → 未启动(选中 [1/\(launchables.count)] \(launchables[0].name))")
@@ -1802,6 +1826,7 @@ final class PanelController: ObservableObject {
         guard n > 1 else { return }
         // 补记账(2026-09-15):日志里出现过一局 `长帧 4(6%)`,全部落在连按 ←→ 的那 3 秒里 ——
         // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
+        FrameProbe.lastHoverMark = CACurrentMediaTime()   // 同"键盘换选中":选中一变就打点
         traceCost("窗口选中") {
             winIndex = (winIndex + delta + n) % n
             traceCost("  ↳拍图") { refreshSnapshotForSelection() }
@@ -1899,8 +1924,8 @@ final class PanelController: ObservableObject {
     /// 几何与 iconStrip 同源:首格左缘 = 玻璃左 + rowPadX − iconGap/2,格宽 = icon + iconGap
     private func pointerInRingHotZone(_ i: Int) -> Bool {
         guard let glass = panelContentRect() else { return false }
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
-        let tileLeft = glass.minX + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
+        let pitch = PanelMetrics.pitch
+        let tileLeft = glass.minX + ringContentLeftInset + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
         let rect = CGRect(
             x: tileLeft + PanelMetrics.hoverInsetX,
             y: glass.minY + PanelMetrics.rowPadY + PanelMetrics.hoverInsetY,
@@ -1992,7 +2017,7 @@ final class PanelController: ObservableObject {
         // 名单连名字一起打:一句话分清"到底换没换、换成了谁"(用户报"还是唤起来了"时,
         // 只有"共 N 个"是分不清的 —— 这条让报告能对号入座)
         trace("[T91] 换环 → 未启动的 App(共 \(launchables.count) 个): \(launchables.map(\.name).joined(separator: " · "))")
-        setSegment(true, travel: .direct, launchIndex: nil)
+        setSegment(true, travel: .forward, launchIndex: nil)   // ↓ = 向下一环(滑动方向:新内容从右进)
     }
 
     /// ↑:换回"已启动的 App 组"
@@ -2021,7 +2046,7 @@ final class PanelController: ObservableObject {
     private static var segmentAnimation: Animation? {
         // 🔬 消元开关:确认"换段动画"是不是那个把托盘卡片动画着挪位置的元凶。
         //   `defaults write com.cheney12138.macswitcher debug.noSegmentAnim -bool true`
-        if UserDefaults.standard.bool(forKey: "debug.noSegmentAnim") { return nil }
+        if DebugFlags.noSegmentAnim { return nil }
         return MotionPolicy.animation(.easeInOut(duration: 0.18))
     }
 
@@ -2029,11 +2054,19 @@ final class PanelController: ObservableObject {
     /// 窗框走 applyRingSwap(animated:) 同一根曲线 —— 内容与玻璃一次变形完成。
     private func setSegment(_ toLaunch: Bool, travel: SegmentTravel, launchIndex target: Int?) {
         segmentTravel = travel
-        withAnimation(Self.segmentAnimation) {
+        ringSwapUntil = CFAbsoluteTimeGetCurrent() + 0.35   // 这一拍托盘内容当拍换(见 isRingSwapInFlight)
+        // ★★ 2026-09-22 用户实报:「上下切换的时候, 环有抖动。应该是变形导致的, 直接 3/4 唤起打开是没问题的」
+        //   —— 说的就是**双动画系统的相位差**(见 applyRingSwap 里那段"已知成本"的注释):
+        //      AppKit 动窗框(0.18s easeInOut)+ SwiftUI 动内容,两条时间线不可能逐帧对齐 ⇒ 抖 ✗。
+        //   既然用户早定过「任何场景都不要的动效 = 直接毙掉」(换段横向位移就是这么砍的),这里同办:
+        //   **换环不补间、当拍到位** —— 窗框瞬时改尺寸(与"关闭要已经没了"同一纪律 ✓)、内容瞬时换 ✓
+        //   ⇒ 相位差这个东西**从构造上就不存在了** ✓(不是"压小",是"没有" ✓)
+        //   注:入场(唤起那一刻)的上浮照旧(carried by contentEntryRise ✓),换环不是入场 ✓
+        withAnimation(Self.segmentAnimation) {   // 内容滑(单系统 ✓)
             entrySelected = toLaunch
             launchIndex = target
         }
-        applyRingSwap(animated: Self.segmentAnimation != nil)
+        applyRingSwap(animated: false)           // 窗框当拍改尺寸(不补间 ⇒ 没有相位差 ⇒ 不抖 ✓)
     }
 
     private func applyRingSwap(animated: Bool = false) {
@@ -2049,21 +2082,13 @@ final class PanelController: ObservableObject {
         // 瞬时改尺寸(不补间):与"关闭要已经没了"同一条纪律,而且不可能掉帧。
         guard let panel else { updatePreview(); return }
         if let target = centerFrame(for: paddedSize()) {
-            if animated {
-                // 同根变形:AppKit 动窗框 + SwiftUI 动内容,同一根曲线(0.18s easeInOut)。
-                // ⚠️ 别试图"只留一个动画系统"(union 外框窗口 / 根部弹性 frame 都试过):
-                // 后者直接 Update Constraints 布局递归 FAULT(2026-09-18 实机崩溃,此病第三次),
-                // 前者玻璃左锚定、从第一格向右长再回正。双系统的轻微相位差是这个方案的已知成本,
-                // 压抖动的旋钮 = 缩短时长 + 内容侧只用 transform 位移(见 PanelView.segmentTransition)
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    ctx.allowsImplicitAnimation = true
-                    panel.animator().setFrame(target, display: true)
-                }
-            } else {
-                setFrameIfNeeded(panel, target)
-            }
+            // ★★ 2026-09-22:这里原本是"AppKit 动窗框 + SwiftUI 动内容"**两个动画系统** ✗ ——
+            //   双系统的相位差就是用户实报的"换环抖一下"。现在窗框**当拍**(而且它的尺寸本就是
+            //   一局的不变量,见 `ringWindowWidth`)⇒ 只剩内容一个动画系统 ⇒ 抖从构造上不存在 ✓
+            //   旧路留档,别再走:union 外框窗口(玻璃左锚定、从第一格向右长)/ 根部弹性 frame
+            //   (Update Constraints 递归 FAULT,实机崩溃)。`animated` 形参只为调用点可读,窗框不补间 ✓
+            _ = animated
+            setFrameIfNeeded(panel, target)
         }
         resyncSelectionUnderPointer()
         updatePreview()
@@ -2080,7 +2105,7 @@ final class PanelController: ObservableObject {
     /// `onContinuousHover` 不走 tracking area:指针只要在行内移动就持续回调**位置**,我们自己算格子,
     /// 因此不存在"事件丢失"。位置 → 下标是纯几何:x 按格距分列,y 按行高分行。
     func hoverLaunchAt(x: CGFloat, y: CGFloat, count: Int, cols: Int, rows: Int) {
-        let pitch = PanelMetrics.icon + PanelMetrics.iconGap
+        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         let c = max(0, min(cols - 1, Int(floor(x / pitch))))
         let r = max(0, min(max(rows - 1, 0), Int(floor(y / rowH))))
@@ -2126,8 +2151,9 @@ final class PanelController: ObservableObject {
         guard let g = currentGroup, !g.windows.isEmpty else { return }
         var cum: CGFloat = 0
         var hit: Int?
-        for (i, w) in g.windows.enumerated() {
-            let cw = slotWidth                          // ★ 方案 A:命中按槽(与排布同源)
+        let sizes = Self.cardSizes(g.windows)
+        for i in g.windows.indices {
+            let cw = sizes[i].width                     // 卡有多宽就命中多宽(与视图同源)
             if localX < cum + cw { hit = i; break }
             cum += cw + PanelMetrics.thumbGap
         }
@@ -2144,7 +2170,7 @@ final class PanelController: ObservableObject {
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    private var pinPanelDebug: Bool { UserDefaults.standard.bool(forKey: "debug.pinPanelOnRelease") }
+    private var pinPanelDebug: Bool { DebugFlags.pinPanelOnRelease }
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 

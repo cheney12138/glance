@@ -37,6 +37,9 @@
 		5A00000000000000000000C2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A00000000000000000000C1 /* Sparkle */; };
 		AA0000000000000000000F01 /* FrameProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F02 /* FrameProbe.swift */; };
 		AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F04 /* SingleInstanceGuard.swift */; };
+		AA0000000000000000000100 /* Keys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000101 /* Keys.swift */; };
+		AA0000000000000000000120 /* PuckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000121 /* PuckView.swift */; };
+		AA0000000000000000000110 /* DebugFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000111 /* DebugFlags.swift */; };
 		AA0000000000000000000F05 /* ThumbnailRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F06 /* ThumbnailRefresher.swift */; };
 		AA0000000000000000000F07 /* AXWindowList.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F08 /* AXWindowList.swift */; };
 		AA0000000000000000000F0A /* AppearancePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F0B /* AppearancePreference.swift */; };
@@ -74,6 +77,9 @@
 		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F02 /* FrameProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProbe.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F04 /* SingleInstanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleInstanceGuard.swift; sourceTree = "<group>"; };
+		AA0000000000000000000101 /* Keys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keys.swift; sourceTree = "<group>"; };
+		AA0000000000000000000121 /* PuckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PuckView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000111 /* DebugFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugFlags.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F06 /* ThumbnailRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailRefresher.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F08 /* AXWindowList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXWindowList.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F0B /* AppearancePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreference.swift; sourceTree = "<group>"; };
@@ -165,6 +171,7 @@
 				5A0000000000000000000025 /* CursorScreenAnchor.swift */,
 				5A0000000000000000000039 /* PanelController.swift */,
 				5A0000000000000000000040 /* PanelView.swift */,
+				AA0000000000000000000121 /* PuckView.swift */,
 				5A0000000000000000000080 /* PreviewPanelView.swift */,
 			);
 			path = Panel;
@@ -196,6 +203,8 @@
 				5A0000000000000000000021 /* GlanceApp.swift */,
 				5A00000000000000000000C3 /* UpdateChecker.swift */,
 				AA0000000000000000000F04 /* SingleInstanceGuard.swift */,
+				AA0000000000000000000101 /* Keys.swift */,
+				AA0000000000000000000111 /* DebugFlags.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -303,6 +312,9 @@
 				5A00000000000000000000C4 /* UpdateChecker.swift in Sources */,
 				5A00000000000000000000D1 /* SessionMarks.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
+				AA0000000000000000000100 /* Keys.swift in Sources */,
+				AA0000000000000000000120 /* PuckView.swift in Sources */,
+				AA0000000000000000000110 /* DebugFlags.swift in Sources */,
 				AA0000000000000000000F0A /* AppearancePreference.swift in Sources */,
 				5A0000000000000000000012 /* PermissionMonitor.swift in Sources */,
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,

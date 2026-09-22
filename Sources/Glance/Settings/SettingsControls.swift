@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// 滚动视图的命名坐标系(组标题的位置都在这个坐标系里量)
+enum SettingsScrollSpace { static let name = "settingsScroll" }
+
 /// 设置窗的可复用件(demo 的 `.group` / `.row` / `.switch` / `.key` / `.tabs` 逐一对应)。
 ///
 /// demo 是数据驱动渲染(`panes` 数组 + `rowHTML`),原生不做那一层:设置项自带 Binding、
@@ -10,6 +13,19 @@ import SwiftUI
 
 /// demo `.group` + `.group-label`:一叠行,可选一枚小圆点 + 小标题。
 /// 组间距由父级 `VStack(spacing: SettingsMetrics.groupGap)` 给,组自身不加下边距。
+/// **滚动 → 左侧导航跟着走**(2026-09-22 用户实报「设置面板滑动, 左侧导航不会跟着移动」)。
+///
+/// 原来只有**单向**:点导航 ⇒ `scrollTo` 滚内容 ✓;反过来没人做 ✗
+/// (整个 Settings 目录里没有任何 PreferenceKey/GeometryReader 回写机制 ✓)。
+/// 口径:各组标题把自己在滚动坐标系里的 minY 报上来,外层挑"已越过顶部预留带、且离它最近"的那一组
+/// ⇒ 高亮它 ✓。**汇报用的 id 就是 `SettingsGroup.anchor`**(与导航点击同一个字符串 ✓ 不会对不上)。
+struct GroupOffsetKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 struct SettingsGroup<Content: View>: View {
     var label: String? = nil
     /// 侧栏子菜单的滚动锚点(锚点 id = "\(页):\(组名)");nil = 不参与定位
@@ -36,6 +52,16 @@ struct SettingsGroup<Content: View>: View {
                 }
                 .padding(.bottom, SettingsMetrics.labelGap)
                 .id(anchor)   // 锚点 = 标题本体(无标题的组不参与定位)
+                // 把标题位置报给外层(滚动 → 导航跟手)。量的是**标题本体**,
+                // 与 `.id(anchor)` 同一处 ⇒ 落点/高亮同一条边距 ✓
+                .background(
+                    GeometryReader { geo in
+                        // anchor 是可选:无锚点的组**不汇报**(与"不参与定位"同一口径 ✓)
+                        let y = geo.frame(in: .named(SettingsScrollSpace.name)).minY
+                        Color.clear.preference(key: GroupOffsetKey.self,
+                                               value: anchor.map { [$0: y] } ?? [:])
+                    }
+                )
             }
             content
         }

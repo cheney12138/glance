@@ -45,7 +45,7 @@ struct GhostTile: View {
 ///    `CAGradientLayer` 的 `SheenNSView` 自己听本窗 `.mouseMoved`,只挪一个 layer 的 position。
 struct PanelView: View {
     /// 指针光晕开关(设置 → 通用 →「指针光晕」)
-    @AppStorage("panel.sheen") private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = true
     @ObservedObject var controller: PanelController
 
     var body: some View {
@@ -154,6 +154,9 @@ struct PanelView: View {
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
+        // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
+        //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .focusEffectDisabled(true)   // ★ 窗口根:切换器面板永不出现焦点环
         // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
         // 居中玻璃)—— 根视图尺寸依赖提议、提议依赖尺寸 ⇒ AppKit Update Constraints 布局递归
@@ -163,9 +166,36 @@ struct PanelView: View {
     // MARK: - 图标层
 
     /// 跨段过渡的方向(模型 C,见 `PanelController.SegmentTravel`)。
+    /// 跨段过渡 = **方向滑**(2026-09-22 用户要求:「不能做一个手机桌面左右滑动的方盒动效吗」)。
+    ///
+    /// 为什么现在能做了(以前为什么删)：
+    ///   · 2026-09-21 删过一次滑动 —— 那时滑动误伤了**托盘里的卡片**(新一组的卡片被判成插入 ⇒
+    ///     左滑入场 ✗)。本过渡只挂在**环那一条**上(`iconStrip` 的 `.id`/`.transition`),
+    ///     托盘不共用这个 modifier ⇒ 那一族误触发与它无关 ✓
+    ///   · 抖动的真源是**两个动画系统**(AppKit 动窗框 + SwiftUI 动内容)的相位差 ✗ ⇒
+    ///     现在窗框**当拍改尺寸**(`applyRingSwap(animated: false)`)、只有内容滑 ⇒ 单系统 ⇒ 抖无从产生 ✓
+    private var segmentTransition: AnyTransition {
+        // 方向(用户口径 2026-09-22):「是上下翻动的那种方盒…就是类似翻牌子一样」——
+        //   ↓ 往下翻一张(旧环**向上**转出去、新环从**下方**转进来),↑ 反向 ✓
+        // 为什么用 rotation3DEffect 而不是 .move:翻牌的关键是"绕水平轴转 + 有透视",
+        //   纯位移读起来是"推走",不是"翻过去" ✗;而且两环**高度相同**(都是 icon 高)⇒
+        //   竖向翻不会碰到任何尺寸变化 ✓(唯一会变的宽度已由窗框当拍处理 ✓)
+        switch controller.segmentTravel {
+        case .forward:
+            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)),
+                               removal:   .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)))
+        case .backward:
+            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)),
+                               removal:   .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)))
+        case .direct:    // 其余(如"名单清空"这类非用户动作):淡切,不做方向承诺
+            return .opacity
+        }
+    }
+
+    /// 旧配方(留档,别再走回去):
     /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
     /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
-    private var segmentTransition: AnyTransition {
+    private var _segmentTransitionLegacy: AnyTransition {
         // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效,直接毙掉」。
         // 病例:选中 app B 的**非第一个**窗口,再直接 hover 到相邻 app A
         //       ⇒ 新一组的卡片**左滑入场** ✗(窗口集合被判成"插入" ⇒ 播放 x:±14 的位移)。
@@ -200,7 +230,7 @@ struct PanelView: View {
                         // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
                         motion: controller.selectionAnimation(PanelMotion.select)
                     )
-                    .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+                    .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
                     // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
                     // ① 正确范围:第一版做成整行一起升 → "全部图标一起弹出来了"(用户实评,太重);
                     // ② 为什么选中格必须跟着动:"正常 Tab 切换"里动的就是托底 + 新选中的那个图标,
@@ -251,59 +281,22 @@ struct PanelView: View {
         .scaleEffect(sel ? PanelMetrics.iconScale : 1)
         .offset(y: sel ? controller.contentEntryRise - PanelMetrics.iconLift : 0)
         .elevation(.icon, active: sel)
-        .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+        .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
         .contentShape(Rectangle())
         .onHover { inside in if inside { controller.hoverApp(i) } }
         .onTapGesture { controller.launchAt(i) }
         .animation(controller.selectionAnimation(PanelMotion.select), value: controller.launchIndex)
     }
     
-    /// 滑动托底:宽 = 图标宽,上下各出 8px;换选中时整枚胶囊弹过去(位移+宽度同曲线)
+    /// 滑动托底 —— **实现搬去 `PuckView.swift`**(2026-09-22 拆分:它是独立一块,
+    /// 几何/视觉/动效/落点数学全在那边,改它不用翻这个 500 行的视图 ✓)。
+    /// 这里只负责"喂当前状态"。
     private var puck: some View {
-        RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-            .fill(PanelColors.puck)
-            // demo: inset 0 1px 1px rgba(255,255,255,.6)——托底上缘一道受光唇
-            .overlay(
-                RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-                    .strokeBorder(PanelColors.puckLip, lineWidth: 1)
-                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-            )
-            // demo: inset 0 -1px 6px rgba(0,0,0,.12)——底缘一道内阴影,托底才有厚度,不是贴纸
-            .overlay(alignment: .bottom) {
-                LinearGradient(colors: [.clear, .black.opacity(0.12)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 6)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous))
-            // 发丝边:把"纸片"放在玻璃上(实验台 P2)。用 strokeBorder = 画在边界**内侧**,
-            // 所以托底的尺寸/位置一个像素都没动(用户口径:只改颜色,大小位置动效别动)
-            .overlay(
-                RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-                    .strokeBorder(PanelColors.puckBorder, lineWidth: 1)
-            )
-            .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
-            // 换环时只有"选中了某一格"才显形(launchIndex == nil = 还没选任何一格)
-            // T91 v2:**换环后托底不上场**(用户实拍「选中态很怪, 嵌套太多圆角边框了」——
-            // 托底的圆角+发丝边 套在 幽灵壳的圆角 外面,再叠一层投影 = 三层圆角框套在一起)。
-            // 未启动的 App **只要"上浮"这一层反馈** —— 这正是 2026-09-16 给托盘里那一行定的规矩,
-            // 换环后它们搬进了主环,规矩不变:同一个东西,同一套语言。
-            .opacity(controller.entrySelected ? 0 : 1)
-            .offset(x: puckOffsetX,
-                    // 纵向 = 入场升起(与选中那一格同源同值,所以两者永远同步)
-                    y: controller.contentEntryRise)
-            .elevation(.puck)
-            // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
-            // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
-            // 🔬 2026-09-21 实验(用户实报「后面几个容器没相对 App 居中」):
-            //   托底的**静态位置是准的**(数学核过:i × pitch vs i × pitch,完全重合 ✓),
-            //   而换到较远的图标时它会**横着滑过去 + 弹簧过冲回弹** ⇒ 飞行途中它当然不在任何图标上 ✗
-            //   越靠后的图标滑得越久、回弹越看得见 ⇒ 正好对上"后面几个没居中" ✓
-            //   用户自己定过规矩:「任何场景都不要的动效 = 直接毙掉」⇒ 先改成**当帧到位**。
-            //   嫌太生硬 ⇒ 改成 0.06s 的线性短移(不要弹簧 ✗)。
-            .animation(nil, value: controller.appIndex)
-            // ⚠️ 这里**故意没有** `.animation(…, value: entrySelected)`(T91 病例,
-            // 用户实报「按下切换环的时候,在未启动的环上会有一个向右淡出的滑块效果」):
-            // 托底的消失若走动画,会和"滑到 appIndex"叠在一起演 —— 读起来像"选中滑走了",
-            // 而换环根本不是选中移动。去掉这条 ⇒ 换环时它**当帧就没了**。
+        Puck(offsetX: Puck.offsetX(appIndex: controller.appIndex),
+             entryRise: controller.contentEntryRise,
+             visible: !controller.entrySelected,
+             animation: controller.selectionAnimation(PanelMotion.slide),
+             animationValue: controller.appIndex)
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)
@@ -312,12 +305,6 @@ struct PanelView: View {
     /// 用户实评"丑的要死");v3 起槽的选中由**记号自己**表达(点阵点亮 + 描边胶囊),
     /// 托底永远只属于主环的 App。历史账:"缩宽"与"滑过去淡出"两案也都试过、都被否
     /// —— 那是在"槽里没有可见记号"的前提下的困境;有了点阵,落点由记号承担。
-    private var puckOffsetX: CGFloat {
-        // T91 v2:托底只属于已启动的主环(换环后它不上场)⇒ 永远跟 appIndex
-        let i = controller.appIndex
-        return CGFloat(max(i, 0)) * (PanelMetrics.icon + PanelMetrics.iconGap)
-    }
-
     /// 顶缘一道**极窄的**受光边(深色专用)。
     ///
     /// 深色面板的"厚度"不来自阴影 —— 黑影子在黑底上没有对手。真正让人读出"这是块板"
@@ -338,7 +325,7 @@ struct PanelView: View {
     /// 「跟随系统」时才回落到 NSApp 的实际外观。
     @ViewBuilder
     private var glassTopEdge: some View {
-        let pref = UserDefaults.standard.string(forKey: "panel.appearance") ?? "system"
+        let pref = UserDefaults.standard.string(forKey: Keys.panelAppearance) ?? "system"
         let dark = pref == "dark"
             || (pref != "light" && NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
         if dark {
@@ -377,7 +364,7 @@ private struct IconCell: View {
     /// 一起开、一起关(用户口径:"app 上的静态反光也关闭,一齐开启,或者关闭")。
     /// 关掉时图标回到**本来的样子**(不额外提亮、也不压暗),选中态靠放大 + 上浮 + 托底交代 ——
     /// 那三样是"形",不是"光",不受这个开关影响。
-    @AppStorage("panel.sheen") private var glow = true
+    @AppStorage(Keys.panelSheen) private var glow = true
 
     var body: some View {
         let art = IconProvider.art(for: group.pid)
@@ -516,5 +503,17 @@ final class SheenTracker {
         intensity += (0 - intensity) * 0.18
         guard intensity > 0.01, let p = point else { point = nil; intensity = 0; return nil }
         return (p, intensity)
+    }
+}
+
+/// 跨段"翻牌":绕**水平轴**转 + 一点透视 + 淡(2026-09-22 用户口径「类似翻牌子一样」)。
+///
+/// 只做 transform(opacity/rotation)⇒ 不触发重排 ⇒ 与"单动画系统"那条纪律一致 ✓
+private struct SegmentFlip: ViewModifier {
+    let angle: Double
+    func body(content: Content) -> some View {
+        content
+            .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.32)
+            .opacity(angle == 0 ? 1 : 0.25)
     }
 }

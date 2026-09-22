@@ -97,5 +97,5 @@ let isTraceEnabled: Bool = {
        !v.isEmpty, v != "0", v.lowercased() != "false" {
         return true
     }
-    return UserDefaults.standard.bool(forKey: "debug.trace")
+    return DebugFlags.trace
 }()

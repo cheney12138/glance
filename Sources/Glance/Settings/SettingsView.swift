@@ -39,7 +39,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "启动与行为", "手势操控", "未启动环名单", "动效"]
+            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限"]
             }
@@ -51,27 +51,39 @@ struct SettingsView: View {
     /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
     /// 子菜单点击 = 页内滚动定位。nil = 不定位
     @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
+    /// 程序化滚动(点导航)之后的一小段"静默期":期间不把滚动位置回写成导航高亮(见 onChange 的注释)
+    @State private var suppressNavSpyUntil: CFAbsoluteTime = 0
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
-    @AppStorage("debug.pinPanelOnRelease") private var pinPanel = false
+    @AppStorage(Keys.debugPinPanelOnRelease) private var pinPanel = false
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
-    @AppStorage("motion.alwaysAnimate") private var alwaysAnimate = true
+    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = true
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
-    @AppStorage("panel.iconClearance") private var iconClearance: Double = 13
+    @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
+
+    /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
+    @State private var liveTier: Double = Double(LivePreviewPool.tierFps)
+    private var tierBinding: Binding<Double> {
+        Binding(get: { liveTier },
+                set: { newValue in
+                    liveTier = newValue.rounded()
+                    // 写回既有键(档位只在"起流/换档"时被读 ⇒ 下一次路过即生效 ✓ 不用重启 ✓)
+                    UserDefaults.standard.set(String(Int(liveTier)), forKey: Keys.livePreviewTier)
+                })
+    }
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
-    @AppStorage("panel.showLaunchables") private var showLaunchables = true
+    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = true
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
-    @AppStorage("panel.tabEntersLaunchSection") private var tabEntersLaunchSection = true
+    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = true
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
-    @AppStorage("pointer.threeFingerTapPanel") private var threeFingerTapPanel = false
-    @AppStorage("pointer.fourFingerTapLaunchRing") private var fourFingerTapLaunchRing = false
+    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = false
+    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = false
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
-    @AppStorage("panel.slideFromLastApp") private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
-    @AppStorage("panel.sheen") private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -152,9 +164,22 @@ struct SettingsView: View {
             // 侧栏子菜单点了 ⇒ 滚到对应组(锚点 id 由 SettingsGroup 挂)
             .onChange(of: navSelection) { _, sel in
                 guard let sel else { return }
+                // ★ 记下"这是程序化滚动":接下来 0.4s 内**不许**回写 navSelection,
+                //   否则回写会再触发本 onChange ⇒ 自己和自己打架(来回抖)✗
+                suppressNavSpyUntil = CFAbsoluteTimeGetCurrent() + 0.4
                 withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
                     proxy.scrollTo(sel, anchor: .top)
                 }
+            }
+            // ★ 反向:**滚动 → 左侧导航跟着走**(2026-09-22 用户实报后新增;此前只有单向 ✓→✗)
+            .coordinateSpace(name: SettingsScrollSpace.name)
+            .onPreferenceChange(GroupOffsetKey.self) { offsets in
+                guard CFAbsoluteTimeGetCurrent() > suppressNavSpyUntil else { return }   // 程序化滚动期间不回写
+                // 顶部预留带(scrollTopPad)下方 40pt 视为"已进入这一组"⇒ 在越过的组里取**最靠下**的那个 = 当前组 ✓
+                let passed = offsets.filter { $0.value <= 40 }
+                let current = passed.max { $0.value < $1.value }?.key
+                    ?? offsets.min { $0.value < $1.value }?.key          // 一个都没越过(最顶上)⇒ 取最靠上的
+                if let current, navSelection != current { navSelection = current }
             }
         }
     }
@@ -170,6 +195,11 @@ struct SettingsView: View {
                         .init(id: AppearancePreference.light, label: "浅色"),
                         .init(id: AppearancePreference.dark, label: "深色"),
                     ], value: $appearance)
+                }
+                // ★ 2026-09-22 结构整理:"高光效果"是**外观**(指针高光 + 图标明暗),不是动效 ✗
+                //   ⇒ 从"动效"挪进"外观" ✓(它的实现细节请看 SettingsRow 自己的 desc)
+                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
+                    BeamSwitch(isOn: $sheen)
                 }
                 SettingsRow(title: "App 间距",
                             desc: "选中图标与两侧图标的距离。",
@@ -189,7 +219,34 @@ struct SettingsView: View {
             }
             .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
 
-            SettingsGroup(label: "启动与行为", anchor: Page.general.anchor("启动与行为")) {
+            // ★ 2026-09-22 用户实报「你刚才加的帧率控制,为什么会在外观这一级」✗
+            //   —— 实时预览是**行为/性能**档位,不是外观 ⇒ 从"外观"搬出来独立成组 ✓
+            //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
+            SettingsGroup(label: "实时预览", anchor: Page.general.anchor("实时预览")) {
+                // ★ 2026-09-22 用户要求:「现在 live 是开着的吗, 做成设置, 给几个档位,
+                //   用bar控制, 0 代表关闭, 最大 30fps」。
+                //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
+                //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
+                //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
+                SettingsRow(title: "实时预览",
+                            desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
+                    HStack(spacing: 8) {
+                        Slider(value: tierBinding, in: 0...30, step: 5)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                    }
+                }
+            }
+
+            // 原"启动与行为":去掉两条属于"未启动环"的行之后,这组只剩"应用/面板的生命周期" ✓
+            // ⇒ 改名为「应用与面板」(名字里不再兜着别的东西)
+            SettingsGroup(label: "应用与面板", anchor: Page.general.anchor("应用与面板")) {
                 SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
@@ -197,15 +254,6 @@ struct SettingsView: View {
                             desc: "关闭后松开按键即确认,面板随之关闭。",
                             hairline: false) {
                     BeamSwitch(isOn: $pinPanel)
-                }
-                SettingsRow(title: "展示 Dock 常驻应用",
-                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
-                    BeamSwitch(isOn: $showLaunchables)
-                }
-                SettingsRow(title: "Tab 进入未启动区",
-                            desc: "关闭后使用 ↓ 键进入。",
-                            hairline: false) {
-                    BeamSwitch(isOn: $tabEntersLaunchSection)
                 }
             }
 
@@ -226,7 +274,20 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsGroup(label: "未启动环名单", anchor: Page.general.anchor("未启动环名单")) {
+            // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
+            // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
+            SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
+                SettingsRow(title: "展示 Dock 常驻应用",
+                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
+                    BeamSwitch(isOn: $showLaunchables)
+                }
+                SettingsRow(title: "Tab 进入未启动区",
+                            // 2026-09-22 补：原小字只写了“怎么进”，没写“怎么回” ⇒ 用户关掉开关后以为
+                            // “未启动段进不去 / 出不来”（实为 Tab 不再跨段，进出口改由 ↓/↑ 承担）。
+                            // 面向用户的文案纪律：**一个开关把哪条路改掉了，就要把新的进出口写出来**。
+                            desc: "关闭后改用 ↓ 进入未启动区、↑ 返回（四指轻点可直接进入）。") {
+                    BeamSwitch(isOn: $tabEntersLaunchSection)
+                }
                 SettingsRow(title: "白名单",
                             desc: "不在 Dock 常驻的 App 也会进未启动环。") {
                     listCountButton(.whitelist)
@@ -245,14 +306,6 @@ struct SettingsView: View {
                 }
                 SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
-                }
-                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
-                    BeamSwitch(isOn: $sheen)
-                }
-                SettingsRow(title: "承接上次选中位置",
-                            desc: "关闭后选中标记不再滑动,仅上浮。",
-                            hairline: false) {
-                    BeamSwitch(isOn: $slideFromLastApp)
                 }
             }
         }
@@ -590,23 +643,25 @@ private struct AppPicker: View {
 /// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
 /// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
 struct ShortcutPane: View {
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
+
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
-    @AppStorage("switch.advanceOnOpen") private var advanceOnOpen = true
+    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = true
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
-    @AppStorage("switch.graveCyclesWindows") private var graveCyclesWindows = false
+    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = false
     /// 双击 ⌥ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)。
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
-    @AppStorage("pointer.doubleOptionJumps") private var doubleOptionJumps = false
+    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = false
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
-    @AppStorage("switch.scrollMovesSelection") private var scrollMovesSelection = true
+    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = true
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
     /// 滑杆若线性映射到间隔,两端手感会严重不均(慢端几乎不动)。默认 10 = 原 0.10s。
-    @AppStorage("panel.scrollSpeed") private var scrollSpeed: Double = 10
+    @AppStorage(Keys.panelScrollSpeed) private var scrollSpeed: Double = 10
 
     var body: some View {
         Group {
@@ -640,6 +695,14 @@ struct ShortcutPane: View {
                     BeamSwitch(isOn: takeoverBinding)
                 }
                 SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
+                // ★ 2026-09-22 结构整理:它不是"动效",是**唤起落点**(与上一行同一件事)✗
+                //   ⇒ 从通用页的"动效"挪到快捷键页的"触发",紧挨"唤起即切换" ✓
+                SettingsRow(title: "承接上次选中位置",
+                            desc: "关闭后选中标记不再滑动,仅上浮。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $slideFromLastApp)
+                }
+
                     BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
@@ -693,12 +756,12 @@ struct ShortcutPane: View {
             get: { TriggerConfig.takeoverEnabled },
             set: { on in
                 if on {
-                    UserDefaults.standard.set(0x30, forKey: "trigger.keyCode")
-                    UserDefaults.standard.set("command", forKey: "trigger.modifier")
+                    UserDefaults.standard.set(0x30, forKey: Keys.triggerKeyCode)
+                    UserDefaults.standard.set("command", forKey: Keys.triggerModifier)
                     TriggerConfig.setTakeover(true)
                 } else {
-                    UserDefaults.standard.removeObject(forKey: "trigger.keyCode")
-                    UserDefaults.standard.removeObject(forKey: "trigger.modifier")
+                    UserDefaults.standard.removeObject(forKey: Keys.triggerKeyCode)
+                    UserDefaults.standard.removeObject(forKey: Keys.triggerModifier)
                     TriggerConfig.setTakeover(false)
                 }
                 config = TriggerConfig.load()
@@ -713,8 +776,8 @@ struct ShortcutPane: View {
             if event.keyCode == 0x35 { stopRecording(); return nil } // Esc 取消
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard let mod = allowedModifier(in: flags) else { return event } // 没有合法修饰键,继续等
-            UserDefaults.standard.set(Int(event.keyCode), forKey: "trigger.keyCode")
-            UserDefaults.standard.set(mod, forKey: "trigger.modifier")
+            UserDefaults.standard.set(Int(event.keyCode), forKey: Keys.triggerKeyCode)
+            UserDefaults.standard.set(mod, forKey: Keys.triggerModifier)
             // 录到与系统热键重叠的和弦(⌘Tab / ⌘`)→ 显式标记"用户要接管"。
             // 不标的话原生那条会在 Dock/WindowServer 层就吃掉事件,我们注册的 Carbon 热键根本收不到
             // (见 docs/adr/0005);标记之后那个开关会跟着亮起来,用户看得见自己动了什么。

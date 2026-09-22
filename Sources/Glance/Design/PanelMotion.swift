@@ -27,7 +27,7 @@ enum MotionPolicy {
     /// 那样默认值就无法是 true。设置面板的 @AppStorage 用同一个 key、同样默认 true,
     /// 两边口径一致。
     static var alwaysAnimate: Bool {
-        UserDefaults.standard.object(forKey: "motion.alwaysAnimate") as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.motionAlwaysAnimate) as? Bool ?? true
     }
 
     static var systemReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -46,7 +46,7 @@ enum MotionPolicy {
     /// key 换过:`panel.puckRiseFromBottom` 是上一版"上浮/滑 二选一"的开关,语义已经反了,
     /// 特意**不迁移** —— 搬过来会让面板突然开始滑动。旧 key 就此作废。
     static var slideFromLastApp: Bool {
-        UserDefaults.standard.object(forKey: "panel.slideFromLastApp") as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.panelSlideFromLastApp) as? Bool ?? false
     }
 
     /// **通用的上浮幅度** —— 入场每次都有这一层(见 `slideFromLastApp` 的两层说明)。
@@ -111,8 +111,19 @@ enum PanelMotion {
     // ⚡️ 2026-09-17 极端值试验:用户对 0.16→0.08 的差别**感觉不到** ⇒ 先走到"几乎瞬时",
     // 用来验证"这个旋钮到底管不管那一段"。若极端值也没变化 ⇒ 管的不是它,去查别的层
     // (日志里 `[T6] 入场:…` 那行会说清这一局演了哪几层)。
-    /// ⚠️ 2026-09-17:入场"上浮"已整段取消(起点幅度给 0,见 PanelController.showPanel)⇒
-    /// 这一档现在**没有主环的用武之地**(留着给别处/以后)。值回退到取消前的那一档。
+    /// ★★ 2026-09-22 用户实报后改:入场这一档**必须与 `select` 同档**。
+    ///
+    /// 病例(用户原话):「app 下面的底部托盘, tab/hover 选中 app 的时候, 它冒头比 app 上浮的要快,
+    ///   然后等 app 上浮完成才能遮住它, 不要让它露出来。或者速度变慢。」
+    ///   ⇒ 这里原本是 `spring(0.16, 0.62)`(比 `select` 的 0.22 **快一档** ✗)⇒
+    ///     托盘/托底 0.16s 就到位了,而图标的"上浮 −iconLift"那一段还在走 0.22s ✗
+    ///     ⇒ 中间那几十毫秒里**托盘从图标下面露出来** ✓(而且露一下很像掉帧 ✗)
+    /// 口径:**入场曲线与"选中上浮"必须是同一根弹簧** —— 它俩是同一次 `withAnimation` 的两个面,
+    ///   本来就该同时到;分成两档就是"各走各的" ✗。要提速/减速就**两个一起动**(见 `select`)✓
+    /// ⚡ 2026-09-22 回快(用户实报「app 上来的慢了...」):0.22 → **0.16** ——
+    /// 露头那件事**不再靠"同步曲线"解决**了(它解决不了:图标是两根弹簧叠加、托盘只有一根 ✗),
+    /// 改由**托盘比图标晚到 0.06s** + **托盘顶部裁剪**这两条结构性措施兜住 ✓
+    /// ⇒ 曲线回归"快"这一档,手感照用户原来的口径 ✓
     static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)

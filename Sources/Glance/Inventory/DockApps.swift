@@ -24,11 +24,11 @@ enum DockAppsProvider {
 
     /// **白名单**(2026-09-19):不在 Dock 常驻的 App 也进未启动环。存 bundle id(见 spec note 6)。
     /// 名单在设置页编辑;两名单互斥由选择器保证(已在对方名单的 App 根本不出现)。
-    static var whitelist: [String] { UserDefaults.standard.stringArray(forKey: "launch.whitelist") ?? [] }
-    static func setWhitelist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: "launch.whitelist") }
+    static var whitelist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchWhitelist) ?? [] }
+    static func setWhitelist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: Keys.launchWhitelist) }
     /// **黑名单**:Dock 常驻也不进未启动环。
-    static var blacklist: [String] { UserDefaults.standard.stringArray(forKey: "launch.blacklist") ?? [] }
-    static func setBlacklist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: "launch.blacklist") }
+    static var blacklist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchBlacklist) ?? [] }
+    static func setBlacklist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: Keys.launchBlacklist) }
 
     /// 名单条目(bundle id)在盘上解析出的展示信息。找不到(已卸载)= path 空串,调用方灰显
     struct InstalledApp: Identifiable {

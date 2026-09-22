@@ -16,7 +16,7 @@ struct PreviewPanelView: View {
     @ObservedObject var snapshotter: Snapshotter
     // (S2.1)托盘**不再**观察整个池:每张卡各自观察自己那一个帧盒子 ⇒ 只重绘那一张卡 ✓
     /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
-    @AppStorage("panel.sheen") private var glow = true
+    @AppStorage(Keys.panelSheen) private var glow = true
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
@@ -42,7 +42,15 @@ struct PreviewPanelView: View {
         //   ⇒ 卡片被"动画地"挪到各自新位置(视觉上就是从两边滑入)。
         //   性能那批把托盘**窗口**改成整局不动之后,原本被窗口位移掩盖的内容重排动画就露出来了 ✓
         // ⇒ 托盘内容**不参与任何外层动画**:换 app 是"当场换成新内容"(与"内容本身变化"这件事无关)。
-        .transaction { $0.animation = nil }
+        // ★ 2026-09-22 用户实报:「现在托盘的动画被你砍掉了, hover app 托盘只会闪现, 没有滑动了」
+        //   —— 9-21 这里一刀切 `animation = nil`(当时是为了治"换组时卡片从两边滑入" ✗)⇒
+        //   代价是**hover 换组时托盘内容瞬间跳**(闪现 ✗)。现在收窄:只挡**换环**(↓/↑/Tab 跨段)那一拍,
+        //   hover 换组仍用短弹簧滑动 ✓(用户要的手感 ✓)
+        .transaction { t in
+            // 换环(↓/↑/Tab 跨段)那一拍 ⇒ 托盘内容**当拍**换(与环的翻牌同步 ✓)
+            // 其余(hover 换组 / 键盘换格)⇒ 保留短弹簧 ⇒ 内容**滑**过去而不是闪现 ✓
+            if controller.isRingSwapInFlight { t.animation = nil }
+        }
         // ★★ 2026-09-21 用户裁定:「把背景的圆角矩形撤掉 —— 就是最外面那一层,只要单个卡片容器和下面的芯片」
         // 原状:托盘 = 一大块圆角玻璃(GlassBackground + 圆角裁剪 + 受光边/内阴影 + tray 阴影),
         //   卡片与芯片都画在这块玻璃上 ⇒ 换组时"玻璃不动、里面的东西动"看得特别清楚 ✗
@@ -131,7 +139,7 @@ struct PreviewPanelView: View {
         let liveAspect = liveFrame.map { CGFloat($0.width) / CGFloat($0.height) }
         let shotAspect = shot?.cgImage(forProposedRect: nil, context: nil, hints: nil)
             .map { CGFloat($0.width) / CGFloat($0.height) }
-        if UserDefaults.standard.bool(forKey: "debug.dumpSources") {
+        if DebugFlags.dumpSources {
             let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
             SourceDump.dump(key: "shot-\(w.wid)", shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
             SourceDump.dump(key: "live-\(w.wid)", liveFrame, dir)
@@ -230,7 +238,7 @@ struct PreviewPanelView: View {
         .scaleEffect(selected ? PanelMetrics.iconScale : 1)
         .offset(y: selected ? -PanelMetrics.iconLift : 0)
             .elevation(.icon, active: selected)   // 帧率优先:只有选中的那颗有投影(与主环同款)
-            .frame(width: PanelMetrics.icon + PanelMetrics.iconGap, height: PanelMetrics.icon)
+            .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
             // **不要托底了**(用户 2026-09-16 裁定):启动行只要"上浮"这一层反馈。
             // 托盘里本来就是"悬停才展开的大预览",再加一枚托底 = 两套选中语言打在一起。
             // (launchPuck 保留未用:它是"每格一枚"的旧方案,若将来又要,别再从零写)
@@ -512,7 +520,7 @@ final class LivePreviewPool: ObservableObject {
     }
 
     /// 帧率档位 = 设置里的「实时预览」。**"0" = 关**(默认)。S4 起会分成"选中/其余"两档。
-    static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: "live.previewTier") ?? "0") ?? 0) }
+    static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: Keys.livePreviewTier) ?? "0") ?? 0) }
     static var enabled: Bool { tierFps > 0 }
     /// 流数上限(LRU 淘汰)
     /// 流数上限:**必须 ≥ 环里的窗口数**(实测环里 ~14 窗)⇒ 给 24 是防呆,不是节流阀。
@@ -535,6 +543,13 @@ final class LivePreviewPool: ObservableObject {
     ///   ② **性能**:原来任何一扇窗来帧 ⇒ 整个托盘(观察者)重建 ⇒ 13 条流时 70 次/秒 × N 张卡 ✗。
     ///      ⇒ 现在每张卡**只观察自己那一个 box** ⇒ 只重绘那一张卡 ✓(DockDoor 同款结构 ✓)。
     private var boxes: [CGWindowID: LiveFrameBox] = [:]      // 只在主线程碰
+    /// 诊断归因:自上次被探针取走以来,有多少张 live 帧落到了主线程(只在主线程读写)
+    @MainActor private(set) var ingestedSinceProbe = 0
+    /// 探针取走并清零(主线程调用)
+    @MainActor func takeIngested() -> Int {
+        defer { ingestedSinceProbe = 0 }
+        return ingestedSinceProbe
+    }
     /// 池队列独占:最新一帧与淘汰顺序(主线程不读它)
     private var latest: [CGWindowID: CGImage] = [:]
     private var latestOrder: [CGWindowID] = []
@@ -585,8 +600,15 @@ final class LivePreviewPool: ObservableObject {
             guard let self else { return }
             // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
             if Set(wids) == self.wanted, self.pending.isEmpty { return }
+            let added = Set(wids).subtracting(self.wanted)   // 刚变可见的那几张(下面补帧用)
             self.wanted = Set(wids)
             for w in wids { self.idleSince[w] = nil }
+            // ★ 补帧:上面那条门禁会拦住"不可见时"的派发 ⇒ 换回来时如果池里已有最新帧,
+            //   立刻补上(不然卡片要等下一拍才亮 ⇒ 静默态多显示约 100ms ✗)
+            for w in added {
+                guard let img = self.latest[w] else { continue }
+                DispatchQueue.main.async { [weak self] in self?.boxes[w]?.image = img }
+            }
             // ★ 先把"停"做完(停是便宜的、而且必须立刻做),**"起"推迟 150ms**。
             // 病例(2026-09-21,日志实证):hover 到"还没起过流的窗口"时,
             //   `SCStream` 创建(几十毫秒的系统级工作)正好压在 hover 那一拍上 ⇒ 丢 1 拍 ✗
@@ -751,7 +773,7 @@ final class LivePreviewPool: ObservableObject {
                     self.startedAt[wid] = CFAbsoluteTimeGetCurrent()
                 }
                 try await s.startCapture()
-                glog(String(format: "[直播] 起流池 += wid=%d %dx%d @%dfps 池内=%d",
+                glog(String(format: "[直播] 起流池 += wid=%u %dx%d @%dfps 池内=%d",
                             wid, Int(size.width), Int(size.height), fps, self.handles.count))
             } catch {
                 glog("[直播] 起流失败 wid=\(wid): \(error.localizedDescription)")
@@ -769,7 +791,7 @@ final class LivePreviewPool: ObservableObject {
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
             firstFrameLogged.insert(wid)
-            glog(String(format: "[直播] 首帧 %.0fms wid=%d", (now - t0) * 1000, wid))
+            glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
@@ -777,9 +799,19 @@ final class LivePreviewPool: ObservableObject {
             let old = latestOrder.removeFirst()
             if !wanted.contains(old) { latest[old] = nil }
         }
+        // ★ 只把"**当前显示组**"的帧交给主线程(2026-09-21,归因量出来的账)。
+        //   池的 keepAlive=5s ⇒ 换组之后旧的那几条流**还在跑**(为了换回来是热的 ✓),
+        //   而它们仍然会被派给主线程 ⇒ 但那些卡**这一刻根本不在屏幕上** ✗
+        //   ⇒ 白换一次图 + 白触发一次重绘。实测:悬停长帧里 **2/3** 都带"直播新帧 ≥1"。
+        //   现在:帧照样收进 `latest`(换回来立刻有 ✓),但**不派** ⇒ 主线程零工作 ✓
+        //   注意:`wanted` 与这里都在**池队列**上 ⇒ 不跨线程读 ✓(那条崩溃纪律不破)
+        guard wanted.contains(wid) else { return }
         // 只把这一张图交给主线程 ⇒ 每张卡各自重绘(不重建整个托盘 ✓)
         DispatchQueue.main.async { [weak self] in
             self?.boxes[wid]?.image = img
+            // 归因用计数(只在主线程读写 ⇒ 不需要锁):探针拿它回答
+            // "这一拍的长帧是不是刚好有 live 帧到货" —— 不然只能猜到渲染/起流头上
+            self?.ingestedSinceProbe = (self?.ingestedSinceProbe ?? 0) + 1
         }
     }
 }
@@ -897,7 +929,7 @@ private enum CardRulerLog {
             guard let x, boxA > 0 else { return "  -" }
             return String(format: "%+.0f%%", (x / boxA - 1) * 100)
         }
-        glog(String(format: "[尺子] wid=%d 源=%@ · 盒 %.0fx%.0f(%.2f) · 图 %@%@ · 快照 %@%@",
+        glog(String(format: "[尺子] wid=%u 源=%@ · 盒 %.0fx%.0f(%.2f) · 图 %@%@ · 快照 %@%@",
                     wid, source, box.width, box.height, boxA, a, d(imageAspect), s, d(shotAspect)))
     }
 }
@@ -959,7 +991,7 @@ private enum CardSizeLog {
            abs(old.height - now.height) < 0.5 { return }
         let old = lastSize[record.wid]
         lastSize[record.wid] = now
-        glog(String(format: "[卡变] wid=%d 卡片 %.0fx%.0f → %.0fx%.0f (真窗 %.0fx%.0f)",
+        glog(String(format: "[卡变] wid=%u 卡片 %.0fx%.0f → %.0fx%.0f (真窗 %.0fx%.0f)",
                     record.wid, old?.width ?? -1, old?.height ?? -1, cardW, cardH,
                     record.bounds.width, record.bounds.height))
     }
@@ -972,7 +1004,7 @@ private enum CardSizeLog {
         let s = max(cardW / win.width, cardH / win.height)   // .fill 的缩放倍数(>1 = 放大 ✗)
         let cropW = (win.width * s - cardW) / max(1, win.width * s)
         let cropH = (win.height * s - cardH) / max(1, win.height * s)
-        glog(String(format: "[卡尺寸] wid=%d 真窗 %.0fx%.0fpt / 卡片 %.0fx%.0fpt ⇒ **缩放 %.2fx** 裁掉 %.0f%%x%.0f%%",
+        glog(String(format: "[卡尺寸] wid=%u 真窗 %.0fx%.0fpt / 卡片 %.0fx%.0fpt ⇒ **缩放 %.2fx** 裁掉 %.0f%%x%.0f%%",
                     record.wid, win.width, win.height, cardW, cardH, s, cropW * 100, cropH * 100))
         return true
     }

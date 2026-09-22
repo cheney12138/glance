@@ -77,16 +77,26 @@ final class FrameProbe: NSObject {
             .joined(separator: " ")
         // 判定基准非 60Hz 时标出来 —— 否则读日志的人会拿 25ms 的口径去理解 120Hz 屏的数据
         let judge = fps == 60 ? "" : String(format: " [按 %.0fHz 判定:>%.1fms]", fps, longFrame * 1000)
+        // ★ 量尺自带语境（2026-09-21）：把**当前打开的重型开关**写进汇总行。
+        //   为什么：A/B 对照时我们俩上一次就因为这个白跑一轮 —— 日志是**多进程交错追加**的，
+        //   而时间戳是“进程内相对时间”⇒ 两趟之间**切不开**，只能看聚合值 ✗。
+        //   现在每行汇总自带“我当时开着什么”⇒ 单行即可判定，不用重启当分界。
+        let heavy = DebugFlags.heavySwitches.filter { $0.isOn }.map { $0.name.replacingOccurrences(of: "debug.", with: "") }
+        let ctx = heavy.isEmpty ? "重型开关:无" : "重型开关:" + heavy.joined(separator: ",")
         print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%) %@| 探针起点=%.0fms%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
                      long, Double(long) / Double(sorted.count) * 100, where_, startUptimeMs, judge))
+        print("[帧]   ↳语境 \(ctx)")
         if jitter > 1.5 { print(String(format: "[帧]   ↳节奏抖动 ±%.1fms(P90,中位 %.1fms)—— 均匀的慢看不出,忽快忽慢才是肉眼里的卡", jitter, medv * 1000)) }
         intervals.removeAll()
     }
 
-    /// **悬停打点**(2026-09-21):hover / 换 app 那一刻记一下时刻。
+    /// **选中变更打点**(2026-09-21):指针 hover **与键盘 Tab/←→** 换选中那一刻都记一下。
     /// 为什么需要它:整局帧账会把"偶尔那几下"冲淡(实测整局长帧只有 1%),而用户感觉到的
-    /// 恰恰是"hover 那一下" ⇒ 所以要看的是**含悬停的那几拍**花了多少,不是平均值。
+    /// 恰恰是"换选中那一下" ⇒ 要看的是**含那一下的几拍**,不是平均值。
+    /// ⚠️ 教训(2026-09-21):这个点最初**只打在指针 hover**上 ⇒ 用户报的复现是
+    ///   「tab 切到大象那一拍掉帧」⇒ 后面几轮量到的长帧全是指针那一路的,压根没量到他报的那一下 ✗
+    ///   ⇒ 量尺要覆盖**用户实际的复现路径**,不是我们以为的那条。
     static var lastHoverMark: CFTimeInterval = 0
 
     @objc private func tick(_ link: CADisplayLink) {
@@ -95,10 +105,16 @@ final class FrameProbe: NSObject {
         guard last > 0 else { return }
         let dt = now - last
         intervals.append(dt)
+        // ★ 归因计数:**每一拍都取走**(不然计数会跨拍累积 —— 2026-09-21 实测把自己骗了一次:
+        //   日志里出现"直播新帧 8",而 10fps 的一扇窗**不可能**在一拍里交 8 张 ⇒
+        //   那是我自己攒出来的 ✗。现在:每拍取走、只在悬停窗口里打印。
+        let live = MainActor.assumeIsolated { LivePreviewPool.shared.takeIngested() }
         // 悬停后 200ms 内的每一拍都单独记一行 ⇒ hover 的真实代价(含 SwiftUI 重建卡片/取图/布局/绘制)
         let sinceHover = now - Self.lastHoverMark
         if Self.lastHoverMark > 0, sinceHover < 0.2 {
-            glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms)", dt * 1000, sinceHover * 1000))
+            // 读法:`+33.2ms (悬停后 8ms · 直播新帧 2)` ⇒ 这一拍确实在换卡面图 ✓;
+            //       `… 直播新帧 0` 却慢 ⇒ 与收帧无关,去查布局/阴影/玻璃/重绘。
+            glog(String(format: "[悬停拍] +%.1fms (悬停后 %.0fms · 直播新帧 %d)", dt * 1000, sinceHover * 1000, live))
         }
     }
 }
@@ -123,7 +139,7 @@ final class HzCompare {
     private var started = false
 
     /// 只在调试键打开时做一次:`defaults write com.cheney12138.macswitcher debug.hzProbe -bool true`
-    static var enabled: Bool { UserDefaults.standard.bool(forKey: "debug.hzProbe") }
+    static var enabled: Bool { DebugFlags.hzProbe }
 
     /// 面板上屏后调一次。`panelView` = 面板的内容视图(hosting view)
     func run(panelView: NSView) {

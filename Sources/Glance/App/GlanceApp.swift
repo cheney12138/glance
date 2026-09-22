@@ -10,6 +10,10 @@ struct GlanceApp: App {
     init() {
         _ = stdoutIsLineBuffered
         mirrorStdoutToLogFileIfTracing()   // trace 时把 stdout 落到 ~/Library/Logs/Glance/trace.log
+        // ★ 重型开关**开机自报**(2026-09-21 第二次"量具改变被测物"后加的)：
+        //   `dumpSources` 被上轮实验留在 ON 上,之后每次 hover 都在往磁盘写 PNG ⇒
+        //   用户报"又掉帧了",量到的长帧里有一部分是**量具自己**。⇒ 不允许静默开着。
+        DebugFlags.reportHeavySwitchesIfNeeded()
         // 外观要在任何窗/面板画出来之前摆好(面板取的全是按外观解析的动态色)
         AppearancePreference.apply()
         // AX 超时也在此刻定死:它是进程级设置,晚一步就有一次无上限的跨进程等待
@@ -22,7 +26,7 @@ struct GlanceApp: App {
         //   钉住模式下"面板外点击不免死"本来就是设计)。普通启动一律清掉:
         //   要钉住,用 `open --args -debug.pinPanelOnRelease 1`,进程死了开关自动失效
         if !ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") {
-            UserDefaults.standard.removeObject(forKey: "debug.pinPanelOnRelease")
+            UserDefaults.standard.removeObject(forKey: Keys.debugPinPanelOnRelease)
         }
     }
 
@@ -168,13 +172,13 @@ struct GlanceApp: App {
         }
         // 诊断钩子(自动化复现用,平时不生效):`open … --args -debug.autoOpenSettings 1`
         // 启动后自动开一次设置窗 —— 复现"设置窗关闭后 Glance 仍在环里"的病例
-        if UserDefaults.standard.bool(forKey: "debug.autoOpenSettings") {
+        if DebugFlags.autoOpenSettings {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showSettings() }
         }
         // 🔬 AX 探针(2026-09-19,CatDesk 关窗不出现病例):defaults write debug.axprobePid
         // <pid> 后重启,借本 App 的辅助功能权限查目标进程 AX 眼里的窗口账 ——
         // 判别「CG 全量清单有窗但 onscreen=false」到底是"别屏 Space 的窗"还是"orderOut 的窗"
-        if let pidStr = UserDefaults.standard.string(forKey: "debug.axprobePid"),
+        if let pidStr = DebugFlags.axprobePid,
            let pid = pid_t(pidStr) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 let app = AXUIElementCreateApplication(pid)
