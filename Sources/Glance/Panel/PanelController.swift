@@ -1635,25 +1635,35 @@ final class PanelController: ObservableObject {
                 // 白名单 App 用键盘永远选不中 ⇒「没办法启动」。
                 let cur = launchIndex ?? (backward ? n : -1)
                 let next = cur + delta
-                if next < 0 {                   // 段头反向 → 主环最后一格
-                    appIndex = groups.count - 1; winIndex = 0
-                    setSegment(false, travel: .backward, launchIndex: nil)
-                    trace("[T91] 段切换(⇧Tab): 未启动 → 主环 [\(groups.count)/\(groups.count)] \(groups[appIndex].appName)")
-                } else if next >= n {           // 段尾正向 → 主环第一格(绕环不断)
-                    appIndex = 0; winIndex = 0
-                    setSegment(false, travel: .forward, launchIndex: nil)
-                    trace("[T91] 段切换(Tab): 未启动 → 主环 [1/\(groups.count)] \(groups[appIndex].appName)")
+                if next < 0 {                   // 段头反向
+                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环最后一格 ✓
+                        appIndex = groups.count - 1; winIndex = 0
+                        setSegment(false, travel: .backward, launchIndex: nil)
+                        trace("[T91] 段切换(⇧Tab): 未启动 → 主环 [\(groups.count)/\(groups.count)] \(groups[appIndex].appName)")
+                    } else {                    // ★ 设置关着 ⇒ 不跨段,在**段内绕回**末格(与主环绕回同一种手感 ✓)
+                        launchIndex = n - 1
+                        trace("[T6] 选中(键盘 Tab): 未启动 [\(n)/\(n)] \(launchables[n - 1].name)(段内绕回)")
+                    }
+                } else if next >= n {           // 段尾正向
+                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环第一格(绕环不断)✓
+                        appIndex = 0; winIndex = 0
+                        setSegment(false, travel: .forward, launchIndex: nil)
+                        trace("[T91] 段切换(Tab): 未启动 → 主环 [1/\(groups.count)] \(groups[appIndex].appName)")
+                    } else {                    // ★ 设置关着 ⇒ 段内绕回首格 ✓
+                        launchIndex = 0
+                        trace("[T6] 选中(键盘 Tab): 未启动 [1/\(n)] \(launchables[0].name)(段内绕回)")
+                    }
                 } else {
                     launchIndex = next
                     trace("[T6] 选中(键盘 Tab): 未启动 [\(next + 1)/\(n)] \(launchables[next].name)")
                 }
-            // ★ 2026-09-22 修「回得来、去不了」：这道门禁只装在**主环 → 未启动**这一边 ✗
-            //   (另一边"未启动 → 主环"从来就没门禁)⇒ 用户口径「上下是兜底的,关了之后
-            //   不管在哪个环, tab 都要能互相切换」⇒ 两边**对称**,都只由"段还在不在"决定 ✓
-            } else if !backward, appIndex == groups.count - 1, launchSectionEnabled {
+            // ★ 2026-09-22 修「回得来、去不了」:门禁要**对称** ——
+            //   用户口径:设置关着时 Tab **两个方向都不该跨段**(进出口交给 ↑/↓ 与四指 ✓)。
+            //   而当时只有这一边挂了门禁、另一边从来没挂 ⇒ 才出现"去不了、回得来" ✗
+            } else if !backward, appIndex == groups.count - 1, launchSectionEnabled, tabEntersLaunchSection {
                 setSegment(true, travel: .forward, launchIndex: 0)
                 trace("[T91] 段切换(Tab): 主环 → 未启动(选中 [1/\(launchables.count)] \(launchables[0].name))")
-            } else if backward, appIndex == 0, launchSectionEnabled {
+            } else if backward, appIndex == 0, launchSectionEnabled, tabEntersLaunchSection {
                 setSegment(true, travel: .backward, launchIndex: launchables.count - 1)
                 trace("[T91] 段切换(⇧Tab): 主环 → 未启动(选中 [\(launchables.count)/\(launchables.count)] \(launchables[launchables.count - 1].name))")
             } else {
