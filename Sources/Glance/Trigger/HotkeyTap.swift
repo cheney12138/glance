@@ -1197,6 +1197,8 @@ final class ThreeFingerTap {
 /// 新建 .swift 必须同时在四处登记（PBXBuildFile / PBXFileReference / group / Sources phase），
 /// 漏一处就是 `cannot find 'X' in scope`。同一个 domain 的代码就近放，先避免这类机械风险。
 final class DoubleOptionTap {
+    /// 双击 ⌥:把"跳到下一块屏"整件事交给 **App 层**(见 `App/ScreenScopedSwitching.swift` ✓)
+    var onJumpToNextDisplay: (() -> Void)?
     static let shared = DoubleOptionTap()
     private init() {}
 
@@ -1258,73 +1260,15 @@ final class DoubleOptionTap {
         }
     }
 
-    /// 目标屏上 Z 序最前的那扇窗 = 用户说的"台前第一个 App"。
-    /// 为什么落焦到**窗**而不是 App:同一个 App 可能两块屏各有窗,让 App 自己决定键盘给谁
-    /// 正是"激活不保证落焦"那个坑(见 CONTEXT.md)。
-    private func landingWindow(on displayID: CGDirectDisplayID) -> WindowRecord? {
-        guard let screen = NSScreen.screens.first(where: {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
-        }) else { return nil }
-        // ⚠️ 不能直接用 WindowEnumerator.rawGroups(on:).first —— 那个数组是按 pid 分组后的
-        // **Dictionary 的值**,而 Swift 里 Dictionary 的顺序是未定义的。实机现形(2026-09-15 用户报):
-        // "不是台前第一个…现在是系统自己选的" —— .first 拿到的是哈希序里的某个 App ✗。
-        //
-        // 所以直接问 CGWindowList:它返回的数组是**前到后**的 Z 序,第一个命中者就是"层级最上面"那扇窗。
-        // 过滤规则与 rawGroups 保持一致(layer==0 / 排除自家窗 / 尺寸合理 / 归属屏恰为目标屏)。
-        guard let infos = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else { return nil }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        for info in infos {                       // 顺序遍历 = 从最上面往下,第一个命中即答案
-            guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
-                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
-                  bounds.width > 1, bounds.height > 1,
-                  WindowEnumerator.ownsByContextScreen(bounds, contextScreen: screen)
-            else { continue }
-            let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
-            let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
-            return WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds)
-        }
-        return nil
-    }
-
     /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），
     /// 而不是丢到角落 —— 指针像"平移"过去，这是体感的关键。
+    /// ★ 2026-09-22:整段逻辑搬到 **App 层**(`DoubleOptionJump`)——
+    ///   它要看清点(Inventory)又要落焦(Focus),放在 Trigger 里会**双向越界** ✗
+    ///   (架构脚本报了很久,记在已知账上;现在按同一套"闭包钩子 + App 层装配"还掉 ✓)
+    ///   这里只判"这一下该不该算一次跳屏"(拖拽途中不算 ✓),然后把话交给 App 层 ✓
     private func jumpToNextDisplay() {
         guard NSEvent.pressedMouseButtons == 0 else { return }   // 拖拽途中不动（别把拖拽目标搞乱）
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 1 else { return }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return }
-
-        // 全程用 CoreGraphics 坐标系（原点在主屏**左上**）：指针位置与屏幕矩形同系，
-        // 就不需要 y 翻转 —— 少一次换算出错的机会（这类翻转是经典 bug 源）。
-        let cursor = CGEvent(source: nil)?.location ?? .zero
-        guard let from = ids.firstIndex(where: { CGDisplayBounds($0).contains(cursor) }) else { return }
-        let b = CGDisplayBounds(ids[(from + 1) % ids.count])
-        // **居中落点**(用户 2026-09-15):指针永远落在那块屏的**正中间**。
-        // 原先按"相对位置"平移(右屏 70% 高处 → 左屏 70% 高处),思路是"像把指针平推过去";
-        // 改动理由是**可预测**:落焦已经把键盘交给目标屏台前的窗之后,
-        // 指针的精确位置不再承载意义,而"永远在正中间"是闭着眼也知道的事。
-        // 顺带不需要再夹 2%–98% —— 屏幕中心天生远离各条边缘。
-        let rx = 0.5
-        let ry = 0.5
-        CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
-        CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
-        // 把"工作上下文"一起搬过去:落焦到那块屏台前的那扇窗 ⇒ 过去就能直接打字。
-        // **落焦是跳屏的固定语义,没有"只搬指针"模式**(T87 v2 用户裁定:
-        // 「移动过去不落焦那移动的意义是什么」—— 子开关废除)。
-        // 不算融合操作 —— 落点由那块屏自身决定,没有替用户做选择(ADR-0007 修正)。
-        let targetID = ids[(from + 1) % ids.count]
-        var landed = ""
-        if let w = landingWindow(on: targetID) {
-            MainActor.assumeIsolated { WindowFocuser.focus(window: w) }   // 监听器在主线程,无需再跳
-            landed = " · 落焦 \(w.ownerName)"
-        }
-        print(String(format: "[指针] 双击 ⌥ → 屏 %d → 屏 %d (居中)%@",
-                     from + 1, (from + 1) % ids.count + 1, landed))
+        onJumpToNextDisplay?()
     }
+
 }

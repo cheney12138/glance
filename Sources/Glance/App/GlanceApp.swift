@@ -95,6 +95,8 @@ struct GlanceApp: App {
                     // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
                     // 开关 key: pointer.doubleOptionJumps(触发键 2026-09-17 由 ⌃ 改 ⌥:与 IDEA 冲突)
                     DoubleOptionTap.shared.start()
+                    // ★ 双击 ⌥ 的"跳屏 + 落焦"整件事在 App 层(Trigger 只报"发生了" ✓)
+                    DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
                     // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
                     // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
                     ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }

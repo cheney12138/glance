@@ -44,6 +44,28 @@ enum ScreenWindowIndex {
         return out
     }
 
+    /// 原始条目(给需要 title/owner 的调用方用 ✓ —— 仍然只查一次 CGWindowList ✓)
+    struct RawInfo { let wid: CGWindowID; let pid: pid_t?; let layer: Int
+                     let bounds: CGRect; let title: String?; let owner: String? }
+
+    static func snapshotRawInfo() -> [RawInfo] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                   kCGNullWindowID) as? [[String: Any]] else { return [] }
+        return list.map { w in
+            let b = w[kCGWindowBounds as String] as? [String: CGFloat]
+            return RawInfo(wid: (w[kCGWindowNumber as String] as? Int).map(CGWindowID.init) ?? 0,
+                           pid: w[kCGWindowOwnerPID as String] as? pid_t,
+                           layer: w[kCGWindowLayer as String] as? Int ?? -1,
+                           bounds: b.flatMap { bb in
+                               guard let x = bb["X"], let y = bb["Y"],
+                                     let wd = bb["Width"], let h = bb["Height"] else { return nil }
+                               return CGRect(x: x, y: y, width: wd, height: h)
+                           } ?? .zero,
+                           title: w[kCGWindowName as String] as? String,
+                           owner: w[kCGWindowOwnerName as String] as? String)
+        }
+    }
+
     /// 一块屏"归"哪扇窗:与各屏求几何交集、取占比最大的那块 ✓(坐标要先统一 ✓)
     static func screen(owning bounds: CGRect) -> NSScreen? {
         NSScreen.screens.max { a, b in
@@ -178,5 +200,70 @@ enum QuickSwitch {
         }
         WindowFocuser.focus(window: WindowRecord(wid: window.wid, pid: target,
                                                 ownerName: "", title: "", bounds: window.bounds))
+    }
+}
+
+// MARK: - 双击 ⌥:指针跳到下一块屏 + 落焦(从 Trigger 搬来,2026-09-22 还债 ✓)
+
+/// 原在 `Trigger/DoubleOptionTap` ✓ —— 它既要看清点(`WindowEnumerator`)又要落焦(`WindowFocuser`)
+/// ⇒ 在 Trigger 里是**双向越界** ✗(架构脚本报了它很久,记在已知账里)。现在按同一套
+/// "闭包钩子 + App 层装配"还掉 ✓ —— 那边只剩"拖拽途中不算"这一条判断 ✓,其余全在这里 ✓。
+///
+/// 语义(用户 2026-09-15 裁定,照旧不改 ✓):
+///   · 指针**居中**落到下一块屏的正中间(可预测:闭眼也知道在哪 ✓)
+///   · **落焦是固定语义**(没有"只搬指针"模式 —— 「移动过去不落焦那移动的意义是什么」✓)
+///   · 落焦到那扇 **窗**(不是 App):同一 App 可能两块屏各有窗,让 App 自己决定键盘给谁
+///     正是"激活不保证落焦"那个坑 ✓(见 CONTEXT.md ✓)
+enum DoubleOptionJump {
+
+    @MainActor
+    static func jumpToNextDisplay() {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 1 else { return }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return }
+
+        // 全程用 CoreGraphics 坐标系(原点在主屏**左上** ✓):指针位置与屏幕矩形同系 ⇒
+        // 不需要 y 翻转 —— 少一次换算出错的机会 ✓(这类翻转是经典 bug 源 ✓)
+        let cursor = CGEvent(source: nil)?.location ?? .zero
+        guard let from = ids.firstIndex(where: { CGDisplayBounds($0).contains(cursor) }) else { return }
+        let targetID = ids[(from + 1) % ids.count]
+        let b = CGDisplayBounds(targetID)
+
+        CGWarpMouseCursorPosition(CGPoint(x: b.minX + 0.5 * b.width, y: b.minY + 0.5 * b.height))
+        CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦(否则指针"冻住"直到动一下 ✓)
+
+        var landed = ""
+        if let w = landingWindow(on: targetID) {
+            WindowFocuser.focus(window: w)
+            landed = " · 落焦 \(w.ownerName)"
+        }
+        glog(String(format: "[指针] 双击 ⌥ → 屏 %d → 屏 %d (居中)%@",
+                    from + 1, (from + 1) % ids.count + 1, landed))
+    }
+
+    /// 目标屏上 **Z 序最前**的那扇窗 = 用户说的"台前第一个 App" ✓
+    ///
+    /// ⚠️ 不能拿 `rawGroups(on:).first` —— 那个数组是按 pid 分组的 **Dictionary 的值**,
+    /// 而 Swift 里 Dictionary 的顺序未定义 ✗(实机现形 2026-09-15:用户报"不是台前第一个,
+    /// 现在是系统自己选的" ✓)。⇒ 直接问 `CGWindowList`:它返回的数组是**前到后**的 Z 序 ✓,
+    /// 第一个命中者就是"层级最上面"那扇 ✓。过滤规则与 `rawGroups` 保持一致 ✓
+    @MainActor
+    static func landingWindow(on displayID: CGDirectDisplayID) -> WindowRecord? {
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
+        }) else { return nil }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        for info in ScreenWindowIndex.snapshotRawInfo() {          // 顺序遍历 = 从最上面往下 ✓
+            guard let pid = info.pid, pid != ownPID,
+                  info.wid != 0, info.layer == 0,
+                  info.bounds.width > 1, info.bounds.height > 1,
+                  WindowEnumerator.ownsByContextScreen(info.bounds, contextScreen: screen)
+            else { continue }
+            let title = (info.title?.isEmpty == false ? info.title! : "(无标题)")
+            let owner = info.owner ?? "(未知应用)"
+            return WindowRecord(wid: info.wid, pid: pid, ownerName: owner, title: title, bounds: info.bounds)
+        }
+        return nil
     }
 }

@@ -62,11 +62,9 @@ let forbiddenSymbols: [String: [String]] = [
 /// 暂时不修"的写在这里 ⇒ ① 门禁保持可用 ✓ ② 债是**可见的**、下次顺手还 ✓
 /// 逐条都带出处与理由;新增一条必须先在这儿写清"为什么现在不修" ✓
 let knownViolations: [(module: String, symbol: String, why: String)] = [
-    ("Trigger", "WindowEnumerator",
-     "双击 ⌥ 跳另一块屏(2026-09-17)要判'窗口归哪块屏' ⇒ 直接用清点模块的纯函数。"
-     + "正解与本次同款:改成 App 层装配的闭包(±30 行)。**未修**,因为它是既有的、与本轮无关的一笔债"),
-    ("Trigger", "WindowFocuser",
-     "同上那支还负责'把那扇窗抬起来' ⇒ 用了落点模块。同一笔债,一起还 ✓"),
+    // 2026-09-22:原来这里有两条(Trigger 直接看清点/落焦,双击 ⌥ 跳屏那支)——
+    // 已按"闭包钩子 + App 层装配"还掉(`App/ScreenScopedSwitching.swift` 里的 `DoubleOptionJump`)✓
+    // 账本空着是**好事** ✓:它只该在"已经知道、暂时不修"的时候有内容 ✓
 ]
 
 // MARK: - 扫描
