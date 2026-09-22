@@ -96,6 +96,14 @@ final class HotkeyTapCenter {
     private static let keyUp: Int64 = 0x7E
     private static let keyEsc: Int64 = 0x35
     private static let keyReturn: Int64 = 0x24
+    /// 空格(0x31)—— **确认**,与回车同一支(2026-09-22 用户要求:「有时候回车确认太麻烦了,
+    /// 手还要移动到右边,新增一个空格确认的功能吧」)。
+    /// ⚠️ 两条边界,写在这里免得以后被"优化"掉:
+    ///   · **按住触发键(⌘)的那一局**,空格会组成 ⌘Space —— 那是系统 Spotlight 的热键,
+    ///     可能**先于**我们的 tap 被系统收走 ⇒ 那一局空格不一定到得了我们手里(松 ⌘ 确认照旧有效 ✓);
+    ///   · 三指唤起是**钉住**局(没有 ⌘),空格就是纯空格 ⇒ 一定会走到我们这里 ✓ 也正是用户的主用法 ✓。
+    /// 既已进 `navKeys` ⇒ 导航期会被**吞掉**(底下的 App 收不到空格、不会翻页)✓ 与其它导航键同一约定 ✓。
+    private static let keySpace: Int64 = 0x31
     private static let keyQ: Int64 = 0x0C
     private static let keyW: Int64 = 0x0D
     private static let keyM: Int64 = 0x2E
@@ -110,7 +118,7 @@ final class HotkeyTapCenter {
     /// 按 2 不选中,还把 "2" 放行给底下的 App)。
     /// `Set([...])` 必须显式写:直接写数组字面量再 `.union` 会被推成 `[Int64]`(实测编译错)。
     private static let navKeys: Set<Int64> =
-        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keyQ, keyW, keyM, keyF, keyH, keyGrave])
+        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keySpace, keyQ, keyW, keyM, keyF, keyH, keyGrave])
             .union(digitKeys.keys)
     /// **⌘ + 动作键**(全匹配)⇒ 作用在"选中的那个 App / 那一扇窗"上。
     ///
@@ -424,6 +432,7 @@ final class HotkeyTapCenter {
         trace("navKey kc=\(keyCode)")
         switch keyCode {
         case Self.keyReturn: setState(.idle); emit(.confirm) // 钉住模式的确认键
+        case Self.keySpace: setState(.idle); emit(.confirm)  // 空格 = 同一个动作(见 keySpace 的两条边界)
         case Self.keyEsc: setState(.idle); emit(.cancel)
         case Self.keyQ: emit(.quitApp)
         case Self.keyW: emit(.closeWindow)
