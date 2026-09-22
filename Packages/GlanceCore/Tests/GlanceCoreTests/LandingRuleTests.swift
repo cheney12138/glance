@@ -82,7 +82,8 @@ struct LandingRuleTests {
         // 只有一个 App ⇒ 只能落它自己(没得选 ✓)
         #expect(LandingRule.landingIndex(count: 1, from: 0, reverse: false) == 0)
         // 越界/负数也不许崩(调用方算出来的下标可能来自"没找到" ✓)
-        #expect(LandingRule.landingIndex(count: 3, from: -1, reverse: false) == 1)
+        // -1 归一化成最后一格(下标 2)⇒ 正向绕回第 1 格(下标 0)✓ —— 我第一版断言写成 1 了 ✗
+        #expect(LandingRule.landingIndex(count: 3, from: -1, reverse: false) == 0)
         #expect(LandingRule.landingIndex(count: 3, from: 7, reverse: false) == 2)
     }
 }
