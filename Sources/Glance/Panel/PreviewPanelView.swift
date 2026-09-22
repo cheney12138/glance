@@ -707,7 +707,9 @@ final class LivePreviewPool: ObservableObject {
         // ★ 断言"只有该跑的窗才有流"(2026-09-22 `guard wanted.contains(wid)` 那一刀的病根)——
         //   真事故:看不见的卡也在换图(白帧)⇒ 掉帧,而且**没人断言**过 ✗
         //   running = 已建流 ∪ 正在建;keepAlive 豁免 = 刚离开环、还在养着的那几条 ✓
-        for viol in SessionInvariants.streamViolations(running: Array(handles.keys) + Array(pending),
+        //   ⚠️ 只算**已建流**:正在排队(pending)的那几条还没起,起流那一拍会再查一次 `wanted` ✓
+        //      ⇒ 把它们算进来会误报(冒烟二轮实测:"窗口 88 有流在跑"✗,其实它只是排着队 ✓)
+        for viol in SessionInvariants.streamViolations(running: Array(handles.keys),
                                                       wanted: wanted, keepAlive: Set(idleSince.keys)) {
             glog("[不变量] ⚠️ \(viol)")
         }
