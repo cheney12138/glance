@@ -940,6 +940,22 @@ final class ThreeFingerTap {
              + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
+    /// **截图会话里,手势也要让权**(2026-09-22 用户实报后加)。
+    ///
+    /// 病例:用户「我刚才截图, 然后好像误触唤起启动环了」—— 日志铁证:
+    ///   `[指点按] 四指 75ms 位移 norm=0.0028 abs=0.3 → 唤起并直接进未启动环(钉住)` ✗
+    ///   手指/掌缘压在触控板上,被读成"干净的四指轻点"(位移 0.3pt ✓ 时长 75ms ✓ 全都过闸)。
+    /// 结构缺口:键盘那条早就让权了(`captureSessionTookOver(keyCode:)` ⇒ 截图时放行导航键 ✓),
+    ///   而**手势这条(MultitouchSupport)从来没问过截图会话** ✗ ⇒ 截图时照样唤起 ✓
+    /// ⇒ 这里把同一套判据接到手势的两个生效点上(点按 + 四指按压)✓
+    @MainActor
+    private static func gestureBlockedByCapture(_ what: String) -> Bool {
+        let capture = CaptureSessionProbe.verdict()
+        guard capture.isCapture else { return false }
+        glog("[T32] 截图会话里忽略手势(\(what)):\(capture.reason)")
+        return true
+    }
+
     /// C 回调:主线程之外也可能被调 ⇒ 只喂数据、只在抬手帧判卷,回主线程才动作。
     private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
         let tap = ThreeFingerTap.shared
@@ -951,6 +967,7 @@ final class ThreeFingerTap {
                     let now = CFAbsoluteTimeGetCurrent()
                     guard now - tap.lastTapAt > 0.35 else { return }
                     tap.lastTapAt = now
+                    if ThreeFingerTap.gestureBlockedByCapture("四指按压") { return }
                     glog("[指点按] 四指按压 0.25s → 唤起并直接进未启动环(钉住)")
                     if tap.enabledFour { tap.onFireFour?() }
                     Haptics.fire(.summonFourFinger)
@@ -981,6 +998,7 @@ final class ThreeFingerTap {
                     return
                 }
                 tap.lastTapAt = now
+                if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
                 glog(String(format: "[指点按] 三指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
                             held, norm, absMove))
                 if tap.enabled { tap.onFire?() }
@@ -995,6 +1013,7 @@ final class ThreeFingerTap {
                     return
                 }
                 tap.lastTapAt = now
+                if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
                 glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
                             held, norm, absMove))
                 if tap.enabledFour { tap.onFireFour?() }
