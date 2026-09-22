@@ -218,32 +218,39 @@ struct GlanceApp: App {
 ///   · 菜单里**没有滑杆** ✗ ⇒ 连续量只能档位化,所以梯子是**一把**
 ///     (`LivePreviewPool.tiers` ✓,设置面板的滑杆也从它推范围与步长 ✓)
 private struct QuickSettingsMenu: View {
-    /// 档位是 String 型键(历史原因,键名不换 ✓)⇒ 用自定义 Binding 读写,
-    /// 读的口径与 `LivePreviewPool.tierFps` 完全一致(含"没写过 = 0 = 关" ✓)
-    private var tier: Binding<String> {
-        Binding(get: { String(LivePreviewPool.tierFps) },
-                set: { UserDefaults.standard.set($0, forKey: Keys.livePreviewTier) })
-    }
     @AppStorage(Keys.hapticEnabled) private var haptic = HapticPolicy.enabledDefault
     @AppStorage(Keys.hapticStrength) private var strength = HapticStrength.medium.rawValue
     @AppStorage(Keys.panelPinOnRelease) private var pin = KeyDefaults.pinOnRelease
     @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
 
     var body: some View {
+        // ★ 2026-09-22 用户反馈:「三级菜单的选项收到二级菜单实现, 操作路径太长了」——
+        //   原来 `快速设置 ▸ 实时预览 ▸ 10 fps` 要两个 hover 才到底 ✗
+        //   现在档位**摊在同一层**(用分组标题分开)⇒ 一个 hover + 一次点击 ✓
+        //   ⚠️ 菜单里**没有滑杆** ✗ ⇒ 档位只能这样一行一个,靠打勾表示当前档 ✓
         Menu("快速设置") {
-            Picker("实时预览", selection: tier) {
+            Section("实时预览") {
                 ForEach(LivePreviewPool.tiers, id: \.self) { v in
-                    Text(LivePreviewPool.tierLabel(v)).tag(String(v))
+                    // 一组互斥的勾选行:`get` 比当前档、`set` 只认"选中"(点已选中的不动 ✓)
+                    Toggle(LivePreviewPool.tierLabel(v), isOn: Binding(
+                        get: { LivePreviewPool.tierFps == v },
+                        set: { if $0 { UserDefaults.standard.set(String(v), forKey: Keys.livePreviewTier) } }))
                 }
             }
-            Divider()
-            Toggle("悬停触感", isOn: $haptic)
-            Picker("触感强度", selection: $strength) {
-                ForEach(HapticStrength.allCases, id: \.self) { s in Text(s.label).tag(s.rawValue) }
+            Section {
+                Toggle("悬停触感", isOn: $haptic)
             }
-            Divider()
-            Toggle("保持面板打开", isOn: $pin)
-            Toggle("高光效果", isOn: $sheen)
+            Section("触感强度") {
+                ForEach(HapticStrength.allCases, id: \.self) { s in
+                    Toggle(s.label, isOn: Binding(
+                        get: { strength == s.rawValue },
+                        set: { if $0 { UserDefaults.standard.set(s.rawValue, forKey: Keys.hapticStrength) } }))
+                }
+            }
+            Section {
+                Toggle("保持面板打开", isOn: $pin)
+                Toggle("高光效果", isOn: $sheen)
+            }
         }
     }
 }
