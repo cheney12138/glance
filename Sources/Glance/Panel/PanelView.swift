@@ -288,50 +288,15 @@ struct PanelView: View {
         .animation(controller.selectionAnimation(PanelMotion.select), value: controller.launchIndex)
     }
     
-    /// 滑动托底:宽 = 图标宽,上下各出 8px;换选中时整枚胶囊弹过去(位移+宽度同曲线)
+    /// 滑动托底 —— **实现搬去 `PuckView.swift`**(2026-09-22 拆分:它是独立一块,
+    /// 几何/视觉/动效/落点数学全在那边,改它不用翻这个 500 行的视图 ✓)。
+    /// 这里只负责"喂当前状态"。
     private var puck: some View {
-        RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-            .fill(PanelColors.puck)
-            // demo: inset 0 1px 1px rgba(255,255,255,.6)——托底上缘一道受光唇
-            .overlay(
-                RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-                    .strokeBorder(PanelColors.puckLip, lineWidth: 1)
-                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-            )
-            // demo: inset 0 -1px 6px rgba(0,0,0,.12)——底缘一道内阴影,托底才有厚度,不是贴纸
-            .overlay(alignment: .bottom) {
-                LinearGradient(colors: [.clear, .black.opacity(0.12)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 6)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous))
-            // 发丝边:把"纸片"放在玻璃上(实验台 P2)。用 strokeBorder = 画在边界**内侧**,
-            // 所以托底的尺寸/位置一个像素都没动(用户口径:只改颜色,大小位置动效别动)
-            .overlay(
-                RoundedRectangle(cornerRadius: PanelMetrics.rPuck, style: .continuous)
-                    .strokeBorder(PanelColors.puckBorder, lineWidth: 1)
-            )
-            .frame(width: PanelMetrics.icon, height: PanelMetrics.puckHeight)
-            // 换环时只有"选中了某一格"才显形(launchIndex == nil = 还没选任何一格)
-            // T91 v2:**换环后托底不上场**(用户实拍「选中态很怪, 嵌套太多圆角边框了」——
-            // 托底的圆角+发丝边 套在 幽灵壳的圆角 外面,再叠一层投影 = 三层圆角框套在一起)。
-            // 未启动的 App **只要"上浮"这一层反馈** —— 这正是 2026-09-16 给托盘里那一行定的规矩,
-            // 换环后它们搬进了主环,规矩不变:同一个东西,同一套语言。
-            .opacity(controller.entrySelected ? 0 : 1)
-            .offset(x: puckOffsetX,
-                    // 纵向 = 入场升起(与选中那一格同源同值,所以两者永远同步)
-                    y: controller.contentEntryRise)
-            .elevation(.puck)
-            // 弹簧,不是过冲 timingCurve:连着 Tab 横扫时,每一次打断都从**当前速度**续跑。
-            // 上膛门(开局第一帧 + 设置开关)见 PanelController.selectionAnimation
-            // ★ 2026-09-21 曾因"飞行途中不居中"把这里改成 `.animation(nil)`(当帧到位)✗;
-            //   2026-09-22 用户实拍后要回来:「这个白色滑块…**能跟随指针有一个滑动的动效**就行了」——
-            //   即:托底要**跟着指针滑过去** ✓ 用 `PanelMotion.slide`(与托底同族的那根弹簧 ✓)。
-            //   注:之前那次"看起来没居中"是**飞行中的一帧**被当成了静止姿态;滑是用户要的 ✓
-            .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
-            // ⚠️ 这里**故意没有** `.animation(…, value: entrySelected)`(T91 病例,
-            // 用户实报「按下切换环的时候,在未启动的环上会有一个向右淡出的滑块效果」):
-            // 托底的消失若走动画,会和"滑到 appIndex"叠在一起演 —— 读起来像"选中滑走了",
-            // 而换环根本不是选中移动。去掉这条 ⇒ 换环时它**当帧就没了**。
+        Puck(offsetX: Puck.offsetX(appIndex: controller.appIndex),
+             entryRise: controller.contentEntryRise,
+             visible: !controller.entrySelected,
+             animation: controller.selectionAnimation(PanelMotion.slide),
+             animationValue: controller.appIndex)
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)
@@ -340,12 +305,6 @@ struct PanelView: View {
     /// 用户实评"丑的要死");v3 起槽的选中由**记号自己**表达(点阵点亮 + 描边胶囊),
     /// 托底永远只属于主环的 App。历史账:"缩宽"与"滑过去淡出"两案也都试过、都被否
     /// —— 那是在"槽里没有可见记号"的前提下的困境;有了点阵,落点由记号承担。
-    private var puckOffsetX: CGFloat {
-        // T91 v2:托底只属于已启动的主环(换环后它不上场)⇒ 永远跟 appIndex
-        let i = controller.appIndex
-        return RingGrid.puckOffsetX(appIndex: i, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
-    }
-
     /// 顶缘一道**极窄的**受光边(深色专用)。
     ///
     /// 深色面板的"厚度"不来自阴影 —— 黑影子在黑底上没有对手。真正让人读出"这是块板"

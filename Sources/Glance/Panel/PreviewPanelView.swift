@@ -65,12 +65,6 @@ struct PreviewPanelView: View {
         .offset(y: controller.contentEntryRise)
         // 几何仍按原口径留出阴影留白(与 `previewContentSize`/`TrayGeometry` 一致 ✓)
         // —— 只撤**视觉层**,不动尺寸账 ⇒ 窗口大小/位置与之前完全一致 ✓
-        // ★ 2026-09-22:托盘顶部裁掉 `trayTopClip`(默认 = iconLift)——
-        //   图标上浮时会让开上面那一格,裁掉它 ⇒ 托盘**物理上不可能露出来** ✓
-        //   (只裁最上面这一小格;正常状态下托盘顶边本来就被长条/图标压着 ⇒ 观感不变 ✓)
-        .mask(alignment: .bottom) {
-            Rectangle().padding(.top, PanelMetrics.trayTopClip)
-        }
         .padding(PanelMetrics.shadowPadPop)
         // 托盘窗口按**整局最大布局**开(见 PanelController.trayMaxContentSize):本组摆得小时,
         // 玻璃要**贴着窗口底边**(= 与今天等尺寸时的位置完全一致),水平居中由默认对齐负责。
