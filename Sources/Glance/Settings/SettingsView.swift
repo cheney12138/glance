@@ -59,6 +59,17 @@ struct SettingsView: View {
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
+
+    /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
+    @State private var liveTier: Double = Double(LivePreviewPool.tierFps)
+    private var tierBinding: Binding<Double> {
+        Binding(get: { liveTier },
+                set: { newValue in
+                    liveTier = newValue.rounded()
+                    // 写回既有键(档位只在"起流/换档"时被读 ⇒ 下一次路过即生效 ✓ 不用重启 ✓)
+                    UserDefaults.standard.set(String(Int(liveTier)), forKey: Keys.livePreviewTier)
+                })
+    }
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
@@ -170,6 +181,25 @@ struct SettingsView: View {
                         .init(id: AppearancePreference.light, label: "浅色"),
                         .init(id: AppearancePreference.dark, label: "深色"),
                     ], value: $appearance)
+                }
+                // ★ 2026-09-22 用户要求:「现在 live 是开着的吗, 做成设置, 给几个档位,
+                //   用bar控制, 0 代表关闭, 最大 30fps」。
+                //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
+                //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
+                //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
+                SettingsRow(title: "实时预览",
+                            desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
+                    HStack(spacing: 8) {
+                        Slider(value: tierBinding, in: 0...30, step: 5)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                    }
                 }
                 SettingsRow(title: "App 间距",
                             desc: "选中图标与两侧图标的距离。",
