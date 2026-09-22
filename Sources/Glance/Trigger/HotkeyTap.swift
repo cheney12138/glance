@@ -192,6 +192,12 @@ final class HotkeyTapCenter {
     /// ⇒ 这个窗口只管"多长的轻点还算轻点",不必替浏览抢时间 ✓
     /// (用户没要求开关,故为常量 ✓)
     private static let quickTapWindow: TimeInterval = 0.45
+
+    /// **"先按住 ⌘ 再点 Tab"** 的判据(秒):超过它 ⇒ 立刻弹面板 ✓
+    /// (用户实报"按住要等 0.3~0.5 才出来" ✗ —— 这一条把"想浏览的人"从延后那条路上摘出来 ✓)
+    private static let preHoldToBrowse: TimeInterval = 0.15
+    /// 触发修饰键**按下的时刻**(`.armed` 那一步记 ✓)—— 用来判"先按住再点 Tab" ✓
+    private var modifierDownAt: CFAbsoluteTime = 0
     /// 本局的 `.begin` 发出去了没有 + 待发的方向 + 定时器
     private var beginEmitted = false
     private var pendingBeginForward = true
@@ -338,6 +344,17 @@ final class HotkeyTapCenter {
             emit(forward ? .begin : .beginReverse)
             return
         }
+        // ★★ 2026-09-22 用户实报「延迟给的太大了, 按住大概要等个 0.3~0.5 面板才出来」⇒
+        //   加一条**更早的判据**:`⌘` **先按下、停一会儿**再点 Tab = 明显是想浏览 ⇒ **立刻弹面板** ✓
+        //   而 `⌘Tab` 一起滚过去(轻点 ✓)才走延后那条 ✓
+        //   依据:浏览的人是"先按住 ⌘,再连点 Tab";轻点的人是"两指一起按下、一起松开" ✓
+        //   0.15s:比"有意按住"的停顿短、比单纯的按键重叠(几十毫秒)长 ✓
+        let held = CFAbsoluteTimeGetCurrent() - modifierDownAt
+        if held > Self.preHoldToBrowse {
+            beginEmitted = true
+            emit(forward ? .begin : .beginReverse)
+            return
+        }
         beginEmitted = false
         pendingBeginForward = forward
         let work = DispatchWorkItem { [weak self] in
@@ -429,6 +446,7 @@ final class HotkeyTapCenter {
         trace("flagsChanged kc=\(keyCode) down=\(modifierDown) state=\(state)")
         switch (state, modifierDown) {
         case (.idle, true):
+            modifierDownAt = CFAbsoluteTimeGetCurrent()   // ★ 记下"⌘ 是什么时候按下的"(见 handleHotKey ✓)
             setState(.armed) // 裸按触发修饰键只待命,什么都不发生
         case (.armed, false):
             setState(.idle)  // 待命期放手:恢复原状
