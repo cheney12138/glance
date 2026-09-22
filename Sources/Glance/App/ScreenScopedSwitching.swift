@@ -154,7 +154,12 @@ enum QuickSwitch {
         //   正好把"轻点要快"这件事毁掉 ✗(自己 review 时抓到的 ✓)
         let onScreen = regular.filter { ScreenWindowIndex.hasWindow(pid: $0.processIdentifier,
                                                                    on: screen, snapshot: snap) }
-        let order = MruEvidence.shared.ordered(pids: onScreen.map(\.processIdentifier))
+        // ★ 顺序:**先按"这块屏上最近用过"**(ScreenRecency ✓ —— 与面板落点同一本账 ✓),
+        //   没有本屏记录的再按全局 MRU 补 ✓(2026-09-22 用户实报:全局顺序跨屏污染 ✗)
+        let pids = onScreen.map(\.processIdentifier)
+        func rank(_ pid: pid_t) -> Int? { ScreenRecency.shared.rank(of: pid, on: screen) }
+        let order = pids.filter { rank($0) != nil }.sorted { (rank($0) ?? .max) < (rank($1) ?? .max) }
+            + MruEvidence.shared.ordered(pids: pids.filter { rank($0) == nil })
         guard order.count > 1 else {
             if isTraceEnabled {
                 glog("[轻点⌘Tab] \(screen.localizedName) 上不足两个 App ⇒ 不动作(不跨屏 ✗)")

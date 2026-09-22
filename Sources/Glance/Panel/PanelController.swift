@@ -418,7 +418,9 @@ final class PanelController: ObservableObject {
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
         let screen = contextScreen
-        groups = WindowEnumerator.orderByMRU(raw)
+        // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
+        //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
+        groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
@@ -2477,7 +2479,8 @@ final class PanelController: ObservableObject {
     /// 而动过手之后 MRU 必然变(刚碰过的 App 排到最前)。
     /// macOS 自己的行为也是这样:按住 ⌘ 期间顺序是死的,MRU 只在**开局**那一刻起作用。
     private func mergeRefreshed(_ raw: [AppGroup]) -> [AppGroup] {
-        let fresh = WindowEnumerator.orderByMRU(raw) // 只用来决定"本局中途新冒出来的 App"排哪
+        // 只用来决定"本局中途新冒出来的 App"排哪 ⇒ 同样按本局的屏 ✓
+        let fresh = WindowEnumerator.orderByMRU(raw, on: contextScreen ?? NSScreen.main ?? NSScreen.screens[0])
         var byPID: [pid_t: AppGroup] = [:]
         for g in fresh { byPID[g.pid] = g }
         var merged: [AppGroup] = []

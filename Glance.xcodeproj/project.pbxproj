@@ -39,6 +39,7 @@
 		5A00000000000000000000C2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A00000000000000000000C1 /* Sparkle */; };
 		AA0000000000000000000F01 /* FrameProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F02 /* FrameProbe.swift */; };
 		AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F04 /* SingleInstanceGuard.swift */; };
+		AA0000000000000000000201 /* ScreenRecency.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000200 /* ScreenRecency.swift */; };
 		AA0000000000000000000100 /* Keys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000101 /* Keys.swift */; };
 		AA0000000000000000000120 /* PuckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000121 /* PuckView.swift */; };
 		AA0000000000000000000110 /* DebugFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000111 /* DebugFlags.swift */; };
@@ -81,6 +82,7 @@
 		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F02 /* FrameProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProbe.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F04 /* SingleInstanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleInstanceGuard.swift; sourceTree = "<group>"; };
+		AA0000000000000000000200 /* ScreenRecency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenRecency.swift; sourceTree = "<group>"; };
 		AA0000000000000000000101 /* Keys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keys.swift; sourceTree = "<group>"; };
 		AA0000000000000000000121 /* PuckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PuckView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000111 /* DebugFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugFlags.swift; sourceTree = "<group>"; };
@@ -160,6 +162,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000027 /* WindowEnumerator.swift */,
+				AA0000000000000000000200 /* ScreenRecency.swift */,
 				AA0000000000000000000F08 /* AXWindowList.swift */,
 				AA0000000000000000000F06 /* ThumbnailRefresher.swift */,
 				5A0000000000000000000028 /* MruEvidence.swift */,
@@ -318,6 +321,7 @@
 				5A00000000000000000000C4 /* UpdateChecker.swift in Sources */,
 				5A00000000000000000000D1 /* SessionMarks.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
+				AA0000000000000000000201 /* ScreenRecency.swift in Sources */,
 				AA0000000000000000000100 /* Keys.swift in Sources */,
 				AA0000000000000000000120 /* PuckView.swift in Sources */,
 				AA0000000000000000000110 /* DebugFlags.swift in Sources */,

@@ -78,6 +78,8 @@ struct GlanceApp: App {
                     permissions.refresh()
                     if !permissions.allGranted { showPermissions() }
                     MruEvidence.shared.start()
+                    // ★ 按屏的"最近用过"账簿(2026-09-22 用户实报后加:落点被全局 MRU 跨屏污染 ✗)
+                    ScreenRecency.shared.start()
                     // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
                     ThumbnailRefresher.shared.start()
                     // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
