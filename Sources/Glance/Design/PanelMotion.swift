@@ -120,7 +120,11 @@ enum PanelMotion {
     ///     ⇒ 中间那几十毫秒里**托盘从图标下面露出来** ✓(而且露一下很像掉帧 ✗)
     /// 口径:**入场曲线与"选中上浮"必须是同一根弹簧** —— 它俩是同一次 `withAnimation` 的两个面,
     ///   本来就该同时到;分成两档就是"各走各的" ✗。要提速/减速就**两个一起动**(见 `select`)✓
-    static let entrance = Animation.spring(response: 0.22, dampingFraction: 0.60)
+    /// ⚡ 2026-09-22 回快(用户实报「app 上来的慢了...」):0.22 → **0.16** ——
+    /// 露头那件事**不再靠"同步曲线"解决**了(它解决不了:图标是两根弹簧叠加、托盘只有一根 ✗),
+    /// 改由**托盘比图标晚到 0.06s** + **托盘顶部裁剪**这两条结构性措施兜住 ✓
+    /// ⇒ 曲线回归"快"这一档,手感照用户原来的口径 ✓
+    static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 }

@@ -88,7 +88,15 @@ enum PanelMetrics {
     /// `k(16)`(上下各 8)→ **`k(22)`**(上下各 11):base 104 → 110、@1.2 实得 124.8 → **132pt**(+7.2)。
     /// 只动高度、宽度一格未碰(宽度 = `icon`,由格子决定)。
     /// 安全线:长条内容高 = `rowPadY*2 + icon` = 158.4pt @1.2,托底 132pt 仍在里面(上下各余 13.2)。
-    static var puckHeight: CGFloat { icon + k(22) }
+    /// 托底高度:2026-09-22 用户实拍后裁定「其实这个白色滑块只要有一半…高度没必要那么高」——
+    /// 原来 `icon + k(22)`(比图标还高 22pt)⇒ 现在**减半**:只比图标高出 `k(11)` ✓
+    /// (托底是"选中格坐着的板",不需要那么厚 ✓;它现在露出一截就够交代"这一格被选中" ✓)
+    static var puckHeight: CGFloat { icon + k(11) }
+
+    /// 托盘**顶部裁剪量**(2026-09-22 用户实报后加):把托盘顶部裁掉这么高,让它**不可能**
+    /// 在图标上浮的那几十毫秒里露出来(用户原话:「要不就裁一半托盘的高度…不要让它露出来」)。
+    /// 取 `iconLift` —— 图标最多抬起这么多 ⇒ 裁掉同一格就够 ✓(再多会切到托盘自己的受光边 ✗)
+    static var trayTopClip: CGFloat { iconLift }
     // § 指针跟随高光(demo `radial-gradient(220px circle …, transparent 60%)`)
     static var sheenExtent: CGFloat { k(220) } // 结束形状**半径**(不是直径!)
     static let sheenStop: CGFloat = 0.6 // 透明落在 60% → 可见半径 132
