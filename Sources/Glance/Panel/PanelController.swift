@@ -1647,10 +1647,13 @@ final class PanelController: ObservableObject {
                     launchIndex = next
                     trace("[T6] 选中(键盘 Tab): 未启动 [\(next + 1)/\(n)] \(launchables[next].name)")
                 }
-            } else if !backward, appIndex == groups.count - 1, launchSectionEnabled, tabEntersLaunchSection {
+            // ★ 2026-09-22 修「回得来、去不了」：这道门禁只装在**主环 → 未启动**这一边 ✗
+            //   (另一边"未启动 → 主环"从来就没门禁)⇒ 用户口径「上下是兜底的,关了之后
+            //   不管在哪个环, tab 都要能互相切换」⇒ 两边**对称**,都只由"段还在不在"决定 ✓
+            } else if !backward, appIndex == groups.count - 1, launchSectionEnabled {
                 setSegment(true, travel: .forward, launchIndex: 0)
                 trace("[T91] 段切换(Tab): 主环 → 未启动(选中 [1/\(launchables.count)] \(launchables[0].name))")
-            } else if backward, appIndex == 0, launchSectionEnabled, tabEntersLaunchSection {
+            } else if backward, appIndex == 0, launchSectionEnabled {
                 setSegment(true, travel: .backward, launchIndex: launchables.count - 1)
                 trace("[T91] 段切换(⇧Tab): 主环 → 未启动(选中 [\(launchables.count)/\(launchables.count)] \(launchables[launchables.count - 1].name))")
             } else {
