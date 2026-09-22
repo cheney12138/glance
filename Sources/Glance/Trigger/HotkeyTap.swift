@@ -940,6 +940,25 @@ final class ThreeFingerTap {
              + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
+    /// **生效后的事后归因**(2026-09-22 用户实报「三指划词的时候好像又误触了」)——
+    /// 生效之后 250ms 再看一眼指针有没有**继续移动**:
+    ///   · 几乎没动 ⇒ 真是一次轻点 ✓
+    ///   · 又挪了 8pt 以上 ⇒ 这一发其实是**划词/拖选的开头** ✗(手指还在板上滑,人是在选文字)
+    /// 它**只记日志、不改行为** ✓ —— 先把"哪些生效其实是误触"变成可数的数,
+    /// 再决定要不要"发现拖选就撤掉面板"(那是行为改动,得先问用户 ✓)。
+    @MainActor
+    static func logPostFirePointerDrift(_ what: String) {
+        let p0 = NSEvent.mouseLocation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let p1 = NSEvent.mouseLocation
+            let dist = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
+            if dist > 8 {
+                glog(String(format: "[指点按] ⚠️ %@ 生效后 250ms 指针又移动 %.0fpt ⇒ 这一发**像是划词/拖选的开头**",
+                            what, dist))
+            }
+        }
+    }
+
     /// **截图会话里,手势也要让权**(2026-09-22 用户实报后加)。
     ///
     /// 病例:用户「我刚才截图, 然后好像误触唤起启动环了」—— 日志铁证:
@@ -971,6 +990,7 @@ final class ThreeFingerTap {
                     glog("[指点按] 四指按压 0.25s → 唤起并直接进未启动环(钉住)")
                     if tap.enabledFour { tap.onFireFour?() }
                     Haptics.fire(.summonFourFinger)
+                    ThreeFingerTap.logPostFirePointerDrift("四指按压")
                 }
             }
             return 0   // 按压还没结束
@@ -999,10 +1019,11 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held, norm, absMove))
+                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
+                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
                 if tap.enabled { tap.onFire?() }
                 Haptics.fire(.summonThreeFinger)
+                ThreeFingerTap.logPostFirePointerDrift("三指点按")
             }
         case .fireFour(let held, let norm, let absMove):
             DispatchQueue.main.async {
@@ -1014,10 +1035,11 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, norm, absMove))
+                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
+                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
+                ThreeFingerTap.logPostFirePointerDrift("四指点按")
             }
         }
         return 0
