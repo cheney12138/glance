@@ -960,6 +960,25 @@ final class ThreeFingerTap {
 
         private(set) var pressFired = false   // 本轮已经"按压触发"过(抬手后不再按点按重复生效)
 
+        /// **一轮结束:清账**(2026-09-22 病例)。
+        ///
+        /// 病例:掌搭在板上时,`feed` 走 `return touching` 那条(=`0`,于是**判卷照跑** ✓),
+        /// 但 `pressActive` **留着** ✗ ⇒ 账本不重置 ⇒ `distinctIDs` **跨好几次点按累计** ⇒
+        /// 手指数被算成 **11** ✗ ⇒ "只认 3/4 指"永不成立 ⇒ **手势完全失效** ✗
+        /// (以前靠"中途开火"那条不需要收口的路径撑着 ✓ —— 一删它就全露出来 ✓)
+        /// 口径:判完卷立刻清,好让**下一次真实落指**从零开始 ✓
+        mutating func endRound() {
+            pressActive = false
+            pressFired = false
+            maxTouches = 0; distinctIDs.removeAll()
+            maxNormMove = 0; maxAbsMove = 0
+            palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
+            statesSeen.removeAll(); sawRealTouch = false
+            firstNorm.removeAll(); firstAbs.removeAll()
+            countedSince = 0
+            sawFrameGap = false; firstLiftAt = 0; activeIDs = []
+        }
+
         /// **按压触发**(2026-09-18 用户提议:「给四指加上点按 + 按压」):四根手指齐压
         /// ≥0.25s 且几乎没动 ⇒ **当场生效**,不必抬手。点按失手时的兜底 —— 按住的手指
         /// 有几十帧把 identifier 记全,不存在"没同帧落齐"的竞态。
@@ -1180,10 +1199,14 @@ final class ThreeFingerTap {
         //   ⚠️ 恢复记录(2026-09-22):我删"中途开火"那一块时,**把这一段一起切掉了** ✗
         //      ⇒ `judge()` 一夜之间没有任何调用点 ⇒ 三指点按彻底不生效 ✗
         //      (只靠"构建通过"发现不了 —— 教训:**删块之后必须回读调用点** ✓)
+        // 先把要进日志的东西取出来,再判卷,再**立刻清账**(顺序有讲究 ✓)
+        let states = tap.press.statesSeen.sorted().map(String.init).joined(separator: "/")
         let outcome = tap.press.judge()
+        tap.press.endRound()      // ★ 见 endRound 的病例:不清 ⇒ id 跨轮累计 ⇒ 手指数算成 11 ✗
         DispatchQueue.main.async {
             let tap = ThreeFingerTap.shared
             let now = CFAbsoluteTimeGetCurrent()
+            _ = states
             switch outcome {
             case let .fireThree(held, norm, absMove):
                 guard now - tap.lastTapAt > 0.35 else {
@@ -1193,7 +1216,7 @@ final class ThreeFingerTap {
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
                 glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
+                            held, states, norm, absMove))
                 if tap.enabled { tap.onFire?() }
                 Haptics.fire(.summonThreeFinger)
                 ThreeFingerTap.logPostFirePointerDrift("三指点按")
@@ -1206,7 +1229,7 @@ final class ThreeFingerTap {
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
                 glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
+                            held, states, norm, absMove))
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")
