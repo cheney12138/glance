@@ -852,35 +852,25 @@ final class LiveOutput: NSObject, SCStreamOutput {
 /// ⇒ 主线程 12–24ms 卡顿(200 个样本里 30 个 ≥10ms)⇒ 滑块弹簧在那一帧掉帧。
 /// 现在:后台算 + 缓存;没算好就这一层不画(底图仍是清晰的截图,不闪)。
 final class SeatImageCache {
-    /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
-    func reset() { queue.async { [weak self] in self?.store.removeAll(); self?.inFlight.removeAll() } }
-
     static let shared = SeatImageCache()
-    private let lock = NSLock()
-    private var store: [CGWindowID: CGImage] = [:]
-    private var inFlight: Set<CGWindowID> = []
+
+    /// 三张图缓存合并出来的那一本账(见 `Design/ImageCache.swift`)——
+    /// ⚠️ 老实现里有个**真 bug**:`inFlight` 登记之后如果变换失败就提前 return ⇒ 那扇窗永久卡在
+    ///    "正在准备" ⇒ 托底图再也不出来 ✗。通用实现里释放只有一条路 ✓
+    private let cache = ImageCache<CGWindowID, CGImage>(label: "glance.seat")
     private let ctx = CIContext(options: [.useSoftwareRenderer: false])
-    private let queue = DispatchQueue(label: "glance.seat", qos: .utility)
+
+    /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
+    func reset() { cache.reset() }
 
     /// 取"座"图;没有就返回 nil(并顺手后台算一张)
     func seat(wid: CGWindowID, source: NSImage) -> CGImage? {
-        lock.lock()
-        if let c = store[wid] { lock.unlock(); return c }
-        let busy = inFlight.contains(wid)
-        if !busy { inFlight.insert(wid) }
-        lock.unlock()
-        guard !busy else { return nil }
+        // ★ 这一步留在**主线程**(与老代码逐字一致 ✓);也正因为它在登记之前 ⇒ 失败时根本不会占账 ✓
         guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        // 参数在主线程取好再闭包捕获(后台读这些全局量 = 数据竞争 ✗)
         let radius = PanelMetrics.lightsBlur * PanelScreen.scale
-        queue.async { [weak self] in
-            guard let self else { return }
-            let out = Self.blur(cg, radius: radius, ctx: self.ctx)
-            self.lock.lock()
-            if let out { self.store[wid] = out }
-            self.inFlight.remove(wid)
-            self.lock.unlock()
-        }
-        return nil
+        let ctx = self.ctx
+        return cache.image(for: wid) { Self.blur(cg, radius: radius, ctx: ctx) }
     }
 
     /// 预热(面板打开时后台把整个环的窗都算一遍 ⇒ hover 时一次都不用算)
@@ -1022,35 +1012,24 @@ private enum CardSizeLog {
 }
 
 final class CardImageCache {
-    /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
-    func reset() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.store.removeAll(); self.inFlight.removeAll()
-        }
-    }
-
     struct Prepared { let cg: CGImage; let scale: CGFloat }
     static let shared = CardImageCache()
-    private let lock = NSLock()
-    private var store: [CGWindowID: Prepared] = [:]
-    private var inFlight: Set<CGWindowID> = []
-    private let queue = DispatchQueue(label: "glance.cardimg", qos: .utility)
+
+    /// 与 `SeatImageCache` 同一本账(见 `Design/ImageCache.swift`)——合并前它俩是两份同形状的代码,
+    /// 于是**同一个"卡在 inFlight"的 bug 被抄了两遍** ✗
+    private let cache = ImageCache<CGWindowID, Prepared>(label: "glance.cardimg")
+
+    /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
+    func reset() { cache.reset() }
 
     func image(wid: CGWindowID, source: NSImage, target: CGSize) -> Prepared? {
-        lock.lock()
-        if let p = store[wid] { lock.unlock(); return p }
-        let busy = inFlight.contains(wid)
-        if !busy { inFlight.insert(wid) }
-        lock.unlock()
-        guard !busy else { return nil }
+        // 老代码在主线程做这一步 ⇒ 保持不变 ✓(而且它在登记之前 ⇒ 失败不占账 ✓)
         guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let scale = PanelScreen.scale
+        let scale = PanelScreen.scale                                    // 主线程取 ✓
         // 目标尺寸由调用方给(方案 A:小窗不放大 ⇒ 目标可能小于卡片框)
         let pxW = max(2, Int((target.width * scale).rounded()))
         let pxH = max(2, Int((target.height * scale).rounded()))
-        queue.async { [weak self] in
-            guard let self else { return }
+        return cache.image(for: wid) {
             var out: CGImage?
             if let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
                                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
@@ -1066,12 +1045,8 @@ final class CardImageCache {
                 }
                 out = ctx.makeImage()
             }
-            self.lock.lock()
-            if let out { self.store[wid] = Prepared(cg: out, scale: scale) }
-            self.inFlight.remove(wid)
-            self.lock.unlock()
+            return out.map { Prepared(cg: $0, scale: scale) }
         }
-        return nil
     }
 
     func prewarm(_ items: [(wid: CGWindowID, source: NSImage, target: CGSize)]) {
