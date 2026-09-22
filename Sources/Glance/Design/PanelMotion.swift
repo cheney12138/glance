@@ -111,9 +111,16 @@ enum PanelMotion {
     // ⚡️ 2026-09-17 极端值试验:用户对 0.16→0.08 的差别**感觉不到** ⇒ 先走到"几乎瞬时",
     // 用来验证"这个旋钮到底管不管那一段"。若极端值也没变化 ⇒ 管的不是它,去查别的层
     // (日志里 `[T6] 入场:…` 那行会说清这一局演了哪几层)。
-    /// ⚠️ 2026-09-17:入场"上浮"已整段取消(起点幅度给 0,见 PanelController.showPanel)⇒
-    /// 这一档现在**没有主环的用武之地**(留着给别处/以后)。值回退到取消前的那一档。
-    static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
+    /// ★★ 2026-09-22 用户实报后改:入场这一档**必须与 `select` 同档**。
+    ///
+    /// 病例(用户原话):「app 下面的底部托盘, tab/hover 选中 app 的时候, 它冒头比 app 上浮的要快,
+    ///   然后等 app 上浮完成才能遮住它, 不要让它露出来。或者速度变慢。」
+    ///   ⇒ 这里原本是 `spring(0.16, 0.62)`(比 `select` 的 0.22 **快一档** ✗)⇒
+    ///     托盘/托底 0.16s 就到位了,而图标的"上浮 −iconLift"那一段还在走 0.22s ✗
+    ///     ⇒ 中间那几十毫秒里**托盘从图标下面露出来** ✓(而且露一下很像掉帧 ✗)
+    /// 口径:**入场曲线与"选中上浮"必须是同一根弹簧** —— 它俩是同一次 `withAnimation` 的两个面,
+    ///   本来就该同时到;分成两档就是"各走各的" ✗。要提速/减速就**两个一起动**(见 `select`)✓
+    static let entrance = Animation.spring(response: 0.22, dampingFraction: 0.60)
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 }
