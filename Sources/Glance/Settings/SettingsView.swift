@@ -20,9 +20,8 @@ import GlanceCore
 ///      不写动机、不写设计史、不写开发者感受(2026-09-15 用户实评:「毕竟是一个产品,功能描述要严谨严肃一点」)。
 struct SettingsView: View {
     /// 「三指点按唤起面板」的小字。
-    /// ⚠️ 系统开了「三指拖移」时必须**如实说**:拖拽的起手拍与轻点在触控板上是同一个动作 ✗
-    /// (实测这台机器 `TrackpadThreeFingerDrag = 1` ✓,内置域与蓝牙域各一份 ⇒ 两个都看 ✓)
-    /// 我们能做的兜底:真起拖了就把这次唤起收掉(见 `ThreeFingerTap.cancelIfDragStarted` ✓)
+    /// ⚠️ 常态小字**只留一句话**;那层"与系统三指拖移共用同一个动作"的解释放在 `threeFingerTapHelp`
+    /// (hover ✓)—— 判卷修好之后它已不是"需要贴在脸上"的警告 ✓(用户裁定 ✓)
     /// 悬停才展开的解释(常态小字只留一句结论 ✓)
     static var threeFingerTapHelp: String {
         """
