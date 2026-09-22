@@ -324,10 +324,15 @@ final class Snapshotter: ObservableObject {
         //   病例(2026-09-22):子窗口被默认拍进来 ⇒ 画面被撑大 ⇒ 比例不符 ⇒ 多出来的是透明像素 ⇒ 卡片一块黑 ✗
         //   修掉 `includeChildWindows` 之后,这一行仍留着 —— 下次再有"图与尺寸不符",一眼可判 ✓
         //   (只在 trace 下打;一拍一张图,量不大 ✓)
+        //   ★ 要打的是**实得尺寸** —— 它才是判据(只打"请求"等于没打:两张图看起来都会是 720x450 ✗)。
+        //     实得与"窗"的宽高比不一致 ⇒ 就是子窗口/多余内容被拍进来了 ✓
+        var capturedSize: (Int, Int)?
         defer {
             if isTraceEnabled {
-                glog(String(format: "[拍照] wid=%u 窗 %.0fx%.0f 请求 %dx%d",
-                            w.wid, w.bounds.width, w.bounds.height, pxW, pxH))
+                let got = capturedSize.map { "\($0.0)x\($0.1)" } ?? "nil"
+                glog(String(format: "[拍照] wid=%u 窗 %.0fx%.0f(比例 %.2f) 请求 %dx%d 实得 %@",
+                            w.wid, w.bounds.width, w.bounds.height,
+                            w.bounds.width / max(w.bounds.height, 1), pxW, pxH, got))
             }
         }
 
@@ -359,6 +364,7 @@ final class Snapshotter: ObservableObject {
                     if let error {
                         cont.resume(returning: (nil, error.localizedDescription))
                     } else if let img = output?.sdrImage {
+                        capturedSize = (img.width, img.height)
                         cont.resume(returning: (Self.trimTransparentEdges(img), nil))
                     } else {
                         cont.resume(returning: (nil, nil))
@@ -380,6 +386,7 @@ final class Snapshotter: ObservableObject {
         if #available(macOS 14.2, *) { config.includeChildWindows = false }
         do {
             let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            capturedSize = (img.width, img.height)
             return (Self.trimTransparentEdges(img), nil)
         } catch {
             return (nil, error.localizedDescription)
