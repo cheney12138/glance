@@ -932,7 +932,11 @@ final class ThreeFingerTap {
         /// 防误触其余双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
         mutating func pressFireIfDue() -> Bool {
             guard !pressFired, maxTouches >= 4, distinctIDs.count >= 4,
-                  CFAbsoluteTimeGetCurrent() - beganAt >= 0.25,
+                  // ★ 2026-09-22 由 0.25s 拉长到 0.45s(用户实报「四指下滑也会唤起」):
+                  //   这条是"四指按住"的兜底路径 ✓,而**四指下滑的前 0.25s 就是"四指按住"** ✗ ——
+                  //   下滑是**加速**的 ⇒ 0.25s 时位移还没到 maxMove 门槛 ⇒ 位移门形同虚设 ✗
+                  //   时长拉长后,下滑到 0.45s 早已越过门槛(位移门就能拦住它 ✓)
+                  CFAbsoluteTimeGetCurrent() - beganAt >= 0.45,
                   maxNormMove <= ThreeFingerTap.maxMove else { return false }
             pressFired = true
             return true
@@ -1110,11 +1114,16 @@ final class ThreeFingerTap {
                     guard now - tap.lastTapAt > 0.35 else { return }
                     tap.lastTapAt = now
                     if ThreeFingerTap.gestureBlockedByCapture("四指按压") { return }
-                    glog("[指点按] 四指按压 0.25s → 唤起并直接进未启动环(钉住)")
+                    // 带上**位移真值**(下次"下滑有没有被误判"一眼可判 ✓;阈值就靠它定 ✓)
+                    glog(String(format: "[指点按] 四指按压 0.45s → 唤起(手指位移 %.4f ≤ 阈值 %.3f ✓)",
+                                tap.press.maxNormMove, ThreeFingerTap.maxMove))
                     if tap.enabledFour { tap.onFireFour?() }
                     Haptics.fire(.summonFourFinger)
                     ThreeFingerTap.logPostFirePointerDrift("四指按压")
-                    // (同上:四指没有对应的系统拖移 ⇒ 不挂撤销 ✓)
+                    // ★ 四指**按压**挂拖拽/滑动撤销(与四指**轻点**不同 ✓):
+                    //   按住路径是**手指还在板上**时开火的 ⇒ 若它其实是"四指下滑",下滑会继续 ⇒
+                    //   事件监听/位移检查会当场把它撤掉 ✓(四指轻点则不挂:轻点之后拖东西是正当用法 ✓)
+                    ThreeFingerTap.cancelIfDragStarted(reason: "四指按压")
                 }
             }
             return 0   // 按压还没结束
