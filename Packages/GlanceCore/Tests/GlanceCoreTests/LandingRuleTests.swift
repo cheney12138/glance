@@ -66,4 +66,23 @@ struct LandingRuleTests {
         #expect(LandingRule.landingIndex(count: 1, reverse: true) == 0)
         #expect(LandingRule.landingIndex(count: 2, reverse: false) == 1)
     }
+
+    /// 实报(2026-09-22,带截图):「回来还是在 Chrome 上」——
+    /// 环序本该 `[当前 App, 上一个, …]`,落点 = 第二格 ✓;
+    /// 但那次第一格是 IntelliJ、当前 App 是 **Chrome(第 2 格)** ✗
+    /// ⇒ 老口径(固定取第 1 格)落到了 **Chrome 自己**身上 ✗(按一下什么都没换)。
+    /// 新口径:显式传"当前 App 在第几格"⇒ 无论顺序怎么偏,**落点都跳过自己** ✓
+    @Test("落点从「当前 App 的位置」算:顺序偏了也不许落到自己身上")
+    func landingSkipsCurrentWhereverItIs() {
+        // 3 个 App,当前在第 2 格(下标 1)⇒ 正向落第 3 格(下标 2)、反向落第 1 格(下标 0)
+        #expect(LandingRule.landingIndex(count: 3, from: 1, reverse: false) == 2)
+        #expect(LandingRule.landingIndex(count: 3, from: 1, reverse: true) == 0)
+        // 当前在最后一格 ⇒ 正向绕回第 1 格
+        #expect(LandingRule.landingIndex(count: 3, from: 2, reverse: false) == 0)
+        // 只有一个 App ⇒ 只能落它自己(没得选 ✓)
+        #expect(LandingRule.landingIndex(count: 1, from: 0, reverse: false) == 0)
+        // 越界/负数也不许崩(调用方算出来的下标可能来自"没找到" ✓)
+        #expect(LandingRule.landingIndex(count: 3, from: -1, reverse: false) == 1)
+        #expect(LandingRule.landingIndex(count: 3, from: 7, reverse: false) == 2)
+    }
 }

@@ -475,7 +475,17 @@ final class PanelController: ObservableObject {
         // 入场动效要靠它判断"这一局托底到底会不会滑"(见 showPanel 的两条路)
         lastLandedIndex = appIndex
         SessionMarks.step("落点")
-        appIndex = advanceOnOpen ? LandingRule.landingIndex(count: groups.count, reverse: reverse) : 0
+        // ★ 落点从"**当前 App 在哪一格**"算(2026-09-22 病例:第一格不一定是当前 App ✗ ⇒
+        //   落点落到自己身上,用户按一下什么都没换 ✗)。顺序里的当前 App 用窗口表判 ✓
+        let currentIdx = WindowEnumerator.frontmostPID(of: Set(groups.map(\.pid)))
+            .flatMap { pid in groups.firstIndex { $0.pid == pid } } ?? 0
+        appIndex = advanceOnOpen
+            ? LandingRule.landingIndex(count: groups.count, from: currentIdx, reverse: reverse)
+            : 0
+        if isTraceEnabled {
+            glog("[落点] 当前=第 \(currentIdx + 1) 格(\(groups.indices.contains(currentIdx) ? groups[currentIdx].appName : "?"))"
+                 + " · 顺序 " + groups.prefix(4).map(\.appName).joined(separator: " > "))
+        }
         // 落点这行**每次都打**:开关 × 正反向 × 环序有四种走法,只看"高亮在第几格"分不清是哪一种 ——
         // 下次再说"开关没生效",看这一行就够(第一格是不是当前 App、落点是不是上一个 App 一目了然)
         if groups.indices.contains(appIndex) {

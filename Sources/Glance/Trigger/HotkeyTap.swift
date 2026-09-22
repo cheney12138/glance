@@ -186,8 +186,12 @@ final class HotkeyTapCenter {
     /// **轻点 vs 按住**的分界(秒)。判据(见 handleHotKey 的注释):
     ///   · 这个窗口内**松开** ⇒ 轻点 ⇒ 不弹面板,直接切到上一个 App ✓
     ///   · 窗口内**再按一次 Tab**,或**按住超过**它 ⇒ 弹面板(进入浏览)✓
-    /// 0.22s:比"有意浏览"的按住明显短、比机械轻点(80–150ms)明显长 ✓(用户没要求开关,故为常量 ✓)
-    private static let quickTapWindow: TimeInterval = 0.22
+    /// **0.45s**(2026-09-22 由 0.22 上调:用户实报"还是能看到面板" ✗ ——
+    /// 真人"按 ⌘、点 Tab、松 ⌘"常常超过 220ms ⇒ 被判成"按住" ✗)。
+    /// 0.45s 的依据:**浏览那条路有更快的入口** —— 再按一次 Tab 会**立刻**弹面板 ✓
+    /// ⇒ 这个窗口只管"多长的轻点还算轻点",不必替浏览抢时间 ✓
+    /// (用户没要求开关,故为常量 ✓)
+    private static let quickTapWindow: TimeInterval = 0.45
     /// 本局的 `.begin` 发出去了没有 + 待发的方向 + 定时器
     private var beginEmitted = false
     private var pendingBeginForward = true

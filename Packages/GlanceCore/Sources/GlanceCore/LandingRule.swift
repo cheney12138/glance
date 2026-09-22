@@ -25,7 +25,20 @@ public enum LandingRule {
     /// 为什么正向不是 0:第一格是**当前 App** —— 落在那里等于"选中自己",
     /// 用户按一次 ⌘Tab 什么都没换,会被读成"这个开关没生效"(实评原文)。
     public static func landingIndex(count: Int, reverse: Bool) -> Int {
+        landingIndex(count: count, from: 0, reverse: reverse)
+    }
+
+    /// 从"**当前 App 所在的那一格**"起算的落点(2026-09-22 加)。
+    ///
+    /// 病例(用户实报,带截图):「回来还是在 Chrome 上」——
+    ///   环序本该是 `[当前 App, 上一个 App, …]`,落点 = 第二格 ✓;
+    ///   可那次第一格是 IntelliJ、当前 App 却是 Chrome ✗ ⇒ 落点落到 Chrome **自己**身上 ✗
+    ///   (用户按一下 ⌘Tab,什么都没换 —— 正是老注释里说的"会被读成这个开关没生效" ✓)。
+    /// 口径:不再依赖"第一格一定是当前 App"这个**前提** ✗,而是显式传入当前 App 的位置 ✓
+    /// ⇒ 无论顺序怎么偏,落点都跳过自己 ✓(第一格错了不至于把功能整死 ✓)
+    public static func landingIndex(count: Int, from current: Int, reverse: Bool) -> Int {
         guard count > 1 else { return 0 }
-        return reverse ? count - 1 : 1
+        let i = ((current % count) + count) % count
+        return reverse ? (i - 1 + count) % count : (i + 1) % count
     }
 }
