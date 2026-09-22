@@ -346,8 +346,14 @@ final class HotkeyTapCenter {
         case .leftMouseDown: return handleMouse(event)
         case .keyDown: return handleNavKey(event)
         case .scrollWheel:
+            // ★★ 2026-09-22 事故(用户实报「触摸板双指滑动怎么失效了」,他正在工作 ✗):
+            //   这一支原先**靠隐含前提**——"navTap 只在会话期开着" ⇒ 于是没写状态判断 ✗。
+            //   给 ⌘` 接管让 navTap **常开**之后,它就变成**全系统吞滚动** ⇒ 双指滑动到处失效 ✗
+            //   (用户设置里「滚动切换应用」是开的 ⇒ 正好踩中)。
+            //   教训:凡"只有我能吞键"的 tap,**每一支都要自己带状态判断**,不许依赖 tap 的开合 ✗
+            guard state == .navigating else { return false }   // 非会话期:滚动一律放行 ✓
             // 用户实报:「我滑动的时候, ghostty 的滚轮也跟着动了」——
-            // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap(会话期才有、唯一有吞键权的那个)。
+            // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap。
             // 返回 true = 吞掉。惯性事件也一并吞:只吞非惯性的话,甩动的尾巴会继续滚底下的 App。
             if let nse = NSEvent(cgEvent: event) { onScroll?(nse) }
             // ⚠️ 必须先看开关:设置里写的是"关闭后,滚轮与双指滑动照常交给底下的应用",
