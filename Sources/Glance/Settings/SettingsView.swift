@@ -742,7 +742,11 @@ struct ShortcutPane: View {
                                 + "打开后只在你**当前正在用的那块屏**里跳,与鼠标指针无关。") {
                     BeamSwitch(isOn: $graveTakeover)
                 }
-                SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
+                // ★ 2026-09-22 用户要求把语义**显式写出来**:轻点一下不弹面板、直接切 ✓
+                SettingsRow(title: "唤起即切换",
+                            desc: "⌘Tab 轻点一下松开 ⇒ 直接切到上一个 App(不显示面板);"
+                                + "按住、或再按一次 Tab ⇒ 显示面板浏览。"
+                                + "正向即「最近两个 App 之间来回」。关闭后唤起只定位、不切换。") {
                     BeamSwitch(isOn: $advanceOnOpen)
                 }
                 // ★ 2026-09-22 结构整理:它不是"动效",是**唤起落点**(与上一行同一件事)✗

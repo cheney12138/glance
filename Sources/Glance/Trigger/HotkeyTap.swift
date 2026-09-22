@@ -25,6 +25,12 @@ final class HotkeyTapCenter {
     /// 见 `Sources/Glance/App/SameAppScreenCycler.swift` 的头注 ✓)
     var onSameAppScreenCycle: ((Bool) -> Void)?
 
+    /// **轻点一下的静默切换**(2026-09-22 用户要求):
+    /// 「cmd tab 如果只是触发了一次, 就不要展示面板, 直接触发窗口切换。
+    ///   只有 cmd 没松开的时候, 才唤起面板」⇒ 参数 = 是否正向(⇧ = 反向 ✓)。
+    /// 由 App 层装配(Trigger 不许反向依赖 App 层 ✗)
+    var onQuickSwitch: ((Bool) -> Void)?
+
     enum State { case idle, armed, navigating }
 
     /// 导航期间的一次动作。T6 面板、T7 聚焦以后订阅这个出口,不直接碰事件层。
@@ -154,6 +160,11 @@ final class HotkeyTapCenter {
             ?? KeyDefaults.takeoverGraveCyclesWindows
     }
 
+    /// 「唤起即切换」(默认开 ✓;与设置面板同一个键、现读 ✓)
+    private static var advanceOnOpen: Bool {
+        UserDefaults.standard.object(forKey: Keys.switchAdvanceOnOpen) as? Bool ?? KeyDefaults.advanceOnOpen
+    }
+
     private static var graveCyclesWindows: Bool {
         UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? KeyDefaults.graveCyclesWindows
     }
@@ -171,6 +182,16 @@ final class HotkeyTapCenter {
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
     private var pinnedSession = false
+
+    /// **轻点 vs 按住**的分界(秒)。判据(见 handleHotKey 的注释):
+    ///   · 这个窗口内**松开** ⇒ 轻点 ⇒ 不弹面板,直接切到上一个 App ✓
+    ///   · 窗口内**再按一次 Tab**,或**按住超过**它 ⇒ 弹面板(进入浏览)✓
+    /// 0.22s:比"有意浏览"的按住明显短、比机械轻点(80–150ms)明显长 ✓(用户没要求开关,故为常量 ✓)
+    private static let quickTapWindow: TimeInterval = 0.22
+    /// 本局的 `.begin` 发出去了没有 + 待发的方向 + 定时器
+    private var beginEmitted = false
+    private var pendingBeginForward = true
+    private var beginTimer: DispatchWorkItem?
 
     // MARK: - 生命周期
 
@@ -302,8 +323,26 @@ final class HotkeyTapCenter {
         // 也顺手避免了"Carbon 重复投递 + navTap 各动一次"的双跳。
         guard state != .navigating else { return }
         setState(.navigating)
-        // 方向要传下去:「唤起即切换」开着时,正向落"上一个 App"、反向落"最后一个"
-        emit(hotKey == .reverse ? .beginReverse : .begin)
+        let forward = hotKey != .reverse
+        // ★★ 2026-09-22 用户要求:「cmd tab 如果只是触发了一次, 就不要展示面板, 直接触发窗口切换。
+        //    只有 cmd 没松开的时候, 才唤起面板」⇒ 这一发**先不弹面板** ✗:
+        //      · quickTapWindow 内松开 ⇒ 轻点 ⇒ 直接切 App(App 层 onQuickSwitch ✓),**从不弹面板** ✓
+        //      · 窗口内再按一次 Tab(重复那支)或窗口到期 ⇒ 弹面板(照旧浏览 ✓)
+        //    「唤起即切换」关着时**不适用**(那时唤起就是为了看面板 ✗)⇒ 立刻弹 ✓
+        guard Self.advanceOnOpen else {
+            beginEmitted = true
+            emit(forward ? .begin : .beginReverse)
+            return
+        }
+        beginEmitted = false
+        pendingBeginForward = forward
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.state == .navigating, !self.beginEmitted else { return }
+            self.beginEmitted = true
+            self.emit(self.pendingBeginForward ? .begin : .beginReverse)
+        }
+        beginTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.quickTapWindow, execute: work)
     }
 
     // MARK: - 事件 tap
@@ -343,6 +382,10 @@ final class HotkeyTapCenter {
 
     private func setState(_ new: State) {
         guard state != new else { return }
+        if new != .navigating {                       // 离开本局 ⇒ 清掉轻点那本账 ✓
+            beginTimer?.cancel(); beginTimer = nil
+            beginEmitted = false
+        }
         state = new
         updateNavTap()
     }
@@ -389,6 +432,15 @@ final class HotkeyTapCenter {
             // 钉住:松手不确认、不退出导航态——面板与它的"脑子"一起钉住,
             // 否则面板还在台上、状态机已经下班,Tabs/Esc 全漏给前台 App(实机现形)
             if pinPanel || pinnedSession { break }
+            if !beginEmitted {
+                // ★ **轻点**:面板一次都没出来 ⇒ 直接切 App(用户要的就是这个效率 ✓)
+                let forward = pendingBeginForward
+                beginTimer?.cancel(); beginTimer = nil
+                setState(.idle)
+                trace("轻点 ⌘Tab ⇒ 静默切换(不弹面板)forward=\(forward)")
+                onQuickSwitch?(forward)
+                break
+            }
             setState(.idle)
             emit(.confirm)
         default:
@@ -439,6 +491,13 @@ final class HotkeyTapCenter {
         // 触发键在导航期 = **循环移动**(开头那一发由 Carbon 负责,见 `handleHotKey`)
         if keyCode == config.keyCode {
             trace("trigger repeat kc=\(keyCode) shift=\(event.flags.contains(.maskShift))")
+            // ★ 轻点状态下的"第二次 Tab" = 用户想浏览 ⇒ 现在就把面板弹出来 ✓
+            //   (顺序必须是 begin 先、next 后:反了的话面板落点会用旧的选中 ✓)
+            if state == .navigating, !beginEmitted {
+                beginEmitted = true
+                beginTimer?.cancel(); beginTimer = nil
+                emit(pendingBeginForward ? .begin : .beginReverse)
+            }
             emit(event.flags.contains(.maskShift) ? .prev : .next)
             return true
         }
