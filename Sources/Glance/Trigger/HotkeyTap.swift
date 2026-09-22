@@ -1125,20 +1125,11 @@ final class ThreeFingerTap {
         monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
             DispatchQueue.main.async { cancelOnce(how: "收到拖拽事件") }
         }
-        // 兜底:**多次**看指针位移 —— 0.25s / 0.8s 两次。
-        //   ⚠️ 0.25s 那一次是**实测证明有效的**(v2 就靠它抓到 5 次误触 ✓ 位移 27–68pt ✓)。
-        //   保留它 + 加 0.8s 那次(覆盖"轻点起拖 → 停一下 → 再拖"的用法 ✓),
-        //   再加上面的**拖拽事件监听** —— 三条路谁先到谁撤销 ✓ ⇒ 闪烁时间 = **最短的那个** ✓
-        //   (第一版只在 0.8s 查一次是个隐患:若事件监听对**合成拖动**不收,
-        //    反而比 v2 的 250ms **更慢** ✗ ⇒ 三条都留 ✓)
-        let p0 = NSEvent.mouseLocation
-        func checkDrift(_ label: String) {
-            let p1 = NSEvent.mouseLocation
-            let moved = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
-            if moved > 15 { cancelOnce(how: String(format: "%@ 指针移动 %.0fpt", label, moved)) }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { checkDrift("250ms") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.80) { checkDrift("800ms") }
+        // ⚠️ 2026-09-22 **删掉两条"指针位移"兜底** ✗ —— 它们误伤了**钉住的一局**:
+        //   病例(用户实报):「三指唤起之后, 怎么 hover 选择 app 面板就会消失啊。不是说此局维持吗」✓
+        //   hover 选 App 就是**挪指针**(动辄几百 pt ✗),与拖拽在"指针"这个量上完全分不出来 ✗
+        //   ⇒ 真信号只能是"**系统在拖东西**"(= `*MouseDragged` 事件 ✓,hover 不会产生它 ✓),
+        //     而不是"指针动了" ✗。位移那两条留在 `logPostFirePointerDrift`(只记日志 ✓)以便继续取证 ✓
         // 1.2s 后收工(不留监听 ✓)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             if !fired, let monitor { NSEvent.removeMonitor(monitor) }
