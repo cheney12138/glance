@@ -11,6 +11,12 @@ final class PanelController: ObservableObject {
     @Published var appIndex = 0
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
+    /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)
+    private var sessionBaseline: SessionSnapshot?
+    /// 本局查过几次(防呆:不变量一旦违反会**每拍都报** ⇒ 只报第一次,免得刷屏 ✗)
+    private var sessionFrameChecks = 0
+    /// 本局开局时刻(开局 0.6s 内是"开门过程":窗口要经过 0x0 → 芯片 → 全量 两次布局 ⇒ 不比较 ✓)
+    private var sessionOpenedAt: CFAbsoluteTime = 0
     /// 托盘窗的显隐状态机(懒建:窗口是 buildPreviewPanelIfNeeded 时才有的)
     private var trayChrome: ChromeWindow?
     /// 选中态动效的**上膛标识**:开局第一帧必须不上膛(否则会从上一局的残影位置滑过来)。
@@ -745,6 +751,15 @@ final class PanelController: ObservableObject {
             : centerFrame(for: paddedSize())
         guard let panel, let target else { return }
         isVisible = true
+        // ★ 一局的不变量基线(见 GlanceCore/SessionInvariants):开局存一份,**之后只比不改** ✓
+        //   ★ 规则(冒烟三轮才定死):开局那 0.6s 内窗口要经过"0x0 → 芯片(552) → 全量(1259)"两次布局 ✗,
+        //     那都是**开门过程**,不是"尺寸漂了" ⇒ 开局静默,0.6s 之后才开始比 ✓
+        //     (真事故"634↔1509 当拍跳变"发生在**交互中**,远晚于 0.6s ⇒ 照样抓得住 ✓)
+        sessionBaseline = SessionSnapshot(frameSize: .zero, ringWindowWidth: ringWindowWidth())
+        sessionOpenedAt = CFAbsoluteTimeGetCurrent()
+        sessionFrameChecks = 0
+        trace(String(format: "[不变量] 开局基线:窗框 %.1fx%.1f / 环窗宽 %.1f",
+                     panel.frame.width, panel.frame.height, ringWindowWidth()))
         // 退场演出期间关掉的事件耳,开新局要还回来
         panel.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
@@ -909,6 +924,26 @@ final class PanelController: ObservableObject {
                     panel.frame.width, panel.frame.height,
                     frame.origin.x, frame.origin.y, frame.width, frame.height))
         panel.setFrame(frame, display: false)
+        // ★ 一局的不变量:主面板的**尺寸**在整局内不许变(ADR-0006)——
+        //   真事故:换环时窗框宽度 634 ↔ 1509 当拍跳变 ⇒ 用户看到"抖"(见 SessionInvariants 文件头)✗
+        //   只对**主面板**断言:托盘窗的尺寸本来就随内容变 ✓(它由 paddedSize 的 ringWindowWidth 保证 ✓)
+        //   ⚠️ 第二处假阳性(冒烟二轮抓到):开局那一步 `isVisible = true` 时窗口**还没布局** ⇒
+        //      基线取成 0.0x0.0 ✗ ⇒ 首帧落地就被报成"尺寸变了" ✗
+        //      ⇒ 基线为零尺寸时,把这一次当基线**补上**,不比较 ✓
+        //   ⚠️ 排除 hintText(空名单"一枚芯片"态):那时 paddedSize 的宽度**本来就**取 c.width ✗
+        //      ⇒ 芯片态进出不是违反 ✓(它自己是一种状态,不是"尺寸漂了")
+        let settled = CFAbsoluteTimeGetCurrent() - sessionOpenedAt > 0.6 && hintText == nil
+        if panel === self.panel, settled, var base = sessionBaseline, base.frameSize == .zero {
+            base.frameSize = frame.size                                  // 第一帧"稳了"的尺寸 = 基线 ✓
+            sessionBaseline = base
+            trace(String(format: "[不变量] 基线=%0.1fx%.1f(开局静默后再取)", frame.width, frame.height))
+        } else if panel === self.panel, settled, let base = sessionBaseline, sessionFrameChecks < 8 {
+            sessionFrameChecks += 1
+            let now = SessionSnapshot(frameSize: frame.size, ringWindowWidth: base.ringWindowWidth)
+            for viol in SessionInvariants.violations(baseline: base, now: now) {
+                glog("[不变量] ⚠️ \(viol)(caller=\(caller))")
+            }
+        }
     }
 
     /// 收场:先让两块玻璃按 demo 的曲线淡出,窗口拆迁排在演出之后。
@@ -939,6 +974,7 @@ final class PanelController: ObservableObject {
         entrySelected = false
         launchIndex = nil
         isVisible = false
+        sessionBaseline = nil
         LivePreviewPool.shared.stopAll(reason: "面板关闭")
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
@@ -1152,6 +1188,10 @@ final class PanelController: ObservableObject {
         // ★ 宽度取"一局的窗框宽度"(两环更宽者)⇒ 换环时窗框/玻璃尺寸**一个字都不变** ✓
         //   (高度本来就没变:两环都是 icon 高 ✓)
         let w = hintText != nil ? c.width : ringWindowWidth()
+        // ★ 断言"换环不改变窗框宽度"(2026-09-22 那个"抖"的根治手段,现在被钉住 ✓)
+        if hintText == nil, let base = sessionBaseline, abs(w - base.ringWindowWidth) > SessionInvariants.tolerance {
+            glog(String(format: "[不变量] ⚠️ 环窗口宽度变了 %.1f → %.1f(两环更宽者才是一局的不变量)", base.ringWindowWidth, w))
+        }
         return NSSize(width: w + pad, height: c.height + pad)
     }
 
