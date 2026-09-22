@@ -39,7 +39,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "启动与行为", "手势操控", "未启动环名单", "动效"]
+            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限"]
             }
@@ -80,7 +80,6 @@ struct SettingsView: View {
     @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = false
     @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = false
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
-    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
     @AppStorage(Keys.panelSheen) private var sheen = true
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
@@ -182,24 +181,10 @@ struct SettingsView: View {
                         .init(id: AppearancePreference.dark, label: "深色"),
                     ], value: $appearance)
                 }
-                // ★ 2026-09-22 用户要求:「现在 live 是开着的吗, 做成设置, 给几个档位,
-                //   用bar控制, 0 代表关闭, 最大 30fps」。
-                //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
-                //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
-                //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
-                SettingsRow(title: "实时预览",
-                            desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
-                    HStack(spacing: 8) {
-                        Slider(value: tierBinding, in: 0...30, step: 5)
-                            .controlSize(.small)
-                            .frame(width: 150)
-                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
-                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
-                            .font(SettingsFont.rowValue)
-                            .foregroundStyle(SettingsTheme.ink2)
-                            .monospacedDigit()
-                            .frame(width: 46, alignment: .trailing)
-                    }
+                // ★ 2026-09-22 结构整理:"高光效果"是**外观**(指针高光 + 图标明暗),不是动效 ✗
+                //   ⇒ 从"动效"挪进"外观" ✓(它的实现细节请看 SettingsRow 自己的 desc)
+                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
+                    BeamSwitch(isOn: $sheen)
                 }
                 SettingsRow(title: "App 间距",
                             desc: "选中图标与两侧图标的距离。",
@@ -219,7 +204,34 @@ struct SettingsView: View {
             }
             .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
 
-            SettingsGroup(label: "启动与行为", anchor: Page.general.anchor("启动与行为")) {
+            // ★ 2026-09-22 用户实报「你刚才加的帧率控制,为什么会在外观这一级」✗
+            //   —— 实时预览是**行为/性能**档位,不是外观 ⇒ 从"外观"搬出来独立成组 ✓
+            //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
+            SettingsGroup(label: "实时预览", anchor: Page.general.anchor("实时预览")) {
+                // ★ 2026-09-22 用户要求:「现在 live 是开着的吗, 做成设置, 给几个档位,
+                //   用bar控制, 0 代表关闭, 最大 30fps」。
+                //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
+                //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
+                //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
+                SettingsRow(title: "实时预览",
+                            desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
+                    HStack(spacing: 8) {
+                        Slider(value: tierBinding, in: 0...30, step: 5)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                    }
+                }
+            }
+
+            // 原"启动与行为":去掉两条属于"未启动环"的行之后,这组只剩"应用/面板的生命周期" ✓
+            // ⇒ 改名为「应用与面板」(名字里不再兜着别的东西)
+            SettingsGroup(label: "应用与面板", anchor: Page.general.anchor("应用与面板")) {
                 SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
@@ -227,18 +239,6 @@ struct SettingsView: View {
                             desc: "关闭后松开按键即确认,面板随之关闭。",
                             hairline: false) {
                     BeamSwitch(isOn: $pinPanel)
-                }
-                SettingsRow(title: "展示 Dock 常驻应用",
-                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
-                    BeamSwitch(isOn: $showLaunchables)
-                }
-                SettingsRow(title: "Tab 进入未启动区",
-                            // 2026-09-22 补：原小字只写了“怎么进”，没写“怎么回” ⇒ 用户关掉开关后以为
-                            // “未启动段进不去 / 出不来”（实为 Tab 不再跨段，进出口改由 ↓/↑ 承担）。
-                            // 面向用户的文案纪律：**一个开关把哪条路改掉了，就要把新的进出口写出来**。
-                            desc: "关闭后改用 ↓ 进入未启动区、↑ 返回（四指轻点可直接进入）。",
-                            hairline: false) {
-                    BeamSwitch(isOn: $tabEntersLaunchSection)
                 }
             }
 
@@ -259,7 +259,20 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsGroup(label: "未启动环名单", anchor: Page.general.anchor("未启动环名单")) {
+            // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
+            // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
+            SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
+                SettingsRow(title: "展示 Dock 常驻应用",
+                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
+                    BeamSwitch(isOn: $showLaunchables)
+                }
+                SettingsRow(title: "Tab 进入未启动区",
+                            // 2026-09-22 补：原小字只写了“怎么进”，没写“怎么回” ⇒ 用户关掉开关后以为
+                            // “未启动段进不去 / 出不来”（实为 Tab 不再跨段，进出口改由 ↓/↑ 承担）。
+                            // 面向用户的文案纪律：**一个开关把哪条路改掉了，就要把新的进出口写出来**。
+                            desc: "关闭后改用 ↓ 进入未启动区、↑ 返回（四指轻点可直接进入）。") {
+                    BeamSwitch(isOn: $tabEntersLaunchSection)
+                }
                 SettingsRow(title: "白名单",
                             desc: "不在 Dock 常驻的 App 也会进未启动环。") {
                     listCountButton(.whitelist)
@@ -278,14 +291,6 @@ struct SettingsView: View {
                 }
                 SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
-                }
-                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
-                    BeamSwitch(isOn: $sheen)
-                }
-                SettingsRow(title: "承接上次选中位置",
-                            desc: "关闭后选中标记不再滑动,仅上浮。",
-                            hairline: false) {
-                    BeamSwitch(isOn: $slideFromLastApp)
                 }
             }
         }
@@ -623,6 +628,8 @@ private struct AppPicker: View {
 /// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
 /// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
 struct ShortcutPane: View {
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
+
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
@@ -673,6 +680,14 @@ struct ShortcutPane: View {
                     BeamSwitch(isOn: takeoverBinding)
                 }
                 SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
+                // ★ 2026-09-22 结构整理:它不是"动效",是**唤起落点**(与上一行同一件事)✗
+                //   ⇒ 从通用页的"动效"挪到快捷键页的"触发",紧挨"唤起即切换" ✓
+                SettingsRow(title: "承接上次选中位置",
+                            desc: "关闭后选中标记不再滑动,仅上浮。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $slideFromLastApp)
+                }
+
                     BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
