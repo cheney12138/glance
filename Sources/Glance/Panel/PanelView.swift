@@ -154,6 +154,9 @@ struct PanelView: View {
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
+        // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
+        //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .focusEffectDisabled(true)   // ★ 窗口根:切换器面板永不出现焦点环
         // ⚠️ 这里**不许**再包"撑满窗口的弹性 frame"(同根变形 v2 试过,为了在 oversized 窗口里
         // 居中玻璃)—— 根视图尺寸依赖提议、提议依赖尺寸 ⇒ AppKit Update Constraints 布局递归
@@ -163,9 +166,36 @@ struct PanelView: View {
     // MARK: - 图标层
 
     /// 跨段过渡的方向(模型 C,见 `PanelController.SegmentTravel`)。
+    /// 跨段过渡 = **方向滑**(2026-09-22 用户要求:「不能做一个手机桌面左右滑动的方盒动效吗」)。
+    ///
+    /// 为什么现在能做了(以前为什么删)：
+    ///   · 2026-09-21 删过一次滑动 —— 那时滑动误伤了**托盘里的卡片**(新一组的卡片被判成插入 ⇒
+    ///     左滑入场 ✗)。本过渡只挂在**环那一条**上(`iconStrip` 的 `.id`/`.transition`),
+    ///     托盘不共用这个 modifier ⇒ 那一族误触发与它无关 ✓
+    ///   · 抖动的真源是**两个动画系统**(AppKit 动窗框 + SwiftUI 动内容)的相位差 ✗ ⇒
+    ///     现在窗框**当拍改尺寸**(`applyRingSwap(animated: false)`)、只有内容滑 ⇒ 单系统 ⇒ 抖无从产生 ✓
+    private var segmentTransition: AnyTransition {
+        // 方向(用户口径 2026-09-22):「是上下翻动的那种方盒…就是类似翻牌子一样」——
+        //   ↓ 往下翻一张(旧环**向上**转出去、新环从**下方**转进来),↑ 反向 ✓
+        // 为什么用 rotation3DEffect 而不是 .move:翻牌的关键是"绕水平轴转 + 有透视",
+        //   纯位移读起来是"推走",不是"翻过去" ✗;而且两环**高度相同**(都是 icon 高)⇒
+        //   竖向翻不会碰到任何尺寸变化 ✓(唯一会变的宽度已由窗框当拍处理 ✓)
+        switch controller.segmentTravel {
+        case .forward:
+            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)),
+                               removal:   .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)))
+        case .backward:
+            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)),
+                               removal:   .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)))
+        case .direct:    // 其余(如"名单清空"这类非用户动作):淡切,不做方向承诺
+            return .opacity
+        }
+    }
+
+    /// 旧配方(留档,别再走回去):
     /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
     /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
-    private var segmentTransition: AnyTransition {
+    private var _segmentTransitionLegacy: AnyTransition {
         // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效,直接毙掉」。
         // 病例:选中 app B 的**非第一个**窗口,再直接 hover 到相邻 app A
         //       ⇒ 新一组的卡片**左滑入场** ✗(窗口集合被判成"插入" ⇒ 播放 x:±14 的位移)。
@@ -516,5 +546,17 @@ final class SheenTracker {
         intensity += (0 - intensity) * 0.18
         guard intensity > 0.01, let p = point else { point = nil; intensity = 0; return nil }
         return (p, intensity)
+    }
+}
+
+/// 跨段"翻牌":绕**水平轴**转 + 一点透视 + 淡(2026-09-22 用户口径「类似翻牌子一样」)。
+///
+/// 只做 transform(opacity/rotation)⇒ 不触发重排 ⇒ 与"单动画系统"那条纪律一致 ✓
+private struct SegmentFlip: ViewModifier {
+    let angle: Double
+    func body(content: Content) -> some View {
+        content
+            .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.32)
+            .opacity(angle == 0 ? 1 : 0.25)
     }
 }

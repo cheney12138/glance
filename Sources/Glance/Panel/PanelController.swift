@@ -1006,11 +1006,29 @@ final class PanelController: ObservableObject {
         // 开局就能算(纯算术,按键那一刻只是查表)。用户裁定:「肯定计算两套尺寸效果会更好」——
         // "少的后面全空着"与"多的把图标挤小"两条路都不接受。
         // 数量少时**靠左**(与主环第一格对齐 ⇒ 读作"环短了"),格子尺寸与间距一个都不动。
-        let count = CGFloat(max(entrySelected ? launchables.count : groups.count, 1))
-        let w = count * PanelMetrics.icon + max(count - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        let w = ringContentWidth(launch: entrySelected)
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
-        return NSSize(width: max(w, PanelMetrics.minStripWidth),
-                      height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+        return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+    }
+
+    /// 某一环的**内容宽**(纯算术,与 entrySelected 无关 ⇒ 可以随时问"另一环多宽")。
+    private func ringContentWidth(launch: Bool) -> CGFloat {
+        let count = CGFloat(max(launch ? launchables.count : groups.count, 1))
+        let w = count * PanelMetrics.icon + max(count - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        return max(w, PanelMetrics.minStripWidth)
+    }
+
+    /// **一局的窗框宽度** = 两环里**更宽**的那个(2026-09-22 用户实报后定)。
+    ///
+    /// 病例:「上下切的时候,环有抖动…这不还是左右吗,从左边向右延伸出来的」+
+    ///      「环是居中的,2 个环其中一个比另一个短的话,左端的延伸位置就会变化,很割裂」——
+    ///   真因:窗框(= 玻璃)宽度**当拍**换成新环的宽度 ✗(634 ↔ 1509),而环是**居中**的 ⇒
+    ///        左右两条边同时移动 ⇒ 读成"内容从左边长出来 / 左端在变" ✗ 且与内容动画不同拍 ⇒ 割裂 ✓
+    /// 口径:**一局的窗框宽度是不变量**(与 ADR-0006「窗口尺寸是一局的不变量」同源 ✓)——
+    ///        按两环更宽的那个开窗,换环只换**内容**(玻璃仍按各自环宽居中画 ✓),边缘一动不动 ✓
+    /// 说话局(只剩芯片)不参与:那是"表三"的另一套尺寸,不跟环互换 ✓
+    private func ringWindowWidth() -> CGFloat {
+        max(ringContentWidth(launch: false), ringContentWidth(launch: true))
     }
 
     /// 🔬 首帧探针(T91「一道白光」排查)——只回答一个问题:**上屏那一刻,我们的内容画上去了没有。**
@@ -1103,7 +1121,10 @@ final class PanelController: ObservableObject {
     private func paddedSize() -> NSSize {
         let c = contentSize()
         let pad = PanelMetrics.shadowPadStrip * 2
-        return NSSize(width: c.width + pad, height: c.height + pad)
+        // ★ 宽度取"一局的窗框宽度"(两环更宽者)⇒ 换环时窗框/玻璃尺寸**一个字都不变** ✓
+        //   (高度本来就没变:两环都是 icon 高 ✓)
+        let w = hintText != nil ? c.width : ringWindowWidth()
+        return NSSize(width: w + pad, height: c.height + pad)
     }
 
     // MARK: - 面板本体
@@ -1625,7 +1646,7 @@ final class PanelController: ObservableObject {
                 let n = launchables.count
                 guard n > 0 else {              // 局中名单清空(最后一个也启动完了):段没了
                     appIndex = min(appIndex, groups.count - 1); winIndex = 0
-                    setSegment(false, travel: .direct, launchIndex: nil)
+                    setSegment(false, travel: .backward, launchIndex: nil)  // ↑ = 向上一环(反向滑)
                     trace("[T91] 段切换: 未启动名单已空 → 主环 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
                     return
                 }
@@ -1968,7 +1989,7 @@ final class PanelController: ObservableObject {
         // 名单连名字一起打:一句话分清"到底换没换、换成了谁"(用户报"还是唤起来了"时,
         // 只有"共 N 个"是分不清的 —— 这条让报告能对号入座)
         trace("[T91] 换环 → 未启动的 App(共 \(launchables.count) 个): \(launchables.map(\.name).joined(separator: " · "))")
-        setSegment(true, travel: .direct, launchIndex: nil)
+        setSegment(true, travel: .forward, launchIndex: nil)   // ↓ = 向下一环(滑动方向:新内容从右进)
     }
 
     /// ↑:换回"已启动的 App 组"
@@ -2005,11 +2026,18 @@ final class PanelController: ObservableObject {
     /// 窗框走 applyRingSwap(animated:) 同一根曲线 —— 内容与玻璃一次变形完成。
     private func setSegment(_ toLaunch: Bool, travel: SegmentTravel, launchIndex target: Int?) {
         segmentTravel = travel
-        withAnimation(Self.segmentAnimation) {
+        // ★★ 2026-09-22 用户实报:「上下切换的时候, 环有抖动。应该是变形导致的, 直接 3/4 唤起打开是没问题的」
+        //   —— 说的就是**双动画系统的相位差**(见 applyRingSwap 里那段"已知成本"的注释):
+        //      AppKit 动窗框(0.18s easeInOut)+ SwiftUI 动内容,两条时间线不可能逐帧对齐 ⇒ 抖 ✗。
+        //   既然用户早定过「任何场景都不要的动效 = 直接毙掉」(换段横向位移就是这么砍的),这里同办:
+        //   **换环不补间、当拍到位** —— 窗框瞬时改尺寸(与"关闭要已经没了"同一纪律 ✓)、内容瞬时换 ✓
+        //   ⇒ 相位差这个东西**从构造上就不存在了** ✓(不是"压小",是"没有" ✓)
+        //   注:入场(唤起那一刻)的上浮照旧(carried by contentEntryRise ✓),换环不是入场 ✓
+        withAnimation(Self.segmentAnimation) {   // 内容滑(单系统 ✓)
             entrySelected = toLaunch
             launchIndex = target
         }
-        applyRingSwap(animated: Self.segmentAnimation != nil)
+        applyRingSwap(animated: false)           // 窗框当拍改尺寸(不补间 ⇒ 没有相位差 ⇒ 不抖 ✓)
     }
 
     private func applyRingSwap(animated: Bool = false) {
@@ -2025,21 +2053,13 @@ final class PanelController: ObservableObject {
         // 瞬时改尺寸(不补间):与"关闭要已经没了"同一条纪律,而且不可能掉帧。
         guard let panel else { updatePreview(); return }
         if let target = centerFrame(for: paddedSize()) {
-            if animated {
-                // 同根变形:AppKit 动窗框 + SwiftUI 动内容,同一根曲线(0.18s easeInOut)。
-                // ⚠️ 别试图"只留一个动画系统"(union 外框窗口 / 根部弹性 frame 都试过):
-                // 后者直接 Update Constraints 布局递归 FAULT(2026-09-18 实机崩溃,此病第三次),
-                // 前者玻璃左锚定、从第一格向右长再回正。双系统的轻微相位差是这个方案的已知成本,
-                // 压抖动的旋钮 = 缩短时长 + 内容侧只用 transform 位移(见 PanelView.segmentTransition)
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    ctx.allowsImplicitAnimation = true
-                    panel.animator().setFrame(target, display: true)
-                }
-            } else {
-                setFrameIfNeeded(panel, target)
-            }
+            // ★★ 2026-09-22:这里原本是"AppKit 动窗框 + SwiftUI 动内容"**两个动画系统** ✗ ——
+            //   双系统的相位差就是用户实报的"换环抖一下"。现在窗框**当拍**(而且它的尺寸本就是
+            //   一局的不变量,见 `ringWindowWidth`)⇒ 只剩内容一个动画系统 ⇒ 抖从构造上不存在 ✓
+            //   旧路留档,别再走:union 外框窗口(玻璃左锚定、从第一格向右长)/ 根部弹性 frame
+            //   (Update Constraints 递归 FAULT,实机崩溃)。`animated` 形参只为调用点可读,窗框不补间 ✓
+            _ = animated
+            setFrameIfNeeded(panel, target)
         }
         resyncSelectionUnderPointer()
         updatePreview()
