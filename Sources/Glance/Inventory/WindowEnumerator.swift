@@ -86,7 +86,7 @@ enum WindowEnumerator {
 
     static func enumerate(owning screen: NSScreen?) -> [AppGroup] {
         guard let screen else { return [] }
-        return orderByMRU(rawGroups(on: screen))
+        return orderByMRU(rawGroups(on: screen), on: screen)
     }
 
     /// 枚举里**与主线程无关**的那一半:CGWindowList 与 NSWorkspace 都是线程安全的读操作。
@@ -319,10 +319,50 @@ enum WindowEnumerator {
         print("[幽灵窗滤除] \(line)")
     }
 
-    /// MRU 证据排序(主线程状态,必须在主线程调用)
-    static func orderByMRU(_ groups: [AppGroup]) -> [AppGroup] {
+    /// 排序(主线程状态,必须在主线程调用)。
+    ///
+    /// ★★ 2026-09-22 病例(用户实报):「我在内建屏操作完之后, 回来外接屏直接选中默认选中 Chrome 了,
+    ///    但我外接屏本来就停留在 Chrome 的。应该是 Chrome 的上一个 —— ghostty」。
+    ///    真因:App 集合是**按屏**的(ADR-0008 ✓),排序却用**全局** MRU ✗
+    ///    ⇒ 在另一块屏上用过别的 App,这块屏的"上一个"就变了 ✗(落点跳到错误的人身上)。
+    ///    口径:**先按"这块屏上最近用过"排**(`ScreenRecency` ✓),
+    ///    没有本屏记录的再按全局 MRU 补 ✓ —— 两条都是**证据**,不是重排 ✓。
+    ///    ⚠️ 必须保住"**第一格 = 当前 App**"(落点规则靠它 ✓):所以前台 App 显式提前 ✓
+    /// 这批 App 里**最靠前**的那个 pid —— 按 `CGWindowList` 的普通窗顺序(前→后 ✓)。
+    ///
+    /// 为什么不用 `NSWorkspace.frontmostApplication`(2026-09-22 病例):
+    ///   面板在场时它可能报的是**我们自己**(面板是 key 窗 ✓),或干脆是 nil ⇒
+    ///   "第一格 = 当前 App"这条不变量就会悄悄失效 ✗(用户截图里第一格是别的 App ✗)
+    /// 窗口表是我们唯一自己掌握顺序的证据 ✓(排除自己 ✓:面板那扇窗永远在最前 ✗)
+    static func frontmostPID(of pids: Set<pid_t>) -> pid_t? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                   kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let mine = ProcessInfo.processInfo.processIdentifier
+        for w in list {
+            guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != mine,
+                  (w[kCGWindowLayer as String] as? Int) == 0,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let wd = b["Width"], let h = b["Height"], wd > 60, h > 60 else { continue }
+            if pids.contains(pid) { return pid }
+        }
+        return nil
+    }
+
+    static func orderByMRU(_ groups: [AppGroup], on screen: NSScreen) -> [AppGroup] {
         let byPID = Dictionary(groups.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
-        return MruEvidence.shared.ordered(pids: Array(byPID.keys)).compactMap { byPID[$0] }
+        let pids = Array(byPID.keys)
+        func rank(_ pid: pid_t) -> Int? { ScreenRecency.shared.rank(of: pid, on: screen) }
+        let local = pids.filter { rank($0) != nil }
+            .sorted { (rank($0) ?? .max) < (rank($1) ?? .max) }
+        let rest = MruEvidence.shared.ordered(pids: pids.filter { rank($0) == nil })
+        var ordered = (local + rest).compactMap { byPID[$0] }
+        // 前台 App 必须在第一格(原设计:第一眼与原生一致 ✓,落点规则也认这一条 ✓)
+        if let front = frontmostPID(of: Set(pids)),
+           let i = ordered.firstIndex(where: { $0.pid == front }), i != 0 {
+            let g = ordered.remove(at: i)
+            ordered.insert(g, at: 0)
+        }
+        return ordered
     }
 
     /// 归属判定:与所有屏求几何交集,占比最大的屏是归属屏;必须正好是语境屏且占比达标。

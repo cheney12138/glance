@@ -39,7 +39,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "未启动环", "动效"]
+            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "触感", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限"]
             }
@@ -55,12 +55,16 @@ struct SettingsView: View {
     @State private var suppressNavSpyUntil: CFAbsoluteTime = 0
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
-    @AppStorage(Keys.debugPinPanelOnRelease) private var pinPanel = false
+    @AppStorage(Keys.panelPinOnRelease) private var pinPanel = KeyDefaults.pinOnRelease
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
-    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = true
+    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = KeyDefaults.alwaysAnimate
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
+    /// 悬停触感(键名来自 `GlanceCore.HapticPolicy.defaultsKey` ✓ 一个源,不写两遍 ✓)
+    /// 触感强度档("light"/"medium"/"strong")
+    @AppStorage(Keys.hapticStrength) private var hapticStrength = "medium"
+    @AppStorage(Keys.hapticEnabled) private var hapticEnabled = HapticPolicy.enabledDefault
 
     /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
     @State private var liveTier: Double = Double(LivePreviewPool.tierFps)
@@ -70,20 +74,21 @@ struct SettingsView: View {
                     liveTier = newValue.rounded()
                     // 写回既有键(档位只在"起流/换档"时被读 ⇒ 下一次路过即生效 ✓ 不用重启 ✓)
                     UserDefaults.standard.set(String(Int(liveTier)), forKey: Keys.livePreviewTier)
+                    LivePreviewPool.shared.tierChanged()   // ★ 面板开着也立刻生效(见池子的注释)
                 })
     }
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
-    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = true
+    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = KeyDefaults.showLaunchables
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
-    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = true
+    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = KeyDefaults.tabEntersLaunchSection
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
-    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = false
-    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = false
+    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = KeyDefaults.threeFingerTapPanel
+    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = KeyDefaults.fourFingerTapLaunchRing
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
-    @AppStorage(Keys.panelSheen) private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -231,11 +236,14 @@ struct SettingsView: View {
                 SettingsRow(title: "实时预览",
                             desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
                     HStack(spacing: 8) {
-                        Slider(value: tierBinding, in: 0...30, step: 5)
+                        // 范围与步长都从**梯子**推出来(不在两处各写一遍 0…30 step 5 ✗)
+                        Slider(value: tierBinding,
+                               in: Double(LivePreviewPool.tiers.first ?? 0)...Double(LivePreviewPool.tiers.last ?? 30),
+                               step: Double((LivePreviewPool.tiers.count > 1 ? LivePreviewPool.tiers[1] - LivePreviewPool.tiers[0] : 5)))
                             .controlSize(.small)
                             .frame(width: 150)
                             .focusEffectDisabled(!SettingsTheme.showsFocusRing)
-                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
+                        Text(LivePreviewPool.tierLabel(Int(liveTier)))
                             .font(SettingsFont.rowValue)
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()
@@ -271,6 +279,35 @@ struct SettingsView: View {
                             desc: "四指轻点触控板,唤起并直接进入未启动环。",
                             hairline: false) {
                     BeamSwitch(isOn: $fourFingerTapLaunchRing)
+                }
+            }
+
+            // ★ 2026-09-22 用户要求:「hover 震动,app 和预览容器都需要, 做成设置开关」。
+            //   策略层**早就写好了**(`GlanceCore.HapticPolicy`:只有 hover 类事件会震,其余事件的反馈
+            //   交给视觉脉冲 —— 2026-09-20 用户自己裁定的 ✓);缺的是"触发点"与"设置里这一行" ✗
+            //   两个面(环上的 App / 托盘里的窗口)共用**一个**开关:对人是同一件事
+            //   ("指针挪到别的东西上了")⇒ 拆成两条只会让人多读一行 ✓(要拆随时说 ✓)
+            SettingsGroup(label: "触感", anchor: Page.general.anchor("触感")) {
+                SettingsRow(title: "悬停触感",
+                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板触发震动。") {
+                    BeamSwitch(isOn: $hapticEnabled)
+                }
+                // ★ 2026-09-22 用户报「没感受到震感, 是不是强度太低了」——
+                //   实话:触感 API **没有强度参数**,只有三档离散手感;而且**设备差异比档位差异还大**
+                //   (同一档:外接板很弱、内置板清晰)。所以把档位摆出来,你自己按手感和设备选 ✓
+                SettingsRow(title: "触感强度",
+                            // 小字里**明说**这层父子关系:置灰只表达"不能用",说不清"为什么" ✓
+                            desc: "先打开上面的「悬停触感」才能调。触感只有这三档(没有更细的强度可调);"
+                                + "设备不同,手感差别很大。",
+                            hairline: false) {
+                    // ★ 2026-09-22 用户实报:「视觉上看不出来是需要打开震动才能调整震动的这种父子逻辑,
+                    //   而且我现在关了震动, 震动等级还能勾选」⇒ 照本仓库既有约定
+                    //   (`滚动切换应用` → `切换速度` 滑杆就是这么做的)置灰 + 不可点 ✓
+                    //   注意是**置灰而不是隐藏** —— 隐藏等于把父子关系也藏了 ✗,灰着才看得出来"它得先开上面那个" ✓
+                    BeamSegmented(options: HapticStrength.allCases.map { .init(id: $0.rawValue, label: $0.label) },
+                                  value: $hapticStrength)
+                        .disabled(!hapticEnabled)
+                        .opacity(hapticEnabled ? 1 : 0.4)
                 }
             }
 
@@ -643,22 +680,24 @@ private struct AppPicker: View {
 /// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
 /// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
 struct ShortcutPane: View {
-    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = KeyDefaults.slideFromLastApp
+    /// 接管系统 ⌘`(opt-in,默认关 ⇒ 关着时一个字都不变 ✓)
+    @AppStorage(Keys.triggerTakeoverGraveCyclesWindows) private var graveTakeover = KeyDefaults.takeoverGraveCyclesWindows
 
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
-    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = true
+    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = KeyDefaults.advanceOnOpen
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
-    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = false
+    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = KeyDefaults.graveCyclesWindows
     /// 双击 ⌥ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)。
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
-    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = false
+    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = KeyDefaults.doubleOptionJumps
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
-    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = true
+    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = KeyDefaults.scrollMovesSelection
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
     /// 滑杆若线性映射到间隔,两端手感会严重不均(慢端几乎不动)。默认 10 = 原 0.10s。
     @AppStorage(Keys.panelScrollSpeed) private var scrollSpeed: Double = 10
@@ -694,16 +733,29 @@ struct ShortcutPane: View {
                             desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
                     BeamSwitch(isOn: takeoverBinding)
                 }
-                SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
+                // ★ 2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」
+                //   「开放到设置面板上,我自己调试」⇒ 两个旋钮都摆在这里 ✓
+                SettingsRow(title: "接管系统 ⌘`",
+                            // ★ 2026-09-22 用户裁掉了"以哪块屏为准"这个配置项 ⇒ 口径只留一种,
+                            //   小字就必须把这一种说清楚(不然又是一个"要试才知道"的开关 ✗)
+                            desc: "关闭时 ⌘` 交给系统(会在所有屏幕的同 App 窗口间跳)。"
+                                + "打开后只在你**当前正在用的那块屏**里跳,与鼠标指针无关。") {
+                    BeamSwitch(isOn: $graveTakeover)
+                }
+                // ★ 2026-09-22:语义**显式写出**「正向 = 最近两个 App 之间来回」✓
+                //   ("轻点不弹面板"那条试过又放弃 ⇒ 文案里不再提它 ✓)
+                SettingsRow(title: "唤起即切换",
+                            desc: "唤起时直接切到上一个 App —— 正向即「最近两个 App 之间来回」。"
+                                + "关闭后停留在当前 App。") {
+                    BeamSwitch(isOn: $advanceOnOpen)
+                }
                 // ★ 2026-09-22 结构整理:它不是"动效",是**唤起落点**(与上一行同一件事)✗
                 //   ⇒ 从通用页的"动效"挪到快捷键页的"触发",紧挨"唤起即切换" ✓
+                //   ⚠️ 搬运当次把它**嵌进了上一行的尾部控件位** ✗(编译得过,渲染是错的 ——
+                //      行会套在另一行里)。这里改回**兄弟行**,并把发丝线交回来(它后面还有「触发键」)✓
                 SettingsRow(title: "承接上次选中位置",
-                            desc: "关闭后选中标记不再滑动,仅上浮。",
-                            hairline: false) {
+                            desc: "关闭后选中标记不再滑动,仅上浮。") {
                     BeamSwitch(isOn: $slideFromLastApp)
-                }
-
-                    BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
                             desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃。",

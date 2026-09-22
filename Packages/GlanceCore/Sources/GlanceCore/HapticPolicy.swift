@@ -44,13 +44,54 @@ public enum HapticPattern: Equatable {
     case generic
 }
 
+/// **触感强度**(2026-09-22 用户实报:「没感受到震感, 是不是强度太低了」)。
+///
+/// 实话:触感 API **没有强度参数** —— `NSHapticFeedbackManager` 只给三档**离散**手感
+/// (`alignment` < `levelChange` < `generic`),没有"震 30%"这种旋钮 ✗。
+/// 所以能做的就是:把档位挑出来(并**暴露到设置里**)⇒ 按自己的手感和设备选 ✓
+/// (2026-09-20 已实测:同一档在**外接板**上很弱、**内置板**上清晰 ⇒ 设备差异比档位差异还大 ✓)
+public enum HapticStrength: String, CaseIterable {
+    case light, medium, strong
+
+    public var pattern: HapticPattern {
+        switch self {
+        case .light:  return .alignment     // 三档里最轻
+        case .medium: return .levelChange
+        case .strong: return .generic       // 三档里最重(最"钝"、最容易感觉到)
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .light:  return "轻"
+        case .medium: return "中"
+        case .strong: return "强"
+        }
+    }
+}
+
 public enum HapticPolicy {
     /// 开关:**默认关**(2026-09-20 用户裁定)。
     /// 仍然用 `object(forKey:) as? Bool ?? false`,不用 `bool(forKey:)` ——
     /// 口径是"**没写过"与"写成 false"必须能区分**,默认值是查询时补上的,不靠 UserDefaults 的缺省。
     /// (对比:`MotionPolicy.alwaysAnimate` 默认开,同一套写法,只是补 false 还是 true 不同。)
+    /// 键名(单一来源):App 侧的 `Keys.hapticEnabled` 引用它 ⇒ **不写两遍** ✓
+    public static let defaultsKey = "haptic.enabled"
+    /// 强度档位的键名(同样单一来源 ✓)
+    public static let strengthKey = "haptic.strength"
+
+    /// 当前强度档:默认 **中**(2026-09-22 用户报"轻档感觉不到" ⇒ 默认抬一档 ✓)
+    public static var strength: HapticStrength {
+        HapticStrength(rawValue: UserDefaults.standard.string(forKey: strengthKey) ?? "") ?? .medium
+    }
+
+    /// 出厂默认:**开**(2026-09-22 用户裁定:唯一保留的触感,回答"我到底换到下一格了吗" ✓)。
+    /// ⚠️ App 侧 `KeyDefaults.haptic` 必须与它一致 —— 改一处要改两处(跨层,Core 看不到 Keys ✗),
+    ///    所以两处都写了注释指回来 ✓
+    public static let enabledDefault = true
+
     public static var enabled: Bool {
-        UserDefaults.standard.object(forKey: "haptic.enabled") as? Bool ?? false
+        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? enabledDefault
     }
 
     /// 事件 ⇒ 手感。**开关关掉时一律 none**(设置是绝对权威:关了就是通通不震)。
@@ -76,8 +117,9 @@ public enum HapticPolicy {
         //   点按 / 三指 = 中
         //   四指 / 换环 / 不动作 = 重(最钝最明显的那一档)
         switch event {
-        case .hoverAppRow:       return .alignment
-        case .hoverPreviewThumb: return .alignment
+        // ★ 2026-09-22:两个 hover 事件的强弱**交给设置**(用户实报"轻档感觉不到" ✓)
+        //   其余事件仍按下面那套固定阶梯(它们现在都被上面的滤网挡掉了 ⇒ 保留只为记档 ✓)
+        case .hoverAppRow, .hoverPreviewThumb: return strength.pattern
         case .summonThreeFinger: return .levelChange
         case .clickAppRow:       return .levelChange
         case .clickPreviewThumb: return .levelChange

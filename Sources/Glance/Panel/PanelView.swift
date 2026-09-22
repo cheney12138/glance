@@ -45,7 +45,7 @@ struct GhostTile: View {
 ///    `CAGradientLayer` 的 `SheenNSView` 自己听本窗 `.mouseMoved`,只挪一个 layer 的 position。
 struct PanelView: View {
     /// 指针光晕开关(设置 → 通用 →「指针光晕」)
-    @AppStorage(Keys.panelSheen) private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
     @ObservedObject var controller: PanelController
 
     var body: some View {
@@ -364,7 +364,7 @@ private struct IconCell: View {
     /// 一起开、一起关(用户口径:"app 上的静态反光也关闭,一齐开启,或者关闭")。
     /// 关掉时图标回到**本来的样子**(不额外提亮、也不压暗),选中态靠放大 + 上浮 + 托底交代 ——
     /// 那三样是"形",不是"光",不受这个开关影响。
-    @AppStorage(Keys.panelSheen) private var glow = true
+    @AppStorage(Keys.panelSheen) private var glow = KeyDefaults.sheen
 
     var body: some View {
         let art = IconProvider.art(for: group.pid)

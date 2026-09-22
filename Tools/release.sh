@@ -19,6 +19,9 @@ PROJECT="Glance.xcodeproj"
 TOOLS="${SPARKLE_TOOLS:-$HOME/Library/Caches/glance-sparkle}"
 SPARKLE_VERSION="2.10.0"
 
+echo "== 0/4 架构校验(发版要挡:键没人读 / 模块越界一律不许发出 ✓)"
+swift Tools/check-architecture.swift || { echo "✗ 架构校验没过,先修再发版"; exit 1; }
+
 echo "== 0/4 准备 Sparkle 工具"
 if [ ! -x "$TOOLS/bin/generate_appcast" ]; then
   mkdir -p "$TOOLS"

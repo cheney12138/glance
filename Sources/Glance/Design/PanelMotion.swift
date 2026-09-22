@@ -27,7 +27,7 @@ enum MotionPolicy {
     /// 那样默认值就无法是 true。设置面板的 @AppStorage 用同一个 key、同样默认 true,
     /// 两边口径一致。
     static var alwaysAnimate: Bool {
-        UserDefaults.standard.object(forKey: Keys.motionAlwaysAnimate) as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.motionAlwaysAnimate) as? Bool ?? KeyDefaults.alwaysAnimate
     }
 
     static var systemReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -46,7 +46,7 @@ enum MotionPolicy {
     /// key 换过:`panel.puckRiseFromBottom` 是上一版"上浮/滑 二选一"的开关,语义已经反了,
     /// 特意**不迁移** —— 搬过来会让面板突然开始滑动。旧 key 就此作废。
     static var slideFromLastApp: Bool {
-        UserDefaults.standard.object(forKey: Keys.panelSlideFromLastApp) as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.panelSlideFromLastApp) as? Bool ?? KeyDefaults.slideFromLastApp
     }
 
     /// **通用的上浮幅度** —— 入场每次都有这一层(见 `slideFromLastApp` 的两层说明)。

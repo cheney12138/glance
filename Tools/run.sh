@@ -48,3 +48,9 @@ if [[ "${PROC_TS:-0}" -lt "$BIN_TS" ]]; then
   exit 2
 fi
 echo "  ✓ 新构建已上屏（pid=${PID}）"
+
+# ★ 2026-09-22:装之前先过一遍架构校验(键名联动那条规矩也在这儿 ✓)。
+#   开发阶段**只报不挡**(重构中途难免短暂越界 ✓);发版那条在 release.sh 里,是**挡**的 ✓
+if ! swift Tools/check-architecture.swift; then
+    echo "  ⚠️ 架构校验有违例(见上)—— 开发可以继续,但发版会被挡住"
+fi

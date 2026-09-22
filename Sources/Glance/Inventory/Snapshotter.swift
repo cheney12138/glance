@@ -320,6 +320,21 @@ final class Snapshotter: ObservableObject {
         let pxW = 720
         let pxH = min(max(Int(720 / aspect), 48), 1500)
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+        // 🔬 取证:拍出来的图与"我们要的尺寸"对不对得上。
+        //   病例(2026-09-22):子窗口被默认拍进来 ⇒ 画面被撑大 ⇒ 比例不符 ⇒ 多出来的是透明像素 ⇒ 卡片一块黑 ✗
+        //   修掉 `includeChildWindows` 之后,这一行仍留着 —— 下次再有"图与尺寸不符",一眼可判 ✓
+        //   (只在 trace 下打;一拍一张图,量不大 ✓)
+        //   ★ 要打的是**实得尺寸** —— 它才是判据(只打"请求"等于没打:两张图看起来都会是 720x450 ✗)。
+        //     实得与"窗"的宽高比不一致 ⇒ 就是子窗口/多余内容被拍进来了 ✓
+        var capturedSize: (Int, Int)?
+        defer {
+            if isTraceEnabled {
+                let got = capturedSize.map { "\($0.0)x\($0.1)" } ?? "nil"
+                glog(String(format: "[拍照] wid=%u 窗 %.0fx%.0f(比例 %.2f) 请求 %dx%d 实得 %@",
+                            w.wid, w.bounds.width, w.bounds.height,
+                            w.bounds.width / max(w.bounds.height, 1), pxW, pxH, got))
+            }
+        }
 
         if #available(macOS 26.0, *) {
             let config = SCScreenshotConfiguration()
@@ -331,6 +346,13 @@ final class Snapshotter: ObservableObject {
             // 自绘窗四圈"大灰边"(2026-09-17 用户实拍)。关掉后画面 = 窗口本体,
             // 与出图比例推导用的 `bounds` 口径一致,fill 裁切也不再吃空边
             config.ignoreShadows = true
+            // ★★ 2026-09-22 用户实报(两张截图):Sublime Text 有「编辑器 + 一个 Update 进度窗」,
+            //    结果那张卡的图里**两块内容挤在一起**,旁边一大块黑 ✗。
+            //    真因在 SDK 文档里写着:`includeChildWindows` —— **child windows are included by default** ✓
+            //    ⇒ 我们按"单窗"拍图,系统却把它的**子窗口一起拍进来** ✗:
+            //      画面按子窗撑大 ⇒ 与我们要的尺寸/比例不符 ⇒ 多出来的地方是透明像素 ⇒ 卡片上一块黑 ✗
+            //    ⇒ 明确关掉:一张卡只画这扇窗自己的内容 ✓(要的是"切换器里那张缩略图",不是"窗口全家福")
+            if #available(macOS 14.2, *) { config.includeChildWindows = false }
             return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
                 // **超时兜底**(2026-09-14 实机病):SCK 的回调**可能永远不回来** ——
                 // 而 withCheckedContinuation 会一直等,于是整批拍图卡在第一个窗上:
@@ -342,6 +364,7 @@ final class Snapshotter: ObservableObject {
                     if let error {
                         cont.resume(returning: (nil, error.localizedDescription))
                     } else if let img = output?.sdrImage {
+                        capturedSize = (img.width, img.height)
                         cont.resume(returning: (Self.trimTransparentEdges(img), nil))
                     } else {
                         cont.resume(returning: (nil, nil))
@@ -359,8 +382,11 @@ final class Snapshotter: ObservableObject {
         config.height = pxH
         config.showsCursor = false
         config.scalesToFit = true
+        // 同上(14/15 这条也有同一个默认值):一张卡只画这扇窗自己 ✓
+        if #available(macOS 14.2, *) { config.includeChildWindows = false }
         do {
             let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            capturedSize = (img.width, img.height)
             return (Self.trimTransparentEdges(img), nil)
         } catch {
             return (nil, error.localizedDescription)

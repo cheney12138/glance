@@ -418,7 +418,9 @@ final class PanelController: ObservableObject {
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
         let screen = contextScreen
-        groups = WindowEnumerator.orderByMRU(raw)
+        // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
+        //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
+        groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
@@ -473,7 +475,17 @@ final class PanelController: ObservableObject {
         // 入场动效要靠它判断"这一局托底到底会不会滑"(见 showPanel 的两条路)
         lastLandedIndex = appIndex
         SessionMarks.step("落点")
-        appIndex = advanceOnOpen ? LandingRule.landingIndex(count: groups.count, reverse: reverse) : 0
+        // ★ 落点从"**当前 App 在哪一格**"算(2026-09-22 病例:第一格不一定是当前 App ✗ ⇒
+        //   落点落到自己身上,用户按一下什么都没换 ✗)。顺序里的当前 App 用窗口表判 ✓
+        let currentIdx = WindowEnumerator.frontmostPID(of: Set(groups.map(\.pid)))
+            .flatMap { pid in groups.firstIndex { $0.pid == pid } } ?? 0
+        appIndex = advanceOnOpen
+            ? LandingRule.landingIndex(count: groups.count, from: currentIdx, reverse: reverse)
+            : 0
+        if isTraceEnabled {
+            glog("[落点] 当前=第 \(currentIdx + 1) 格(\(groups.indices.contains(currentIdx) ? groups[currentIdx].appName : "?"))"
+                 + " · 顺序 " + groups.prefix(4).map(\.appName).joined(separator: " > "))
+        }
         // 落点这行**每次都打**:开关 × 正反向 × 环序有四种走法,只看"高亮在第几格"分不清是哪一种 ——
         // 下次再说"开关没生效",看这一行就够(第一格是不是当前 App、落点是不是上一个 App 一目了然)
         if groups.indices.contains(appIndex) {
@@ -1612,6 +1624,11 @@ final class PanelController: ObservableObject {
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
+            // ★ 悬停触感(2026-09-22 用户实报「预览容器的 hover 没做震感吗」):
+            //   托盘**实际走的是帧拍这条路**(逐格 `.onHover` 早就"实测会哑" ⇒ 见 hoverWindow 的注释),
+            //   第一版把触感挂在 `hoverWindow` 里 ⇒ 等于挂在了用不到的那条路上 ✗
+            //   托盘两种内容(窗口卡 / 启动图标行)都算"预览容器" ⇒ 同一个事件 ✓
+            Haptics.fire(.hoverPreviewThumb)
             trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
         } else {
             // 窗口卡:T88 卡宽随窗比例,按**每张卡的实际宽**走查命中;
@@ -1648,6 +1665,7 @@ final class PanelController: ObservableObject {
                 return
             }
             guard i != winIndex else { return }
+            Haptics.fire(.hoverPreviewThumb)     // ★ 见上面启动行那一支的注释(托盘真正的 hover 路在这里 ✓)
             bumpIdle()   // 同上
             winIndex = i
             trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(count)] \(names[i])")
@@ -1986,6 +2004,7 @@ final class PanelController: ObservableObject {
         if entrySelected {
             guard hoverAllowedByGate(), launchables.indices.contains(i), i != launchIndex else { return }
             launchIndex = i
+            Haptics.fire(.hoverAppRow)       // ★ 悬停触感(设置里可关;策略层已把"只保留 hover"写死 ✓)
             trace("[T91] 启动选中(\(source)): [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
             return
         }
@@ -1993,6 +2012,9 @@ final class PanelController: ObservableObject {
         // (实机现形:日志被系统 QUARANTINED 截流)
         // entrySelected 也要放行:指针从启动区挪回主环,等于选回主环
         guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex || entrySelected else { return }
+        // ★ 悬停触感:指针**换到另一个 App 格**上时震一下(用户 2026-09-22 要求 ✓)
+        //   放在这道闸之后 ⇒ 每像素发声的 onHover 不会变成震动风暴 ✓(同格重复不进账 ✓)
+        Haptics.fire(.hoverAppRow)
         traceCost("指针换选中") {
             // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
             // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
@@ -2178,6 +2200,7 @@ final class PanelController: ObservableObject {
         guard hoverAllowedByGate() else { return }
         FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 悬停打点(量"含悬停那几拍")
         winIndex = i
+        Haptics.fire(.hoverPreviewThumb)     // ★ 悬停触感:指针换到托盘里另一扇窗 ✓
         if let g = currentGroup, g.windows.indices.contains(i) {
             trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
         }
@@ -2210,7 +2233,10 @@ final class PanelController: ObservableObject {
 
     /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
     /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    private var pinPanelDebug: Bool { DebugFlags.pinPanelOnRelease }
+    /// ⚠️ 2026-09-22 修:这里原来读 `DebugFlags.pinPanelOnRelease`(**淘汰的调试键**)✗
+    /// ⇒ 设置/菜单里打开的「保持面板打开」,到这一句就断了:面板外点击照样关面板 ✗
+    /// 现在两个读取点都走 `Keys.pinOnRelease`(唯一来源 ✓)
+    private var pinPanel: Bool { Keys.pinOnRelease }
 
     // MARK: - T12 破坏性键盘操作(CONTEXT.md「破坏性键盘操作」:有键无钮)
 
@@ -2463,7 +2489,8 @@ final class PanelController: ObservableObject {
     /// 而动过手之后 MRU 必然变(刚碰过的 App 排到最前)。
     /// macOS 自己的行为也是这样:按住 ⌘ 期间顺序是死的,MRU 只在**开局**那一刻起作用。
     private func mergeRefreshed(_ raw: [AppGroup]) -> [AppGroup] {
-        let fresh = WindowEnumerator.orderByMRU(raw) // 只用来决定"本局中途新冒出来的 App"排哪
+        // 只用来决定"本局中途新冒出来的 App"排哪 ⇒ 同样按本局的屏 ✓
+        let fresh = WindowEnumerator.orderByMRU(raw, on: contextScreen ?? NSScreen.main ?? NSScreen.screens[0])
         var byPID: [pid_t: AppGroup] = [:]
         for g in fresh { byPID[g.pid] = g }
         var merged: [AppGroup] = []
@@ -2624,7 +2651,7 @@ final class PanelController: ObservableObject {
             self.notePointerClick()
             return self.dismissIfClickOutside() ? nil : event
         }
-        if pinPanelDebug { return }
+        if pinPanel { return }
 
         // 全局:别人的点击,吞不掉(全局监听没有返回值的权力)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

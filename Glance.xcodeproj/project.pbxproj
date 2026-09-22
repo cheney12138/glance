@@ -30,6 +30,8 @@
 		5A0000000000000000000095 /* NativeHotkeyGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000094 /* NativeHotkeyGuards.swift */; };
 		5A0000000000000000000097 /* Stdout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000096 /* Stdout.swift */; };
 		5A00000000000000000000A7 /* PanelTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A3 /* PanelTokens.swift */; };
+		5A0000000000000000000C1 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000C0 /* ImageCache.swift */; };
+		5A0000000000000000000C3 /* ScreenScopedSwitching.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000C2 /* ScreenScopedSwitching.swift */; };
 		5A00000000000000000000A8 /* PanelMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A4 /* PanelMotion.swift */; };
 		5A00000000000000000000A9 /* PanelGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A5 /* PanelGlass.swift */; };
 		5A00000000000000000000AA /* AppIconProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000A6 /* AppIconProvider.swift */; };
@@ -37,6 +39,7 @@
 		5A00000000000000000000C2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A00000000000000000000C1 /* Sparkle */; };
 		AA0000000000000000000F01 /* FrameProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F02 /* FrameProbe.swift */; };
 		AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F04 /* SingleInstanceGuard.swift */; };
+		AA0000000000000000000201 /* ScreenRecency.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000200 /* ScreenRecency.swift */; };
 		AA0000000000000000000100 /* Keys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000101 /* Keys.swift */; };
 		AA0000000000000000000120 /* PuckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000121 /* PuckView.swift */; };
 		AA0000000000000000000110 /* DebugFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000111 /* DebugFlags.swift */; };
@@ -72,11 +75,14 @@
 		5A0000000000000000000094 /* NativeHotkeyGuards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeHotkeyGuards.swift; sourceTree = "<group>"; };
 		5A0000000000000000000096 /* Stdout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stdout.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A3 /* PanelTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTokens.swift; sourceTree = "<group>"; };
+		5A0000000000000000000C0 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		5A0000000000000000000C2 /* ScreenScopedSwitching.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenScopedSwitching.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A4 /* PanelMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelMotion.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A5 /* PanelGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelGlass.swift; sourceTree = "<group>"; };
 		5A00000000000000000000A6 /* AppIconProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconProvider.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F02 /* FrameProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProbe.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F04 /* SingleInstanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleInstanceGuard.swift; sourceTree = "<group>"; };
+		AA0000000000000000000200 /* ScreenRecency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenRecency.swift; sourceTree = "<group>"; };
 		AA0000000000000000000101 /* Keys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keys.swift; sourceTree = "<group>"; };
 		AA0000000000000000000121 /* PuckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PuckView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000111 /* DebugFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugFlags.swift; sourceTree = "<group>"; };
@@ -156,6 +162,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000027 /* WindowEnumerator.swift */,
+				AA0000000000000000000200 /* ScreenRecency.swift */,
 				AA0000000000000000000F08 /* AXWindowList.swift */,
 				AA0000000000000000000F06 /* ThumbnailRefresher.swift */,
 				5A0000000000000000000028 /* MruEvidence.swift */,
@@ -204,6 +211,7 @@
 				5A00000000000000000000C3 /* UpdateChecker.swift */,
 				AA0000000000000000000F04 /* SingleInstanceGuard.swift */,
 				AA0000000000000000000101 /* Keys.swift */,
+				5A0000000000000000000C2 /* ScreenScopedSwitching.swift */,
 				AA0000000000000000000111 /* DebugFlags.swift */,
 			);
 			path = App;
@@ -214,6 +222,7 @@
 			children = (
 				5A00000000000000000000A3 /* PanelTokens.swift */,
 				AA0000000000000000000F0B /* AppearancePreference.swift */,
+				5A0000000000000000000C0 /* ImageCache.swift */,
 				5A00000000000000000000A4 /* PanelMotion.swift */,
 				5A00000000000000000000A5 /* PanelGlass.swift */,
 				5A00000000000000000000A6 /* AppIconProvider.swift */,
@@ -312,6 +321,7 @@
 				5A00000000000000000000C4 /* UpdateChecker.swift in Sources */,
 				5A00000000000000000000D1 /* SessionMarks.swift in Sources */,
 				AA0000000000000000000F03 /* SingleInstanceGuard.swift in Sources */,
+				AA0000000000000000000201 /* ScreenRecency.swift in Sources */,
 				AA0000000000000000000100 /* Keys.swift in Sources */,
 				AA0000000000000000000120 /* PuckView.swift in Sources */,
 				AA0000000000000000000110 /* DebugFlags.swift in Sources */,
@@ -340,6 +350,8 @@
 				5A0000000000000000000097 /* Stdout.swift in Sources */,
 				AA0000000000000000000F01 /* FrameProbe.swift in Sources */,
 				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
+				5A0000000000000000000C1 /* ImageCache.swift in Sources */,
+				5A0000000000000000000C3 /* ScreenScopedSwitching.swift in Sources */,
 				5A00000000000000000000A8 /* PanelMotion.swift in Sources */,
 				5A00000000000000000000A9 /* PanelGlass.swift in Sources */,
 				5A00000000000000000000AA /* AppIconProvider.swift in Sources */,

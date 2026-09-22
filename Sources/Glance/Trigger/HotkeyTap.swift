@@ -20,6 +20,12 @@ import GlanceCore
 /// 导航期 Q/W/M = 破坏性操作(处决即散场)。
 @MainActor
 final class HotkeyTapCenter {
+
+    /// ⌘` 接管:参数 = 是否向前(⇧ = 反向 ✓)。**由 App 层装配**(Trigger 不许反向依赖 App 层 ✗,
+    /// 见 `Sources/Glance/App/SameAppScreenCycler.swift` 的头注 ✓)
+    var onSameAppScreenCycle: ((Bool) -> Void)?
+
+
     enum State { case idle, armed, navigating }
 
     /// 导航期间的一次动作。T6 面板、T7 聚焦以后订阅这个出口,不直接碰事件层。
@@ -143,8 +149,19 @@ final class HotkeyTapCenter {
     /// 代价与 Tab 循环同一条:tap 若被系统停用那一瞬,这一发会漏给系统(见 ADR-0005 的取舍)。
     /// 默认**关**:它动的是系统级快捷键的肌肉记忆,只能用户显式开(与接管 ⌘Tab 同一纪律)。
     private static let keyGrave: Int64 = 0x32
+    /// 接管系统 ⌘` 的开关(opt-in;`object(forKey:)` 区分"没写过"与"写成 false" ✓ —— 同 `Keys` 其它开关)
+    private static var graveTakeoverEnabled: Bool {
+        UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool
+            ?? KeyDefaults.takeoverGraveCyclesWindows
+    }
+
+    /// 「唤起即切换」(默认开 ✓;与设置面板同一个键、现读 ✓)
+    private static var advanceOnOpen: Bool {
+        UserDefaults.standard.object(forKey: Keys.switchAdvanceOnOpen) as? Bool ?? KeyDefaults.advanceOnOpen
+    }
+
     private static var graveCyclesWindows: Bool {
-        UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? KeyDefaults.graveCyclesWindows
     }
     /// 面板出现期间是否接管滚动(设置里的「双指滑动换组」,默认开)。
     /// 关掉时必须**放行**:设置里的说明写着"关闭后…照常交给底下的应用"。
@@ -153,11 +170,14 @@ final class HotkeyTapCenter {
     }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
-    private var pinPanel: Bool { DebugFlags.pinPanelOnRelease }
+    // ★ 2026-09-22:从 `DebugFlags.pinPanelOnRelease`(调试键,每次启动被清 ✗)提升为**用户设置** ✓
+    //   优先看启动参数(自动化测试用 ✓),否则看设置里那一行 ✓
+    private var pinPanel: Bool { Keys.pinOnRelease }   // 唯一读取点(见 Keys.pinOnRelease)✓
 
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
     private var pinnedSession = false
+
 
     // MARK: - 生命周期
 
@@ -290,7 +310,12 @@ final class HotkeyTapCenter {
         guard state != .navigating else { return }
         setState(.navigating)
         // 方向要传下去:「唤起即切换」开着时,正向落"上一个 App"、反向落"最后一个"
-        emit(hotKey == .reverse ? .beginReverse : .begin)
+        let forward = hotKey != .reverse
+        // ★ 2026-09-22 用户裁定:**放弃"轻点不弹面板"那条**(试过两版阈值,延迟都影响使用 ✗)——
+        //   原生 macOS 就是"按下即弹" ✓,我们照它 ✓。**切换逻辑的正确性**另有保障:
+        //   落点会跳过当前 App(`LandingRule.landingIndex(count:from:reverse:)` ✓)、
+        //   顺序按"这块屏的最近用过"排(`ScreenRecency` ✓)✓
+        emit(forward ? .begin : .beginReverse)
     }
 
     // MARK: - 事件 tap
@@ -317,7 +342,10 @@ final class HotkeyTapCenter {
     /// 先对账"系统说它开着没有",再决定要不要动 —— 盲目 enable 会让日志失去可信度。
     private func updateNavTap() {
         guard let navTap else { return }
-        let shouldEnable = state == .navigating
+        // ⚠️ 开了"接管 ⌘`"之后,这个 tap 要**常开** —— 否则面板没开的时候收不到那颗键 ✗。
+        //   代价诚实说:从此每个 keyDown 都要过一遍 `handleNavKey`,所以那里面**先判状态与键码**、
+        //   不匹配立刻 return false(放行)✓;真正耗时的聚焦动作挪到 async(见上面那条分支)✓
+        let shouldEnable = state == .navigating || Self.graveTakeoverEnabled
         if CGEvent.tapIsEnabled(tap: navTap) != shouldEnable {
             CGEvent.tapEnable(tap: navTap, enable: shouldEnable)
             // 每局开关各一条,是常态而非事件 —— 收进 trace(要看纪律是否守住时再开)
@@ -338,8 +366,14 @@ final class HotkeyTapCenter {
         case .leftMouseDown: return handleMouse(event)
         case .keyDown: return handleNavKey(event)
         case .scrollWheel:
+            // ★★ 2026-09-22 事故(用户实报「触摸板双指滑动怎么失效了」,他正在工作 ✗):
+            //   这一支原先**靠隐含前提**——"navTap 只在会话期开着" ⇒ 于是没写状态判断 ✗。
+            //   给 ⌘` 接管让 navTap **常开**之后,它就变成**全系统吞滚动** ⇒ 双指滑动到处失效 ✗
+            //   (用户设置里「滚动切换应用」是开的 ⇒ 正好踩中)。
+            //   教训:凡"只有我能吞键"的 tap,**每一支都要自己带状态判断**,不许依赖 tap 的开合 ✗
+            guard state == .navigating else { return false }   // 非会话期:滚动一律放行 ✓
             // 用户实报:「我滑动的时候, ghostty 的滚轮也跟着动了」——
-            // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap(会话期才有、唯一有吞键权的那个)。
+            // 全局 NSEvent 监听只能旁观、不能拦,所以交给 navTap。
             // 返回 true = 吞掉。惯性事件也一并吞:只吞非惯性的话,甩动的尾巴会继续滚底下的 App。
             if let nse = NSEvent(cgEvent: event) { onScroll?(nse) }
             // ⚠️ 必须先看开关:设置里写的是"关闭后,滚轮与双指滑动照常交给底下的应用",
@@ -389,7 +423,28 @@ final class HotkeyTapCenter {
         //   把 tap 看见的**每一颗会话期按键**都记下来(带状态与修饰键)⇒ 一眼能分清是
         //   ① 键根本没被看见(navTap 没开/会话已结束)还是 ② 看见了但下游没做事。
         let __kc = event.getIntegerValueField(.keyboardEventKeycode)
-        glog("[键账] kc=\(__kc) state=\(state) pinned=\(pinnedSession) mods=\(event.flags.rawValue)")
+        // ★★ 接管系统 ⌘`(2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」)
+        //   口径:**只在面板没开**的时候接管 —— 面板开着时 ⌘` / ` 照旧走"会话内窗口循环" ✓
+        //   修饰键**精确匹配** {⌘} 或 {⌘,⇧}:多一个(⌃/⌥)都是别人的快捷键 ⇒ 放行 ✗(见下面那把门禁的病例)
+        //   ⚠️ 回调必须**立刻返回**:tap 回调超时会被系统摘掉 ⇒ 真正的活挪到 async ✓
+        //   ⚠️ 这一支必须在**下面那道 `guard state == .navigating` 之前** —— 第一版写在它后面 ⇒
+        //      面板没开时永远到不了这里(实机:注入 ⌘` 日志里一行都没有)✗
+        if Self.graveTakeoverEnabled, __kc == Self.keyGrave, state != .navigating {
+            let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+            if mods == [.maskCommand] || mods == [.maskCommand, .maskShift] {
+                let forward = !event.flags.contains(.maskShift)
+                // ★ 不直接调 App 层的循环器(Trigger 不许反向依赖 ✗ 架构脚本会报 ✓)
+                //   ⇒ 走**闭包钩子**,由 GlanceApp 装配 ✓(输入管线的既有约定:onFire / onScroll 同一套 ✓)
+                onSameAppScreenCycle?(forward)
+                return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
+            }
+            return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓
+        }
+        // ⚠️ 开了"接管 ⌘`"之后这个 tap **常开** ⇒ 这行不能无条件打 ✗
+        //    (否则全系统每一次按键都写一行日志 —— 正是之前刚修过的"刷屏"病 ✓)
+        if isTraceEnabled, state == .navigating {
+            glog("[键账] kc=\(__kc) state=\(state) pinned=\(pinnedSession) mods=\(event.flags.rawValue)")
+        }
         guard state == .navigating else { return false } // 理论上不会(会话期才开),守一道
         let keyCode = __kc
         let config = TriggerConfig.load()
@@ -525,7 +580,10 @@ final class HotkeyTapCenter {
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadTriggerIfChanged() }
+            MainActor.assumeIsolated {
+                self?.reloadTriggerIfChanged()
+                self?.updateNavTap()      // ★ ⌘` 接管开关是"现读"的 ⇒ tap 开/关要跟着设置走 ✓
+            }
         }
     }
 
@@ -630,16 +688,20 @@ final class ThreeFingerTap {
 
     /// 设置项。**默认关**(新开关一律默认对齐 macOS:macOS 没有这个功能)。
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效,不用重启(与 DoubleOptionTap 同一套约定)。
-    static let defaultsKey = "pointer.threeFingerTapPanel"
-    private var enabled: Bool { UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? false }
+    static let defaultsKey = Keys.pointerThreeFingerTapPanel
+    private var enabled: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.threeFingerTapPanel
+    }
 
     /// 四指轻点(T91)= **直接进未启动环**。与三指那条同一条纪律:**默认关**
     /// (默认对齐 macOS:macOS 没有这个功能),而且**区分"没写过"与"写成 false"** ——
     /// `object(forKey:) as? Bool ?? false`:取不到 = 没写过 = 关,取到 false = 用户关掉了。
     /// (本机实测:系统没有占用"四指轻点"—— `TrackpadFourFingerTapGesture` 这个键根本不存在;
     ///  四指只有横扫/竖扫/捏合。见 design/入口槽-底部形态实验台.html 的记账。)
-    static let defaultsKeyFour = "pointer.fourFingerTapLaunchRing"
-    private var enabledFour: Bool { UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? false }
+    static let defaultsKeyFour = Keys.pointerFourFingerTapLaunchRing
+    private var enabledFour: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? KeyDefaults.fourFingerTapLaunchRing
+    }
 
     var onFire: (() -> Void)?
     /// 四指的落点:唤起 + 直接切到未启动环。接线在 GlanceApp,与 onFire 并排
@@ -1066,6 +1128,8 @@ final class ThreeFingerTap {
 /// 新建 .swift 必须同时在四处登记（PBXBuildFile / PBXFileReference / group / Sources phase），
 /// 漏一处就是 `cannot find 'X' in scope`。同一个 domain 的代码就近放，先避免这类机械风险。
 final class DoubleOptionTap {
+    /// 双击 ⌥:把"跳到下一块屏"整件事交给 **App 层**(见 `App/ScreenScopedSwitching.swift` ✓)
+    var onJumpToNextDisplay: (() -> Void)?
     static let shared = DoubleOptionTap()
     private init() {}
 
@@ -1073,8 +1137,12 @@ final class DoubleOptionTap {
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
     /// key 随触发键换名(⌃→⌥),**不做旧值迁移**:功能默认关,丢一次开关状态无伤
     /// (先例:panel.puckRiseFromBottom → panel.slideFromLastApp 也是不迁移)。
-    static let defaultsKey = "pointer.doubleOptionJumps"
-    private var enabled: Bool { UserDefaults.standard.bool(forKey: Self.defaultsKey) }
+    static let defaultsKey = Keys.pointerDoubleOptionJumps
+    // ⚠️ 这里原来用 `bool(forKey:)`(没写过 ⇒ false,于是默认值写不成 true ✗)⇒
+    //    与别处统一成 `object(forKey:) as? Bool ?? KeyDefaults.*` ✓
+    private var enabled: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.doubleOptionJumps
+    }
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -1123,73 +1191,15 @@ final class DoubleOptionTap {
         }
     }
 
-    /// 目标屏上 Z 序最前的那扇窗 = 用户说的"台前第一个 App"。
-    /// 为什么落焦到**窗**而不是 App:同一个 App 可能两块屏各有窗,让 App 自己决定键盘给谁
-    /// 正是"激活不保证落焦"那个坑(见 CONTEXT.md)。
-    private func landingWindow(on displayID: CGDirectDisplayID) -> WindowRecord? {
-        guard let screen = NSScreen.screens.first(where: {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
-        }) else { return nil }
-        // ⚠️ 不能直接用 WindowEnumerator.rawGroups(on:).first —— 那个数组是按 pid 分组后的
-        // **Dictionary 的值**,而 Swift 里 Dictionary 的顺序是未定义的。实机现形(2026-09-15 用户报):
-        // "不是台前第一个…现在是系统自己选的" —— .first 拿到的是哈希序里的某个 App ✗。
-        //
-        // 所以直接问 CGWindowList:它返回的数组是**前到后**的 Z 序,第一个命中者就是"层级最上面"那扇窗。
-        // 过滤规则与 rawGroups 保持一致(layer==0 / 排除自家窗 / 尺寸合理 / 归属屏恰为目标屏)。
-        guard let infos = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else { return nil }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        for info in infos {                       // 顺序遍历 = 从最上面往下,第一个命中即答案
-            guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
-                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
-                  bounds.width > 1, bounds.height > 1,
-                  WindowEnumerator.ownsByContextScreen(bounds, contextScreen: screen)
-            else { continue }
-            let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
-            let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
-            return WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds)
-        }
-        return nil
-    }
-
     /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），
     /// 而不是丢到角落 —— 指针像"平移"过去，这是体感的关键。
+    /// ★ 2026-09-22:整段逻辑搬到 **App 层**(`DoubleOptionJump`)——
+    ///   它要看清点(Inventory)又要落焦(Focus),放在 Trigger 里会**双向越界** ✗
+    ///   (架构脚本报了很久,记在已知账上;现在按同一套"闭包钩子 + App 层装配"还掉 ✓)
+    ///   这里只判"这一下该不该算一次跳屏"(拖拽途中不算 ✓),然后把话交给 App 层 ✓
     private func jumpToNextDisplay() {
         guard NSEvent.pressedMouseButtons == 0 else { return }   // 拖拽途中不动（别把拖拽目标搞乱）
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 1 else { return }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return }
-
-        // 全程用 CoreGraphics 坐标系（原点在主屏**左上**）：指针位置与屏幕矩形同系，
-        // 就不需要 y 翻转 —— 少一次换算出错的机会（这类翻转是经典 bug 源）。
-        let cursor = CGEvent(source: nil)?.location ?? .zero
-        guard let from = ids.firstIndex(where: { CGDisplayBounds($0).contains(cursor) }) else { return }
-        let b = CGDisplayBounds(ids[(from + 1) % ids.count])
-        // **居中落点**(用户 2026-09-15):指针永远落在那块屏的**正中间**。
-        // 原先按"相对位置"平移(右屏 70% 高处 → 左屏 70% 高处),思路是"像把指针平推过去";
-        // 改动理由是**可预测**:落焦已经把键盘交给目标屏台前的窗之后,
-        // 指针的精确位置不再承载意义,而"永远在正中间"是闭着眼也知道的事。
-        // 顺带不需要再夹 2%–98% —— 屏幕中心天生远离各条边缘。
-        let rx = 0.5
-        let ry = 0.5
-        CGWarpMouseCursorPosition(CGPoint(x: b.minX + rx * b.width, y: b.minY + ry * b.height))
-        CGAssociateMouseAndMouseCursorPosition(1)   // 防止与事件流解耦（否则指针"冻住"直到动一下）
-        // 把"工作上下文"一起搬过去:落焦到那块屏台前的那扇窗 ⇒ 过去就能直接打字。
-        // **落焦是跳屏的固定语义,没有"只搬指针"模式**(T87 v2 用户裁定:
-        // 「移动过去不落焦那移动的意义是什么」—— 子开关废除)。
-        // 不算融合操作 —— 落点由那块屏自身决定,没有替用户做选择(ADR-0007 修正)。
-        let targetID = ids[(from + 1) % ids.count]
-        var landed = ""
-        if let w = landingWindow(on: targetID) {
-            MainActor.assumeIsolated { WindowFocuser.focus(window: w) }   // 监听器在主线程,无需再跳
-            landed = " · 落焦 \(w.ownerName)"
-        }
-        print(String(format: "[指针] 双击 ⌥ → 屏 %d → 屏 %d (居中)%@",
-                     from + 1, (from + 1) % ids.count + 1, landed))
+        onJumpToNextDisplay?()
     }
+
 }
