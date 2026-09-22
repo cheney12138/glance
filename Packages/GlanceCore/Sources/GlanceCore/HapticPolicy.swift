@@ -49,8 +49,11 @@ public enum HapticPolicy {
     /// 仍然用 `object(forKey:) as? Bool ?? false`,不用 `bool(forKey:)` ——
     /// 口径是"**没写过"与"写成 false"必须能区分**,默认值是查询时补上的,不靠 UserDefaults 的缺省。
     /// (对比:`MotionPolicy.alwaysAnimate` 默认开,同一套写法,只是补 false 还是 true 不同。)
+    /// 键名(单一来源):App 侧的 `Keys.hapticEnabled` 引用它 ⇒ **不写两遍** ✓
+    public static let defaultsKey = "haptic.enabled"
+
     public static var enabled: Bool {
-        UserDefaults.standard.object(forKey: "haptic.enabled") as? Bool ?? false
+        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? false
     }
 
     /// 事件 ⇒ 手感。**开关关掉时一律 none**(设置是绝对权威:关了就是通通不震)。

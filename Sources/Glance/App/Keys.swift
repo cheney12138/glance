@@ -1,4 +1,5 @@
 import Foundation
+import GlanceCore
 
 /// ★ 全部“可配置入口”的键名（唯一来源）。
 ///
@@ -88,6 +89,9 @@ enum Keys {
     static let switchCaptureApps = "switch.captureApps"
     /// `switch.graveCyclesWindows`
     static let switchGraveCyclesWindows = "switch.graveCyclesWindows"
+    /// 悬停触感(2026-09-22 用户要求「hover 震动,app 和预览容器都需要, 做成设置开关」)
+    /// ⚠️ 键名**来源在 GlanceCore.HapticPolicy.defaultsKey** —— 那里读、这里显示,一个源 ✓
+    static let hapticEnabled = HapticPolicy.defaultsKey
     /// `switch.scrollMovesSelection`
     static let switchScrollMovesSelection = "switch.scrollMovesSelection"
 

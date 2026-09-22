@@ -1986,6 +1986,7 @@ final class PanelController: ObservableObject {
         if entrySelected {
             guard hoverAllowedByGate(), launchables.indices.contains(i), i != launchIndex else { return }
             launchIndex = i
+            Haptics.fire(.hoverAppRow)       // ★ 悬停触感(设置里可关;策略层已把"只保留 hover"写死 ✓)
             trace("[T91] 启动选中(\(source)): [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
             return
         }
@@ -1993,6 +1994,9 @@ final class PanelController: ObservableObject {
         // (实机现形:日志被系统 QUARANTINED 截流)
         // entrySelected 也要放行:指针从启动区挪回主环,等于选回主环
         guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex || entrySelected else { return }
+        // ★ 悬停触感:指针**换到另一个 App 格**上时震一下(用户 2026-09-22 要求 ✓)
+        //   放在这道闸之后 ⇒ 每像素发声的 onHover 不会变成震动风暴 ✓(同格重复不进账 ✓)
+        Haptics.fire(.hoverAppRow)
         traceCost("指针换选中") {
             // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
             // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
@@ -2178,6 +2182,7 @@ final class PanelController: ObservableObject {
         guard hoverAllowedByGate() else { return }
         FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 悬停打点(量"含悬停那几拍")
         winIndex = i
+        Haptics.fire(.hoverPreviewThumb)     // ★ 悬停触感:指针换到托盘里另一扇窗 ✓
         if let g = currentGroup, g.windows.indices.contains(i) {
             trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
         }

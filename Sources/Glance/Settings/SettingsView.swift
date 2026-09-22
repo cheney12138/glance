@@ -39,7 +39,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "未启动环", "动效"]
+            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "触感", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限"]
             }
@@ -61,6 +61,8 @@ struct SettingsView: View {
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
+    /// 悬停触感(键名来自 `GlanceCore.HapticPolicy.defaultsKey` ✓ 一个源,不写两遍 ✓)
+    @AppStorage(Keys.hapticEnabled) private var hapticEnabled = false
 
     /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
     @State private var liveTier: Double = Double(LivePreviewPool.tierFps)
@@ -271,6 +273,19 @@ struct SettingsView: View {
                             desc: "四指轻点触控板,唤起并直接进入未启动环。",
                             hairline: false) {
                     BeamSwitch(isOn: $fourFingerTapLaunchRing)
+                }
+            }
+
+            // ★ 2026-09-22 用户要求:「hover 震动,app 和预览容器都需要, 做成设置开关」。
+            //   策略层**早就写好了**(`GlanceCore.HapticPolicy`:只有 hover 类事件会震,其余事件的反馈
+            //   交给视觉脉冲 —— 2026-09-20 用户自己裁定的 ✓);缺的是"触发点"与"设置里这一行" ✗
+            //   两个面(环上的 App / 托盘里的窗口)共用**一个**开关:对人是同一件事
+            //   ("指针挪到别的东西上了")⇒ 拆成两条只会让人多读一行 ✓(要拆随时说 ✓)
+            SettingsGroup(label: "触感", anchor: Page.general.anchor("触感")) {
+                SettingsRow(title: "悬停触感",
+                            desc: "指针移到环上的 App、或托盘的窗口上时,触控板轻震一下。",
+                            hairline: false) {
+                    BeamSwitch(isOn: $hapticEnabled)
                 }
             }
 
