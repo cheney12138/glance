@@ -114,6 +114,12 @@ final class PanelController: ObservableObject {
     /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
     @Published private(set) var segmentTravel: SegmentTravel = .direct
 
+    /// "换环进行中"的窗口(2026-09-22):托盘内容在换环那一拍要**当拍**换(与环的翻牌同步 ✓),
+    /// 而 hover 换组时要**滑**(用户实报「hover app 托盘只会闪现, 没有滑动了」✓)。
+    /// 用时间窗而不是开关:换环是同步一瞬间的事,没有"结束"回调可挂 ✓
+    private var ringSwapUntil: CFAbsoluteTime = 0
+    var isRingSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < ringSwapUntil }
+
     /// 启动行 hover 的**帧拍兜底**(与 SheenOverlay 同一哲学:非 key 窗口的事件投递靠不住
     /// —— 先"哑"后"迟钝"两次实咬 —— 每帧问一次全局指针位置,自己算格子,事件丢了也有帧拍)。
     /// 几何与 `hoverLaunchAt` 同源;由 PreviewPanelView 里的 TimelineView 每帧驱动,
@@ -835,7 +841,18 @@ final class PanelController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
             guard let self, self.isVisible else { return }
             self.selectionArmed = true // 之后会话内的选中变化照常走弹簧
-            withAnimation(MotionPolicy.animation(PanelMotion.entrance)) { self.contentEntryRise = 0 }
+            // ★ 2026-09-22 用户实报「托盘冒头比 app 上浮快,等 app 上浮完成才能遮住它,不要让它露出来」:
+            //   根因是**两者的运动不是同一种**——图标上浮是两根弹簧叠加
+            //   (`contentEntryRise` 入场 + 自己的 `-iconLift` 选中),托盘只有入场这一根 ✗
+            //   ⇒ 无论怎么对齐曲线,中间那几十毫秒都可能露 ✓
+            //   ⇒ 结构性修法:**托盘比图标晚到**(图标先抬起来让开,托盘再上来 ⇒ 物理上不可能露 ✓)
+            //   用已有的 `entryDelay`(0.06s),与"入场延迟"同一档参数 ✓
+            // `MotionPolicy.animation` 是 `Animation?`(系统"减弱动态"时给 nil ⇒ 瞬时 ✓)
+            if let rise = MotionPolicy.animation(PanelMotion.entrance) {
+                withAnimation(rise.delay(PanelMotion.entryDelay)) { self.contentEntryRise = 0 }
+            } else {
+                self.contentEntryRise = 0
+            }
         }
         // 帧间隔探针只在本轮导航态里跑(GLANCE_TRACE=1):面板退场时打一行结论
         if let hostingView { FrameProbe.shared.start(on: hostingView, label: "面板\(groups.count)App") }
@@ -2037,6 +2054,7 @@ final class PanelController: ObservableObject {
     /// 窗框走 applyRingSwap(animated:) 同一根曲线 —— 内容与玻璃一次变形完成。
     private func setSegment(_ toLaunch: Bool, travel: SegmentTravel, launchIndex target: Int?) {
         segmentTravel = travel
+        ringSwapUntil = CFAbsoluteTimeGetCurrent() + 0.35   // 这一拍托盘内容当拍换(见 isRingSwapInFlight)
         // ★★ 2026-09-22 用户实报:「上下切换的时候, 环有抖动。应该是变形导致的, 直接 3/4 唤起打开是没问题的」
         //   —— 说的就是**双动画系统的相位差**(见 applyRingSwap 里那段"已知成本"的注释):
         //      AppKit 动窗框(0.18s easeInOut)+ SwiftUI 动内容,两条时间线不可能逐帧对齐 ⇒ 抖 ✗。
