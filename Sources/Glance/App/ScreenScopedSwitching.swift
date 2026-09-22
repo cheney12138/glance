@@ -152,57 +152,6 @@ enum SameAppScreenCycler {
     }
 }
 
-// MARK: - 轻点 ⌘Tab 的静默切换:只在该屏上最近用过的另一个 App
-
-/// 用户 2026-09-22:「cmd tab 如果只是触发了一次, 就不要展示面板, 直接触发窗口切换。
-/// 只有 cmd 没松开的时候, 才唤起面板, 然后**显式的定义一下, cmd tab 默认是在 a<->b
-/// 两个 app 中反复来回切换的**。这样更效率一点, 就不做设置开关了。」
-///
-/// 语义(显式):正向 = 切到**这块屏上**最近用过的另一个 App ⇒ A→B、再按 B→A ✓;
-/// 反向(⇧⌘Tab)= MRU 里最久没用过的那个 ✓。
-///
-/// ⚠️ 与"直接 activate(App 级)"的区别(第一版就是那样,被用户当场指出 ✗):
-///   activate 会把 App 的**任意一扇窗**拉到前面 —— 双屏时会**跨屏** ✗(违反 ADR-0008)。
-///   这里:候选 = **在这块屏上有窗口的 App** ✓,落点 = 它**在这块屏上的最前一扇窗** ✓
-enum QuickSwitch {
-    @MainActor
-    static func toPreviousApp(forward: Bool) {
-        let snap = ScreenWindowIndex.snapshot()
-        guard let screen = ScreenWindowIndex.contextScreen(snapshot: snap) else { return }
-
-        // 候选:常规 App 里"在这块屏上有窗口"的那些(顺序交给 MRU ✓)
-        let regular = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-        // ★ 筛候选只查快照(不碰 AX ✓)—— 否则 10 个 App × 10ms = 100ms ✗,
-        //   正好把"轻点要快"这件事毁掉 ✗(自己 review 时抓到的 ✓)
-        let onScreen = regular.filter { ScreenWindowIndex.hasWindow(pid: $0.processIdentifier,
-                                                                   on: screen, snapshot: snap) }
-        // ★ 顺序:**先按"这块屏上最近用过"**(ScreenRecency ✓ —— 与面板落点同一本账 ✓),
-        //   没有本屏记录的再按全局 MRU 补 ✓(2026-09-22 用户实报:全局顺序跨屏污染 ✗)
-        let pids = onScreen.map(\.processIdentifier)
-        func rank(_ pid: pid_t) -> Int? { ScreenRecency.shared.rank(of: pid, on: screen) }
-        let order = pids.filter { rank($0) != nil }.sorted { (rank($0) ?? .max) < (rank($1) ?? .max) }
-            + MruEvidence.shared.ordered(pids: pids.filter { rank($0) == nil })
-        guard order.count > 1 else {
-            if isTraceEnabled {
-                glog("[轻点⌘Tab] \(screen.localizedName) 上不足两个 App ⇒ 不动作(不跨屏 ✗)")
-            }
-            return
-        }
-        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let idx = front.flatMap { order.firstIndex(of: $0) } ?? 0
-        let targetIdx = forward ? (idx + 1) % order.count : (idx - 1 + order.count) % order.count
-        let target = order[targetIdx]
-        // 落点:那 App **在这块屏上**的最前一扇窗 ⇒ 用与 ⌘` 同一套(清点 + 落焦 ✓)
-        guard let window = ScreenWindowIndex.windows(ofPID: target, on: screen, snapshot: snap).first else { return }
-        if isTraceEnabled {
-            glog("[轻点⌘Tab] \(forward ? "正向" : "反向") ⇒ pid=\(target) 在 \(screen.localizedName)"
-                 + " 的 wid=\(window.wid)(MRU 第 \(targetIdx + 1)/\(order.count) 位)")
-        }
-        WindowFocuser.focus(window: WindowRecord(wid: window.wid, pid: target,
-                                                ownerName: "", title: "", bounds: window.bounds))
-    }
-}
-
 // MARK: - 双击 ⌥:指针跳到下一块屏 + 落焦(从 Trigger 搬来,2026-09-22 还债 ✓)
 
 /// 原在 `Trigger/DoubleOptionTap` ✓ —— 它既要看清点(`WindowEnumerator`)又要落焦(`WindowFocuser`)
@@ -267,3 +216,14 @@ enum DoubleOptionJump {
         return nil
     }
 }
+
+// MARK: - (已放弃)轻点 ⌘Tab 不弹面板
+
+// 2026-09-22 试过:轻点(短按快松)不弹面板、直接切 App;按住才弹。
+// **用户裁定放弃** —— 原话:「延迟还是有点大。要不就摘掉这个吧, 影响也不大,
+// macos 原生就这样。只要保证切换逻辑正确就行了」✓
+// 两版阈值(0.22s / 0.45s + "先按住 ⌘ 再点 Tab"提前判据)都试过:
+// 时间阈值**两全不了** —— 短了轻点也弹面板 ✗,长了想浏览的人要等半秒 ✗。
+// ⇒ 恢复原生:**按下即弹面板** ✓;而"切换逻辑的正确性"由这两条保证 ✓:
+//   · 落点**跳过当前 App**(`LandingRule.landingIndex(count:from:reverse:)` + `WindowEnumerator.frontmostPID` ✓)
+//   · 顺序按"**这块屏**的最近用过"排(`ScreenRecency` ✓)

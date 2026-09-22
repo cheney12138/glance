@@ -84,9 +84,6 @@ struct GlanceApp: App {
                     ThumbnailRefresher.shared.start()
                     // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
                     //   (Trigger 不许反向依赖 App 层 ⇒ 只能在 App 层装配,见 SameAppScreenCycler 头注 ✓)
-                    hotkeys.onQuickSwitch = { forward in
-                        QuickSwitch.toPreviousApp(forward: forward)
-                    }
                     hotkeys.onSameAppScreenCycle = { forward in
                         Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
                     }

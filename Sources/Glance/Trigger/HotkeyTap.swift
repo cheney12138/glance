@@ -25,11 +25,6 @@ final class HotkeyTapCenter {
     /// 见 `Sources/Glance/App/SameAppScreenCycler.swift` 的头注 ✓)
     var onSameAppScreenCycle: ((Bool) -> Void)?
 
-    /// **轻点一下的静默切换**(2026-09-22 用户要求):
-    /// 「cmd tab 如果只是触发了一次, 就不要展示面板, 直接触发窗口切换。
-    ///   只有 cmd 没松开的时候, 才唤起面板」⇒ 参数 = 是否正向(⇧ = 反向 ✓)。
-    /// 由 App 层装配(Trigger 不许反向依赖 App 层 ✗)
-    var onQuickSwitch: ((Bool) -> Void)?
 
     enum State { case idle, armed, navigating }
 
@@ -183,25 +178,6 @@ final class HotkeyTapCenter {
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
     private var pinnedSession = false
 
-    /// **轻点 vs 按住**的分界(秒)。判据(见 handleHotKey 的注释):
-    ///   · 这个窗口内**松开** ⇒ 轻点 ⇒ 不弹面板,直接切到上一个 App ✓
-    ///   · 窗口内**再按一次 Tab**,或**按住超过**它 ⇒ 弹面板(进入浏览)✓
-    /// **0.45s**(2026-09-22 由 0.22 上调:用户实报"还是能看到面板" ✗ ——
-    /// 真人"按 ⌘、点 Tab、松 ⌘"常常超过 220ms ⇒ 被判成"按住" ✗)。
-    /// 0.45s 的依据:**浏览那条路有更快的入口** —— 再按一次 Tab 会**立刻**弹面板 ✓
-    /// ⇒ 这个窗口只管"多长的轻点还算轻点",不必替浏览抢时间 ✓
-    /// (用户没要求开关,故为常量 ✓)
-    private static let quickTapWindow: TimeInterval = 0.45
-
-    /// **"先按住 ⌘ 再点 Tab"** 的判据(秒):超过它 ⇒ 立刻弹面板 ✓
-    /// (用户实报"按住要等 0.3~0.5 才出来" ✗ —— 这一条把"想浏览的人"从延后那条路上摘出来 ✓)
-    private static let preHoldToBrowse: TimeInterval = 0.15
-    /// 触发修饰键**按下的时刻**(`.armed` 那一步记 ✓)—— 用来判"先按住再点 Tab" ✓
-    private var modifierDownAt: CFAbsoluteTime = 0
-    /// 本局的 `.begin` 发出去了没有 + 待发的方向 + 定时器
-    private var beginEmitted = false
-    private var pendingBeginForward = true
-    private var beginTimer: DispatchWorkItem?
 
     // MARK: - 生命周期
 
@@ -333,37 +309,13 @@ final class HotkeyTapCenter {
         // 也顺手避免了"Carbon 重复投递 + navTap 各动一次"的双跳。
         guard state != .navigating else { return }
         setState(.navigating)
+        // 方向要传下去:「唤起即切换」开着时,正向落"上一个 App"、反向落"最后一个"
         let forward = hotKey != .reverse
-        // ★★ 2026-09-22 用户要求:「cmd tab 如果只是触发了一次, 就不要展示面板, 直接触发窗口切换。
-        //    只有 cmd 没松开的时候, 才唤起面板」⇒ 这一发**先不弹面板** ✗:
-        //      · quickTapWindow 内松开 ⇒ 轻点 ⇒ 直接切 App(App 层 onQuickSwitch ✓),**从不弹面板** ✓
-        //      · 窗口内再按一次 Tab(重复那支)或窗口到期 ⇒ 弹面板(照旧浏览 ✓)
-        //    「唤起即切换」关着时**不适用**(那时唤起就是为了看面板 ✗)⇒ 立刻弹 ✓
-        guard Self.advanceOnOpen else {
-            beginEmitted = true
-            emit(forward ? .begin : .beginReverse)
-            return
-        }
-        // ★★ 2026-09-22 用户实报「延迟给的太大了, 按住大概要等个 0.3~0.5 面板才出来」⇒
-        //   加一条**更早的判据**:`⌘` **先按下、停一会儿**再点 Tab = 明显是想浏览 ⇒ **立刻弹面板** ✓
-        //   而 `⌘Tab` 一起滚过去(轻点 ✓)才走延后那条 ✓
-        //   依据:浏览的人是"先按住 ⌘,再连点 Tab";轻点的人是"两指一起按下、一起松开" ✓
-        //   0.15s:比"有意按住"的停顿短、比单纯的按键重叠(几十毫秒)长 ✓
-        let held = CFAbsoluteTimeGetCurrent() - modifierDownAt
-        if held > Self.preHoldToBrowse {
-            beginEmitted = true
-            emit(forward ? .begin : .beginReverse)
-            return
-        }
-        beginEmitted = false
-        pendingBeginForward = forward
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.state == .navigating, !self.beginEmitted else { return }
-            self.beginEmitted = true
-            self.emit(self.pendingBeginForward ? .begin : .beginReverse)
-        }
-        beginTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.quickTapWindow, execute: work)
+        // ★ 2026-09-22 用户裁定:**放弃"轻点不弹面板"那条**(试过两版阈值,延迟都影响使用 ✗)——
+        //   原生 macOS 就是"按下即弹" ✓,我们照它 ✓。**切换逻辑的正确性**另有保障:
+        //   落点会跳过当前 App(`LandingRule.landingIndex(count:from:reverse:)` ✓)、
+        //   顺序按"这块屏的最近用过"排(`ScreenRecency` ✓)✓
+        emit(forward ? .begin : .beginReverse)
     }
 
     // MARK: - 事件 tap
@@ -403,10 +355,6 @@ final class HotkeyTapCenter {
 
     private func setState(_ new: State) {
         guard state != new else { return }
-        if new != .navigating {                       // 离开本局 ⇒ 清掉轻点那本账 ✓
-            beginTimer?.cancel(); beginTimer = nil
-            beginEmitted = false
-        }
         state = new
         updateNavTap()
     }
@@ -446,7 +394,6 @@ final class HotkeyTapCenter {
         trace("flagsChanged kc=\(keyCode) down=\(modifierDown) state=\(state)")
         switch (state, modifierDown) {
         case (.idle, true):
-            modifierDownAt = CFAbsoluteTimeGetCurrent()   // ★ 记下"⌘ 是什么时候按下的"(见 handleHotKey ✓)
             setState(.armed) // 裸按触发修饰键只待命,什么都不发生
         case (.armed, false):
             setState(.idle)  // 待命期放手:恢复原状
@@ -454,15 +401,6 @@ final class HotkeyTapCenter {
             // 钉住:松手不确认、不退出导航态——面板与它的"脑子"一起钉住,
             // 否则面板还在台上、状态机已经下班,Tabs/Esc 全漏给前台 App(实机现形)
             if pinPanel || pinnedSession { break }
-            if !beginEmitted {
-                // ★ **轻点**:面板一次都没出来 ⇒ 直接切 App(用户要的就是这个效率 ✓)
-                let forward = pendingBeginForward
-                beginTimer?.cancel(); beginTimer = nil
-                setState(.idle)
-                trace("轻点 ⌘Tab ⇒ 静默切换(不弹面板)forward=\(forward)")
-                onQuickSwitch?(forward)
-                break
-            }
             setState(.idle)
             emit(.confirm)
         default:
@@ -513,13 +451,6 @@ final class HotkeyTapCenter {
         // 触发键在导航期 = **循环移动**(开头那一发由 Carbon 负责,见 `handleHotKey`)
         if keyCode == config.keyCode {
             trace("trigger repeat kc=\(keyCode) shift=\(event.flags.contains(.maskShift))")
-            // ★ 轻点状态下的"第二次 Tab" = 用户想浏览 ⇒ 现在就把面板弹出来 ✓
-            //   (顺序必须是 begin 先、next 后:反了的话面板落点会用旧的选中 ✓)
-            if state == .navigating, !beginEmitted {
-                beginEmitted = true
-                beginTimer?.cancel(); beginTimer = nil
-                emit(pendingBeginForward ? .begin : .beginReverse)
-            }
             emit(event.flags.contains(.maskShift) ? .prev : .next)
             return true
         }
