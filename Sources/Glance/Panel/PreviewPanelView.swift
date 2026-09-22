@@ -758,6 +758,10 @@ final class LivePreviewPool: ObservableObject {
                 glog("[直播] 找不到窗口 wid=\(wid)"); return
             }
             let cfg = SCStreamConfiguration()
+            // ★ 与快照同一个坑(SDK 文档:child windows are included by default ✓)——
+            //   实时帧若不关,同一个 App 的进度窗/面板窗会**叠到这张卡里** ✗
+            //   (2026-09-22 用户实报的"两块内容挤在一张卡 + 一块黑"就是它 ⇒ 两条路一起关 ✓)
+            if #available(macOS 14.2, *) { cfg.includeChildWindows = false }
             // I3:尺寸**首启冻结** —— 窗口后来变形也不改(改了就是"画面忽然缩放",病例 A3)
             let size: CGSize
             if let f = self.frozenSize[wid] {

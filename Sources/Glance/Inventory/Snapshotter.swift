@@ -320,6 +320,16 @@ final class Snapshotter: ObservableObject {
         let pxW = 720
         let pxH = min(max(Int(720 / aspect), 48), 1500)
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+        // 🔬 取证:拍出来的图与"我们要的尺寸"对不对得上。
+        //   病例(2026-09-22):子窗口被默认拍进来 ⇒ 画面被撑大 ⇒ 比例不符 ⇒ 多出来的是透明像素 ⇒ 卡片一块黑 ✗
+        //   修掉 `includeChildWindows` 之后,这一行仍留着 —— 下次再有"图与尺寸不符",一眼可判 ✓
+        //   (只在 trace 下打;一拍一张图,量不大 ✓)
+        defer {
+            if isTraceEnabled {
+                glog(String(format: "[拍照] wid=%u 窗 %.0fx%.0f 请求 %dx%d",
+                            w.wid, w.bounds.width, w.bounds.height, pxW, pxH))
+            }
+        }
 
         if #available(macOS 26.0, *) {
             let config = SCScreenshotConfiguration()
@@ -331,6 +341,13 @@ final class Snapshotter: ObservableObject {
             // 自绘窗四圈"大灰边"(2026-09-17 用户实拍)。关掉后画面 = 窗口本体,
             // 与出图比例推导用的 `bounds` 口径一致,fill 裁切也不再吃空边
             config.ignoreShadows = true
+            // ★★ 2026-09-22 用户实报(两张截图):Sublime Text 有「编辑器 + 一个 Update 进度窗」,
+            //    结果那张卡的图里**两块内容挤在一起**,旁边一大块黑 ✗。
+            //    真因在 SDK 文档里写着:`includeChildWindows` —— **child windows are included by default** ✓
+            //    ⇒ 我们按"单窗"拍图,系统却把它的**子窗口一起拍进来** ✗:
+            //      画面按子窗撑大 ⇒ 与我们要的尺寸/比例不符 ⇒ 多出来的地方是透明像素 ⇒ 卡片上一块黑 ✗
+            //    ⇒ 明确关掉:一张卡只画这扇窗自己的内容 ✓(要的是"切换器里那张缩略图",不是"窗口全家福")
+            if #available(macOS 14.2, *) { config.includeChildWindows = false }
             return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
                 // **超时兜底**(2026-09-14 实机病):SCK 的回调**可能永远不回来** ——
                 // 而 withCheckedContinuation 会一直等,于是整批拍图卡在第一个窗上:
@@ -359,6 +376,8 @@ final class Snapshotter: ObservableObject {
         config.height = pxH
         config.showsCursor = false
         config.scalesToFit = true
+        // 同上(14/15 这条也有同一个默认值):一张卡只画这扇窗自己 ✓
+        if #available(macOS 14.2, *) { config.includeChildWindows = false }
         do {
             let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             return (Self.trimTransparentEdges(img), nil)
