@@ -203,7 +203,10 @@ struct SettingsView: View {
                     BeamSwitch(isOn: $showLaunchables)
                 }
                 SettingsRow(title: "Tab 进入未启动区",
-                            desc: "关闭后使用 ↓ 键进入。",
+                            // 2026-09-22 补：原小字只写了“怎么进”，没写“怎么回” ⇒ 用户关掉开关后以为
+                            // “未启动段进不去 / 出不来”（实为 Tab 不再跨段，进出口改由 ↓/↑ 承担）。
+                            // 面向用户的文案纪律：**一个开关把哪条路改掉了，就要把新的进出口写出来**。
+                            desc: "关闭后改用 ↓ 进入未启动区、↑ 返回（四指轻点可直接进入）。",
                             hairline: false) {
                     BeamSwitch(isOn: $tabEntersLaunchSection)
                 }
