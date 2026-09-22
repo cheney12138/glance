@@ -743,6 +743,15 @@ final class ThreeFingerTap {
         /// 本轮**真手指**是否已经落板(掌不算)。掌先落时表不掐,真手指落的这帧才掐 ——
         /// 掌缘搭着打字时,"搭着"的时长不该算进点按时长
         private var sawRealTouch = false
+        /// ★ **手指数最近一次变多**的时刻(2026-09-22 修「过了一夜三指/四指又换不起来」)。
+        ///
+        /// 病例:日志里所有 3/4 指点按都被同一条判据否掉,而量到的时长是 **302 / 330 / 391 / 511 / 555 / 615ms** ✗
+        ///   —— 用户只是"轻点",但 `beganAt` 是"**第一根手指**落板"那一刻,而 3/4 指是**先后落齐**的
+        ///   (本文件自己的注释都写着"先落 3 根、第 4 根 40ms 后到是常态")。
+        ///   ⇒ "落得慢"的轻点被算成 300ms+ ⇒ 被 `maxDuration(0.30s)` 一刀切掉 ✗
+        /// 口径:**点按的"按住时长"应当从"手指落齐"那一刻起算** —— 手指还在往上加的时候,
+        ///   用户还没"按完"这个手势,那段时间不该计入。手指每变多一次,这里就重掐一次表。
+        private var countedSince: CFAbsoluteTime = 0
         private var firstNorm: [Int32: MTPoint] = [:]
         private var firstAbs: [Int32: MTPoint] = [:]
 
@@ -814,6 +823,7 @@ final class ThreeFingerTap {
                     palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
                     statesSeen.removeAll()
                     sawRealTouch = false
+                    countedSince = 0
                 }
                 if touching > 0, !sawRealTouch {
                     // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
@@ -824,7 +834,11 @@ final class ThreeFingerTap {
                     maxNormMove = 0; maxAbsMove = 0
                     maxTouches = 0
                 }
-                maxTouches = max(maxTouches, touching)
+                if touching > maxTouches {
+                    // 手指数**变多** ⇒ 手势还没"落齐" ⇒ 重掐点按计时(见 countedSince 的病例)
+                    countedSince = CFAbsoluteTimeGetCurrent()
+                    maxTouches = touching
+                }
                 palmCount = max(palmCount, palmTouching)
                 // ★ 返回**真手指数**,不是 total:掌还搭着不该挡收口 ——
                 //   (2026-09-20 病例:收口条件曾是"total == 0",掌缘搭板 = 账本永不收口,
@@ -858,7 +872,9 @@ final class ThreeFingerTap {
         /// 同一帧落齐(先落 3 根、第 4 根 40ms 后到是常态),只看当前帧会把"四指慢落"误判成三指。
         func judge() -> Outcome {
             if pressFired { return .rejected("") }   // 按压已生效,抬手不再按点按重复计
-            let held = CFAbsoluteTimeGetCurrent() - beganAt
+            // ★ 时长从"**手指落齐**"起算,不是从"第一根手指落板"起算(见 countedSince 的病例)
+            let held = CFAbsoluteTimeGetCurrent() - (countedSince > 0 ? countedSince : beganAt)
+            let heldTotal = CFAbsoluteTimeGetCurrent() - beganAt   // 只进日志,便于对账
             // 手指数 = max(同帧最大, 去重 id 数) —— 前者管"同帧落齐"的常态,后者兜"极快轻点
             // 从未同帧"的竞态(实测 ~50ms 的四指点按曾被数成 2)
             let n = max(maxTouches, distinctIDs.count)
@@ -869,9 +885,9 @@ final class ThreeFingerTap {
                 // states 供"漏在哪一档"对账:真手指若整轮只报了 1/2,这里一眼可见
                 if n >= 2 || palmCount > 0 {
                     let st = statesSeen.sorted().map(String.init).joined(separator: "/")
-                    return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且 ≤%.0fms)",
+                    return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且落齐后 ≤%.0fms;整轮 %.0fms)",
                                             n, palmCount, st, held * 1000, maxNormMove, maxAbsMove,
-                                            maxSeenSize, maxSeenMajor, ThreeFingerTap.maxDuration * 1000))
+                                            maxSeenSize, maxSeenMajor, ThreeFingerTap.maxDuration * 1000, heldTotal * 1000))
                 }
                 return .rejected("")   // 一指的普通点按:不进账
             }
