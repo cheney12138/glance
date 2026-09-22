@@ -240,11 +240,16 @@ private struct QuickSettingsMenu: View {
             Section {
                 Toggle("悬停触感", isOn: $haptic)
             }
+            // ★ 2026-09-22 用户实报:「关了震动, 震动等级还能勾选」+「看不出来是父子逻辑」——
+            //   菜单里没有"压暗"这种手段 ⇒ 用 `.disabled`(系统会把它画成灰的、点不动 ✓):
+            //   灰着但**仍在原位** ⇒ 一眼看出"它得先开上面那个" ✓
+            //   (值本身保留:把总开关重新打开,还是你上次选的那一档 ✓)
             Section("触感强度") {
                 ForEach(HapticStrength.allCases, id: \.self) { s in
                     Toggle(s.label, isOn: Binding(
                         get: { strength == s.rawValue },
                         set: { if $0 { UserDefaults.standard.set(s.rawValue, forKey: Keys.hapticStrength) } }))
+                        .disabled(!haptic)      // ← 父开关关掉 ⇒ 三个档位置灰、点不动 ✓
                 }
             }
             Section {
