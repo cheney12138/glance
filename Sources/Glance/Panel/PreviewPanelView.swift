@@ -672,8 +672,10 @@ final class LivePreviewPool: ObservableObject {
             guard let self else { return }
             self.sweepScheduled = false
             let now = CFAbsoluteTimeGetCurrent()
-            for (wid, since) in self.idleSince where now - since > Self.keepAlive {
-                self.stopStream(wid, why: "闲置 \(Int(now - since))s")
+            // 决策同样交给策略(单测覆盖"扫到了谁、为什么" ✓)
+            for req in LivePreviewPolicy.sweepPlan(now: now, running: self.handles.mapValues(\.fps),
+                                                  idleSince: self.idleSince, keepAlive: Self.keepAlive) {
+                self.stopStream(req.wid, why: req.reason.logText)
             }
             if !self.handles.isEmpty { self.scheduleSweep() }   // 还有流就继续守着
         }
@@ -683,16 +685,25 @@ final class LivePreviewPool: ObservableObject {
     ///   (病例:`SCStream` 创建是系统级重活 ⇒ 放在 hover 路径上会丢 1 拍 ✗,见 sync 的头注)。
     private func reconcile(_ items: [(wid: CGWindowID, aspect: CGFloat)], selected: CGWindowID?,
                            starts: Bool = true) {
-        // ① 记闲置时间(不再立刻停流 —— 见 keepAlive)
+        // ═══ 决策全部交给 `GlanceCore.LivePreviewPolicy`(纯函数、可单测)═══
+        // 原先这四段(记闲置 / 回收 / 换档 / 起流)是命令式的,长在这个类里 ⇒ 判断写漏了没人抓得住 ✗
+        // (2026-09-22:抽出后第一条单测就抓出"换档后没重建"的漏 ✗)。**执行**留在这里 ✓
         let now = CFAbsoluteTimeGetCurrent()
-        for wid in handles.keys where !wanted.contains(wid) {
-            if idleSince[wid] == nil { idleSince[wid] = now }
-        }
-        // ② 停:只停"确实不在环里"的窗口(闲置=它已经不在 wanted 集合里)。
-        //   局内**不做上限淘汰** —— 上限只是为了防呆,不是节流阀(见 maxStreams 的教训)。
-        for (wid, since) in idleSince where now - since > Self.keepAlive {
-            stopStream(wid, why: "已不在环内 \(Int(now - since))s")
-        }
+        let plan = LivePreviewPolicy.plan(now: now,
+                                          items: items.map { ($0.wid, $0.aspect) },
+                                          selected: selected,
+                                          running: handles.mapValues(\.fps),
+                                          pending: pending,
+                                          idleSince: idleSince,
+                                          tierFps: Self.tierFps,
+                                          lowFps: Self.lowFps,
+                                          maxStreams: Self.maxStreams,
+                                          keepAlive: Self.keepAlive,
+                                          allowStart: starts)
+        // ① 记闲置(不立刻停 —— 见 keepAlive)
+        for wid in plan.markIdle { idleSince[wid] = now }
+        // ②③ 停:回收 + 换档(顺序 = 策略给的顺序,日志文案照旧 ✓)
+        for req in plan.stop { stopStream(req.wid, why: req.reason.logText) }
         // ★ 断言"只有该跑的窗才有流"(2026-09-22 `guard wanted.contains(wid)` 那一刀的病根)——
         //   真事故:看不见的卡也在换图(白帧)⇒ 掉帧,而且**没人断言**过 ✗
         //   running = 已建流 ∪ 正在建;keepAlive 豁免 = 刚离开环、还在养着的那几条 ✓
@@ -700,27 +711,18 @@ final class LivePreviewPool: ObservableObject {
                                                       wanted: wanted, keepAlive: Set(idleSince.keys)) {
             glog("[不变量] ⚠️ \(viol)")
         }
-        // ③ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
-        // ★ 分档:选中 = 用户档位,其余 = lowFps。帧率变了就重启**那一条**(帧保留 ⇒ 不闪)✓
-        if starts {
-            for item in items.prefix(Self.maxStreams) {
-                let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
-                if let h = handles[item.wid], h.fps != want {
-                    stopStream(item.wid, why: "换档 \(h.fps)->\(want)fps")
-                }
-            }
-        }
+        // ④ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
         guard starts else { return }
         var delay = 0.0
-        for item in items.prefix(Self.maxStreams) where handles[item.wid] == nil && !pending.contains(item.wid) {
-            pending.insert(item.wid)
+        for req in plan.start {
+            pending.insert(req.wid)
             let d = delay; delay += 0.04
+            let aspect = items.first { $0.wid == req.wid }?.aspect ?? 1.6
             queue.asyncAfter(deadline: .now() + d) { [weak self] in
                 guard let self else { return }
-                self.pending.remove(item.wid)
-                guard self.wanted.contains(item.wid), self.handles[item.wid] == nil else { return }
-                let want = (item.wid == selected) ? Self.tierFps : Self.lowFps
-                self.start(item.wid, aspect: item.aspect, fps: want)
+                self.pending.remove(req.wid)
+                guard self.wanted.contains(req.wid), self.handles[req.wid] == nil else { return }
+                self.start(req.wid, aspect: aspect, fps: req.fps)
             }
         }
     }
