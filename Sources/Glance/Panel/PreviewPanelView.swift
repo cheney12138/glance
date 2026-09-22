@@ -521,6 +521,15 @@ final class LivePreviewPool: ObservableObject {
 
     /// 帧率档位 = 设置里的「实时预览」。**"0" = 关**(默认)。S4 起会分成"选中/其余"两档。
     static var tierFps: Int { max(0, Int(UserDefaults.standard.string(forKey: Keys.livePreviewTier) ?? "0") ?? 0) }
+
+    /// **实时预览档位的梯子(唯一一把)** —— 2026-09-22:
+    /// 设置面板里是**滑杆**(连续量 ✓)、菜单栏「快速设置」里是**子菜单勾选**(菜单没有滑杆 ✗),
+    /// 两种控件必须同梯子 ⇒ 值与文案都只在这里写一次 ✓
+    /// (0 = 关:关掉之后不取流,卡片退回静默图标/快照 ✓)
+    static let tiers = [0, 5, 10, 15, 20, 25, 30]
+
+    /// 档位 → 人话(0 说"关",不说"0 fps" ✓)
+    static func tierLabel(_ v: Int) -> String { v == 0 ? "关" : "\(v) fps" }
     static var enabled: Bool { tierFps > 0 }
     /// 流数上限(LRU 淘汰)
     /// 流数上限:**必须 ≥ 环里的窗口数**(实测环里 ~14 窗)⇒ 给 24 是防呆,不是节流阀。

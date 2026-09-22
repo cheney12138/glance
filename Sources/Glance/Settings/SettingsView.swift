@@ -235,11 +235,14 @@ struct SettingsView: View {
                 SettingsRow(title: "实时预览",
                             desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
                     HStack(spacing: 8) {
-                        Slider(value: tierBinding, in: 0...30, step: 5)
+                        // 范围与步长都从**梯子**推出来(不在两处各写一遍 0…30 step 5 ✗)
+                        Slider(value: tierBinding,
+                               in: Double(LivePreviewPool.tiers.first ?? 0)...Double(LivePreviewPool.tiers.last ?? 30),
+                               step: Double((LivePreviewPool.tiers.count > 1 ? LivePreviewPool.tiers[1] - LivePreviewPool.tiers[0] : 5)))
                             .controlSize(.small)
                             .frame(width: 150)
                             .focusEffectDisabled(!SettingsTheme.showsFocusRing)
-                        Text(liveTier > 0 ? "\(Int(liveTier)) fps" : "关")
+                        Text(LivePreviewPool.tierLabel(Int(liveTier)))
                             .font(SettingsFont.rowValue)
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()

@@ -44,6 +44,7 @@ struct GlanceApp: App {
                 Button(permissions.statusLine) { showPermissions() }
                 Divider()
             }
+            QuickSettingsMenu()          // ★ 2026-09-22:菜单里也能调(见类型注释里的取舍)
             Button("设置…") { showSettings() }
             Divider()
             Button("检查更新…") { UpdateChecker.checkForUpdates() }
@@ -196,6 +197,53 @@ struct GlanceApp: App {
                     }
                 }
             }
+        }
+    }
+}
+
+/// 菜单栏里的**快速设置**(2026-09-22 用户要求:「哪些设置适合这里也放一份,
+/// 不需要用户到设置面板里调整」)。
+///
+/// 选进来的四条,判据是**"你多久动一次"**:
+///   · 实时预览档位 —— 唯一一个会"边看面板边调"的(性能与观感只能在现场判 ✓)
+///   · 悬停触感 + 强度 —— 手感必须在面板前判断 ✓
+///   · 保持面板打开 —— 纯**会话级**行为("今天想钉住就钉住" ✓)
+///   · 高光效果 —— 一眼可判的外观 ✓
+/// **没**选进来的:接管系统 ⌘Tab / ⌘`(一次误点就把系统快捷键抢了 ✗)、
+///   三指/四指手势(设一次就不再动)、登录项与名单(属"管理")、
+///   间距与切换速度(**连续量**:菜单里只能拆档,拆粗丢手感、拆细菜单爆长 ✗)
+///
+/// 两条实现上的实话:
+///   · 与设置面板读**同一个键**(`Keys.*`)⇒ 两边永远同步、改完立刻生效 ✓
+///   · 菜单里**没有滑杆** ✗ ⇒ 连续量只能档位化,所以梯子是**一把**
+///     (`LivePreviewPool.tiers` ✓,设置面板的滑杆也从它推范围与步长 ✓)
+private struct QuickSettingsMenu: View {
+    /// 档位是 String 型键(历史原因,键名不换 ✓)⇒ 用自定义 Binding 读写,
+    /// 读的口径与 `LivePreviewPool.tierFps` 完全一致(含"没写过 = 0 = 关" ✓)
+    private var tier: Binding<String> {
+        Binding(get: { String(LivePreviewPool.tierFps) },
+                set: { UserDefaults.standard.set($0, forKey: Keys.livePreviewTier) })
+    }
+    @AppStorage(Keys.hapticEnabled) private var haptic = HapticPolicy.enabledDefault
+    @AppStorage(Keys.hapticStrength) private var strength = HapticStrength.medium.rawValue
+    @AppStorage(Keys.panelPinOnRelease) private var pin = KeyDefaults.pinOnRelease
+    @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
+
+    var body: some View {
+        Menu("快速设置") {
+            Picker("实时预览", selection: tier) {
+                ForEach(LivePreviewPool.tiers, id: \.self) { v in
+                    Text(LivePreviewPool.tierLabel(v)).tag(String(v))
+                }
+            }
+            Divider()
+            Toggle("悬停触感", isOn: $haptic)
+            Picker("触感强度", selection: $strength) {
+                ForEach(HapticStrength.allCases, id: \.self) { s in Text(s.label).tag(s.rawValue) }
+            }
+            Divider()
+            Toggle("保持面板打开", isOn: $pin)
+            Toggle("高光效果", isOn: $sheen)
         }
     }
 }
