@@ -693,6 +693,13 @@ final class LivePreviewPool: ObservableObject {
         for (wid, since) in idleSince where now - since > Self.keepAlive {
             stopStream(wid, why: "已不在环内 \(Int(now - since))s")
         }
+        // ★ 断言"只有该跑的窗才有流"(2026-09-22 `guard wanted.contains(wid)` 那一刀的病根)——
+        //   真事故:看不见的卡也在换图(白帧)⇒ 掉帧,而且**没人断言**过 ✗
+        //   running = 已建流 ∪ 正在建;keepAlive 豁免 = 刚离开环、还在养着的那几条 ✓
+        for viol in SessionInvariants.streamViolations(running: Array(handles.keys) + Array(pending),
+                                                      wanted: wanted, keepAlive: Set(idleSince.keys)) {
+            glog("[不变量] ⚠️ \(viol)")
+        }
         // ③ 起:错峰 40ms(避免向 WindowServer 打并发 —— AltTab issue #5861)
         // ★ 分档:选中 = 用户档位,其余 = lowFps。帧率变了就重启**那一条**(帧保留 ⇒ 不闪)✓
         if starts {
