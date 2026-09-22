@@ -244,3 +244,94 @@ enum WindowFocuser {
         print("[T7] 降级聚焦: \(w.ownerName) — \(w.title)(\(reason))")
     }
 }
+
+// MARK: - 系统 ⌘` 的接管(只在当前屏内循环同 App 的窗口)
+
+/// 用户 2026-09-22:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」。
+///
+/// 系统的 ⌘` 会在**所有屏幕**的同 App 窗口之间跳,于是双屏时会把人送到另一块屏去 ✗;
+/// 这里换成"只在当前屏内跳" ✓。开关默认**关**(opt-in)⇒ 关着时一个字都不变 ✓。
+enum SameAppScreenCycler {
+
+    /// "当前屏"的口径(设置里可切;用户说"开放到设置面板上,我自己调试" ✓)
+    enum ScreenBasis: String {
+        case pointer     // 指针所在屏(默认:跟你看的地方走 ✓)
+        case front       // 前台窗口所在屏(跟当前这扇窗走 ✓)
+    }
+
+    static var basis: ScreenBasis {
+        ScreenBasis(rawValue: UserDefaults.standard.string(forKey: Keys.triggerGraveScreenBasis) ?? "") ?? .pointer
+    }
+
+    /// 前台 App 在"当前屏"的窗口,按 **z 序(前→后)** 排 —— 与 `CGWindowList` 的顺序一致 ✓
+    /// - Returns: `nil` = 没法判断(前台 App 没有普通窗)⇒ 调用方不动作 ✓
+    @MainActor
+    static func windowsOnContextScreen() -> (pid: pid_t, name: String, pool: [WindowRecord], screen: NSScreen)? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                   kCGNullWindowID) as? [[String: Any]] else { return nil }
+
+        var raw: [(wid: CGWindowID, bounds: CGRect)] = []
+        for w in list {
+            guard (w[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (w[kCGWindowLayer as String] as? Int) == 0,          // 只认普通层(菜单/浮层都排除 ✓)
+                  let n = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let wd = b["Width"], let h = b["Height"],
+                  wd > 60, h > 60 else { continue }
+            raw.append((CGWindowID(n), CGRect(x: x, y: y, width: wd, height: h)))
+        }
+        guard let frontBounds = raw.first?.bounds else { return nil }
+
+        // 当前屏:按设置口径 ✓
+        let screen: NSScreen?
+        switch basis {
+        case .pointer:
+            let p = NSEvent.mouseLocation
+            screen = NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main
+        case .front:
+            screen = NSScreen.screens.max { a, b in
+                let ra = frontBounds.intersection(WindowEnumerator.quartzFrame(of: a))
+                let rb = frontBounds.intersection(WindowEnumerator.quartzFrame(of: b))
+                let aa = ra.isNull ? 0 : ra.width * ra.height
+                let ab = rb.isNull ? 0 : rb.width * rb.height
+                return aa < ab
+            }
+        }
+        guard let screen else { return nil }
+
+        // ⚠️ 归属判定**复用唯一那一套**(`ownsByContextScreen`)—— 屏归属绝不许有第二套规则 ✓
+        let admitted = AXWindowList.admission(ofPID: pid)?.admitted     // nil = AX 没话说 ⇒ 不过滤 ✓
+        let pool = raw.filter { r in
+            (admitted?.contains(r.wid) ?? true)
+                && WindowEnumerator.ownsByContextScreen(r.bounds, contextScreen: screen)
+        }
+        return (pid, app.localizedName ?? "", pool.map {
+            WindowRecord(wid: $0.wid, pid: pid, ownerName: app.localizedName ?? "", title: "", bounds: $0.bounds)
+        }, screen)
+    }
+
+    /// 走一步。`forward = false` 用于 ⌘⇧`(反向:直接到最后面那扇 ✓)
+    @MainActor
+    @discardableResult
+    static func step(forward: Bool) -> Bool {
+        guard let (pid, name, pool, screen) = windowsOnContextScreen() else {
+            if isTraceEnabled { glog("[接管⌘`] 前台 App 没有普通窗 ⇒ 不动作") }
+            return false
+        }
+        guard pool.count > 1 else {
+            if isTraceEnabled {
+                glog("[接管⌘`] \(name) 在 \(screen.localizedName) 只有 \(pool.count) 扇窗 ⇒ 不动作")
+            }
+            return false
+        }
+        let target = forward ? pool[1] : pool[pool.count - 1]
+        if isTraceEnabled {
+            glog("[接管⌘`] \(name) 在当前屏(\(screen.localizedName),口径:\(basis.rawValue)) "
+                 + "\(pool.count) 扇窗 → 跳第 \(forward ? 2 : pool.count) 扇 wid=\(target.wid)")
+        }
+        WindowFocuser.focus(window: target)
+        return true
+    }
+}

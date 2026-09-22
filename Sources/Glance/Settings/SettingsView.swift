@@ -658,7 +658,11 @@ private struct AppPicker: View {
 /// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
 /// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
 struct ShortcutPane: View {
-    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false
+    /// 接管系统 ⌘`(opt-in,默认关 ⇒ 关着时一个字都不变 ✓)
+    @AppStorage(Keys.triggerTakeoverGraveCyclesWindows) private var graveTakeover = false
+    /// ⌘` 的"当前屏"口径:pointer(指针所在屏,默认) / front(前台窗口所在屏)
+    @AppStorage(Keys.triggerGraveScreenBasis) private var graveScreenBasis = "pointer"   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
 
     @State private var config = TriggerConfig.load()
     @State private var recording = false
@@ -709,16 +713,28 @@ struct ShortcutPane: View {
                             desc: "关闭后使用 ⌥Tab,不改动系统设置,退出时还原。") {
                     BeamSwitch(isOn: takeoverBinding)
                 }
+                // ★ 2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」
+                //   「开放到设置面板上,我自己调试」⇒ 两个旋钮都摆在这里 ✓
+                SettingsRow(title: "接管系统 ⌘`",
+                            desc: "关闭时 ⌘` 交给系统(会在所有屏幕的同 App 窗口间跳)。打开后只在当前屏内跳。") {
+                    BeamSwitch(isOn: $graveTakeover)
+                }
+                SettingsRow(title: "⌘` 以哪块屏为准",
+                            desc: "指针所在屏:跟你看的地方走。前台窗口所在屏:跟当前这扇窗走。") {
+                    BeamSegmented(options: [.init(id: "pointer", label: "指针所在屏"),
+                                            .init(id: "front", label: "前台窗口所在屏")],
+                                  value: $graveScreenBasis)
+                }
                 SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
+                    BeamSwitch(isOn: $advanceOnOpen)
+                }
                 // ★ 2026-09-22 结构整理:它不是"动效",是**唤起落点**(与上一行同一件事)✗
                 //   ⇒ 从通用页的"动效"挪到快捷键页的"触发",紧挨"唤起即切换" ✓
+                //   ⚠️ 搬运当次把它**嵌进了上一行的尾部控件位** ✗(编译得过,渲染是错的 ——
+                //      行会套在另一行里)。这里改回**兄弟行**,并把发丝线交回来(它后面还有「触发键」)✓
                 SettingsRow(title: "承接上次选中位置",
-                            desc: "关闭后选中标记不再滑动,仅上浮。",
-                            hairline: false) {
+                            desc: "关闭后选中标记不再滑动,仅上浮。") {
                     BeamSwitch(isOn: $slideFromLastApp)
-                }
-
-                    BeamSwitch(isOn: $advanceOnOpen)
                 }
                 SettingsRow(title: "触发键",
                             desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃。",

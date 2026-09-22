@@ -143,6 +143,11 @@ final class HotkeyTapCenter {
     /// 代价与 Tab 循环同一条:tap 若被系统停用那一瞬,这一发会漏给系统(见 ADR-0005 的取舍)。
     /// 默认**关**:它动的是系统级快捷键的肌肉记忆,只能用户显式开(与接管 ⌘Tab 同一纪律)。
     private static let keyGrave: Int64 = 0x32
+    /// 接管系统 ⌘` 的开关(opt-in;`object(forKey:)` 区分"没写过"与"写成 false" ✓ —— 同 `Keys` 其它开关)
+    private static var graveTakeoverEnabled: Bool {
+        UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool ?? false
+    }
+
     private static var graveCyclesWindows: Bool {
         UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? false
     }
@@ -317,7 +322,10 @@ final class HotkeyTapCenter {
     /// 先对账"系统说它开着没有",再决定要不要动 —— 盲目 enable 会让日志失去可信度。
     private func updateNavTap() {
         guard let navTap else { return }
-        let shouldEnable = state == .navigating
+        // ⚠️ 开了"接管 ⌘`"之后,这个 tap 要**常开** —— 否则面板没开的时候收不到那颗键 ✗。
+        //   代价诚实说:从此每个 keyDown 都要过一遍 `handleNavKey`,所以那里面**先判状态与键码**、
+        //   不匹配立刻 return false(放行)✓;真正耗时的聚焦动作挪到 async(见上面那条分支)✓
+        let shouldEnable = state == .navigating || Self.graveTakeoverEnabled
         if CGEvent.tapIsEnabled(tap: navTap) != shouldEnable {
             CGEvent.tapEnable(tap: navTap, enable: shouldEnable)
             // 每局开关各一条,是常态而非事件 —— 收进 trace(要看纪律是否守住时再开)
@@ -389,7 +397,26 @@ final class HotkeyTapCenter {
         //   把 tap 看见的**每一颗会话期按键**都记下来(带状态与修饰键)⇒ 一眼能分清是
         //   ① 键根本没被看见(navTap 没开/会话已结束)还是 ② 看见了但下游没做事。
         let __kc = event.getIntegerValueField(.keyboardEventKeycode)
-        glog("[键账] kc=\(__kc) state=\(state) pinned=\(pinnedSession) mods=\(event.flags.rawValue)")
+        // ★★ 接管系统 ⌘`(2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」)
+        //   口径:**只在面板没开**的时候接管 —— 面板开着时 ⌘` / ` 照旧走"会话内窗口循环" ✓
+        //   修饰键**精确匹配** {⌘} 或 {⌘,⇧}:多一个(⌃/⌥)都是别人的快捷键 ⇒ 放行 ✗(见下面那把门禁的病例)
+        //   ⚠️ 回调必须**立刻返回**:tap 回调超时会被系统摘掉 ⇒ 真正的活挪到 async ✓
+        //   ⚠️ 这一支必须在**下面那道 `guard state == .navigating` 之前** —— 第一版写在它后面 ⇒
+        //      面板没开时永远到不了这里(实机:注入 ⌘` 日志里一行都没有)✗
+        if Self.graveTakeoverEnabled, __kc == Self.keyGrave, state != .navigating {
+            let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+            if mods == [.maskCommand] || mods == [.maskCommand, .maskShift] {
+                let forward = !event.flags.contains(.maskShift)
+                Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+                return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
+            }
+            return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓
+        }
+        // ⚠️ 开了"接管 ⌘`"之后这个 tap **常开** ⇒ 这行不能无条件打 ✗
+        //    (否则全系统每一次按键都写一行日志 —— 正是之前刚修过的"刷屏"病 ✓)
+        if isTraceEnabled, state == .navigating {
+            glog("[键账] kc=\(__kc) state=\(state) pinned=\(pinnedSession) mods=\(event.flags.rawValue)")
+        }
         guard state == .navigating else { return false } // 理论上不会(会话期才开),守一道
         let keyCode = __kc
         let config = TriggerConfig.load()
@@ -525,7 +552,10 @@ final class HotkeyTapCenter {
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadTriggerIfChanged() }
+            MainActor.assumeIsolated {
+                self?.reloadTriggerIfChanged()
+                self?.updateNavTap()      // ★ ⌘` 接管开关是"现读"的 ⇒ tap 开/关要跟着设置走 ✓
+            }
         }
     }
 

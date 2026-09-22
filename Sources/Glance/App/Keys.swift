@@ -92,6 +92,10 @@ enum Keys {
     /// 悬停触感(2026-09-22 用户要求「hover 震动,app 和预览容器都需要, 做成设置开关」)
     /// ⚠️ 键名**来源在 GlanceCore.HapticPolicy.defaultsKey** —— 那里读、这里显示,一个源 ✓
     static let hapticEnabled = HapticPolicy.defaultsKey
+    /// 接管系统 ⌘`(与 `trigger.takeoverSystemSwitcher` 同族:都是"接管一条系统快捷键")
+    static let triggerTakeoverGraveCyclesWindows = "trigger.takeoverGraveCyclesWindows"
+    /// ⌘` 的"当前屏"口径:`"pointer"`(指针所在屏,默认)/ `"front"`(前台窗口所在屏)
+    static let triggerGraveScreenBasis = "trigger.graveScreenBasis"
     /// `switch.scrollMovesSelection`
     static let switchScrollMovesSelection = "switch.scrollMovesSelection"
 
