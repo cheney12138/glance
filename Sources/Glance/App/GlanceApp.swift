@@ -25,9 +25,11 @@ struct GlanceApp: App {
         //   pinPanelOnRelease 留成 ON 后忘了复位 ⇒ 用户实报「点空白关不掉面板」——
         //   钉住模式下"面板外点击不免死"本来就是设计)。普通启动一律清掉:
         //   要钉住,用 `open --args -debug.pinPanelOnRelease 1`,进程死了开关自动失效
-        if !ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") {
-            UserDefaults.standard.removeObject(forKey: Keys.debugPinPanelOnRelease)
-        }
+        // ★ 2026-09-22 改:「保持面板打开」已是**用户设置**(`panel.pinOnRelease`)⇒
+        //   不再清它(清掉 = 设置里那一行**永远存不住** ✗ —— 这正是它以前的病)。
+        //   这里只清**旧的调试键**(历史上被自动化测试留成 ON 过,不清会残留 ✓);
+        //   要临时钉住仍可走启动参数 `-debug.pinPanelOnRelease 1` ✓
+        UserDefaults.standard.removeObject(forKey: Keys.debugPinPanelOnRelease)
     }
 
     @StateObject private var permissions = PermissionMonitor()

@@ -38,6 +38,8 @@ enum DebugFlags {
     // MARK: 交互/状态类实验开关（会改变行为，只在排查时开）
 
     /// 按住触发键期间**钉住面板不消失**（用来从容地看中间态）。
+    /// ⚠️ 2026-09-22:「保持面板打开」已提升为**用户设置**(`Keys.panelPinOnRelease`)⇒
+    /// 它不再是调试开关,也不该出现在"重型开关自报"名单里 ✓ 这里保留只为兼容启动参数那条老路
     static var pinPanelOnRelease: Bool { UserDefaults.standard.bool(forKey: Keys.debugPinPanelOnRelease) }
 
     /// 无论是否隐藏托盘（排查"托盘没被收走"这类收场问题时用）。
@@ -67,7 +69,6 @@ enum DebugFlags {
         ("debug.screenProbe", screenProbe, "逐帧读回屏幕像素；**本身就是 70–190ms 的长帧**（量具会改变被测物）"),
         ("debug.dumpSources", dumpSources, "每次 hover 往磁盘写 1–2 张 PNG；实测 max 帧 45.4ms → 关掉后 28–37ms"),
         ("debug.hzProbe", hzProbe, "另开一扇临时窗口做 120Hz A/B；会遮挡屏幕左下角"),
-        ("debug.pinPanelOnRelease", pinPanelOnRelease, "钉住面板不消失 ⇒ **改变交互行为**（点空白也关不掉）"),
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),

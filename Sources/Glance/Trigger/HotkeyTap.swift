@@ -145,11 +145,12 @@ final class HotkeyTapCenter {
     private static let keyGrave: Int64 = 0x32
     /// 接管系统 ⌘` 的开关(opt-in;`object(forKey:)` 区分"没写过"与"写成 false" ✓ —— 同 `Keys` 其它开关)
     private static var graveTakeoverEnabled: Bool {
-        UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool
+            ?? KeyDefaults.takeoverGraveCyclesWindows
     }
 
     private static var graveCyclesWindows: Bool {
-        UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? false
+        UserDefaults.standard.object(forKey: Keys.switchGraveCyclesWindows) as? Bool ?? KeyDefaults.graveCyclesWindows
     }
     /// 面板出现期间是否接管滚动(设置里的「双指滑动换组」,默认开)。
     /// 关掉时必须**放行**:设置里的说明写着"关闭后…照常交给底下的应用"。
@@ -158,7 +159,12 @@ final class HotkeyTapCenter {
     }
 
     /// 钉住开关:松 ⌥ 不关面板,状态机保持导航态,Enter 接手确认权(用户实评"还挺实用")
-    private var pinPanel: Bool { DebugFlags.pinPanelOnRelease }
+    // ★ 2026-09-22:从 `DebugFlags.pinPanelOnRelease`(调试键,每次启动被清 ✗)提升为**用户设置** ✓
+    //   优先看启动参数(自动化测试用 ✓),否则看设置里那一行 ✓
+    private var pinPanel: Bool {
+        if ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") { return true }
+        return UserDefaults.standard.object(forKey: Keys.panelPinOnRelease) as? Bool ?? KeyDefaults.pinOnRelease
+    }
 
     /// **三指点按起来的那一局**:没有键可松 ⇒ 松手语义整个不适用。
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
@@ -666,16 +672,20 @@ final class ThreeFingerTap {
 
     /// 设置项。**默认关**(新开关一律默认对齐 macOS:macOS 没有这个功能)。
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效,不用重启(与 DoubleOptionTap 同一套约定)。
-    static let defaultsKey = "pointer.threeFingerTapPanel"
-    private var enabled: Bool { UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? false }
+    static let defaultsKey = Keys.pointerThreeFingerTapPanel
+    private var enabled: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.threeFingerTapPanel
+    }
 
     /// 四指轻点(T91)= **直接进未启动环**。与三指那条同一条纪律:**默认关**
     /// (默认对齐 macOS:macOS 没有这个功能),而且**区分"没写过"与"写成 false"** ——
     /// `object(forKey:) as? Bool ?? false`:取不到 = 没写过 = 关,取到 false = 用户关掉了。
     /// (本机实测:系统没有占用"四指轻点"—— `TrackpadFourFingerTapGesture` 这个键根本不存在;
     ///  四指只有横扫/竖扫/捏合。见 design/入口槽-底部形态实验台.html 的记账。)
-    static let defaultsKeyFour = "pointer.fourFingerTapLaunchRing"
-    private var enabledFour: Bool { UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? false }
+    static let defaultsKeyFour = Keys.pointerFourFingerTapLaunchRing
+    private var enabledFour: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? KeyDefaults.fourFingerTapLaunchRing
+    }
 
     var onFire: (() -> Void)?
     /// 四指的落点:唤起 + 直接切到未启动环。接线在 GlanceApp,与 onFire 并排
@@ -1109,8 +1119,12 @@ final class DoubleOptionTap {
     /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
     /// key 随触发键换名(⌃→⌥),**不做旧值迁移**:功能默认关,丢一次开关状态无伤
     /// (先例:panel.puckRiseFromBottom → panel.slideFromLastApp 也是不迁移)。
-    static let defaultsKey = "pointer.doubleOptionJumps"
-    private var enabled: Bool { UserDefaults.standard.bool(forKey: Self.defaultsKey) }
+    static let defaultsKey = Keys.pointerDoubleOptionJumps
+    // ⚠️ 这里原来用 `bool(forKey:)`(没写过 ⇒ false,于是默认值写不成 true ✗)⇒
+    //    与别处统一成 `object(forKey:) as? Bool ?? KeyDefaults.*` ✓
+    private var enabled: Bool {
+        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.doubleOptionJumps
+    }
 
     private var globalMonitor: Any?
     private var localMonitor: Any?

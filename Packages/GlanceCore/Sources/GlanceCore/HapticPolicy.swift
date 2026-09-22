@@ -85,8 +85,13 @@ public enum HapticPolicy {
         HapticStrength(rawValue: UserDefaults.standard.string(forKey: strengthKey) ?? "") ?? .medium
     }
 
+    /// 出厂默认:**开**(2026-09-22 用户裁定:唯一保留的触感,回答"我到底换到下一格了吗" ✓)。
+    /// ⚠️ App 侧 `KeyDefaults.haptic` 必须与它一致 —— 改一处要改两处(跨层,Core 看不到 Keys ✗),
+    ///    所以两处都写了注释指回来 ✓
+    public static let enabledDefault = true
+
     public static var enabled: Bool {
-        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? false
+        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? enabledDefault
     }
 
     /// 事件 ⇒ 手感。**开关关掉时一律 none**(设置是绝对权威:关了就是通通不震)。

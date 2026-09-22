@@ -55,16 +55,16 @@ struct SettingsView: View {
     @State private var suppressNavSpyUntil: CFAbsoluteTime = 0
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
-    @AppStorage(Keys.debugPinPanelOnRelease) private var pinPanel = false
+    @AppStorage(Keys.panelPinOnRelease) private var pinPanel = KeyDefaults.pinOnRelease
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
-    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = true
+    @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = KeyDefaults.alwaysAnimate
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
     /// 悬停触感(键名来自 `GlanceCore.HapticPolicy.defaultsKey` ✓ 一个源,不写两遍 ✓)
     /// 触感强度档("light"/"medium"/"strong")
     @AppStorage(Keys.hapticStrength) private var hapticStrength = "medium"
-    @AppStorage(Keys.hapticEnabled) private var hapticEnabled = false
+    @AppStorage(Keys.hapticEnabled) private var hapticEnabled = HapticPolicy.enabledDefault
 
     /// 实时预览档位(`live.previewTier` 是 **String** 型的既有键 ⇒ 这里换算,键名一个字不改 ✓)
     @State private var liveTier: Double = Double(LivePreviewPool.tierFps)
@@ -79,15 +79,15 @@ struct SettingsView: View {
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
-    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = true
+    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = KeyDefaults.showLaunchables
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
-    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = true
+    @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = KeyDefaults.tabEntersLaunchSection
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
-    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = false
-    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = false
+    @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = KeyDefaults.threeFingerTapPanel
+    @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = KeyDefaults.fourFingerTapLaunchRing
     /// 从上一个 App 滑过来(额外的一层入场动效;上浮是通用的那一层,永远在)
     /// 光效总闸:指针柔光 + 图标静态反光(默认开;开关是给不喜欢面板里有光的人)
-    @AppStorage(Keys.panelSheen) private var sheen = true
+    @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
 
@@ -668,24 +668,24 @@ private struct AppPicker: View {
 /// 快捷键页:录制式改键(Q8 冻结)。按一下胶囊进录制态,下一次"修饰键+普通键"
 /// 即写入;Esc 取消。只允许 ⌥/⌘/⌃ 当修饰键 —— ⇧ 永久留给反向导航。
 struct ShortcutPane: View {
-    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false
+    @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = KeyDefaults.slideFromLastApp
     /// 接管系统 ⌘`(opt-in,默认关 ⇒ 关着时一个字都不变 ✓)
-    @AppStorage(Keys.triggerTakeoverGraveCyclesWindows) private var graveTakeover = false
+    @AppStorage(Keys.triggerTakeoverGraveCyclesWindows) private var graveTakeover = KeyDefaults.takeoverGraveCyclesWindows
 
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
-    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = true
+    @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = KeyDefaults.advanceOnOpen
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
     /// ` App 内切换窗口(默认关:它是系统级快捷键,只能用户显式开)
-    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = false
+    @AppStorage(Keys.switchGraveCyclesWindows) private var graveCyclesWindows = KeyDefaults.graveCyclesWindows
     /// 双击 ⌥ 把指针送到另一块屏(默认关:macOS 无此功能 ⇒ 按"默认对齐 macOS"的规则是关)。
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
-    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = false
+    @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = KeyDefaults.doubleOptionJumps
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
-    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = true
+    @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = KeyDefaults.scrollMovesSelection
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
     /// 滑杆若线性映射到间隔,两端手感会严重不均(慢端几乎不动)。默认 10 = 原 0.10s。
     @AppStorage(Keys.panelScrollSpeed) private var scrollSpeed: Double = 10

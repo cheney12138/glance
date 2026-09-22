@@ -32,7 +32,12 @@ enum Keys {
     /// `debug.noSegmentAnim`
     static let debugNoSegmentAnim = "debug.noSegmentAnim"
     /// `debug.pinPanelOnRelease`
+    /// `debug.pinPanelOnRelease` —— **调试专用**(只随启动参数 `-debug.pinPanelOnRelease 1` 生效)。
+    /// 设置里那一行「保持面板打开」用的是下面那条正式键 ✓(那是用户设置,不该是 debug 键 ✗)
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
+    /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
+    /// 那一行在设置里摆了很多版本,却因为 App 每次启动都清掉这个 debug 键 ⇒ **永远存不住** ✗)
+    static let panelPinOnRelease = "panel.pinOnRelease"
     /// `debug.screenProbe`
     static let debugScreenProbe = "debug.screenProbe"
     /// `debug.trace`
@@ -107,4 +112,48 @@ enum Keys {
     /// `trigger.modifier`
     static let triggerModifier = "trigger.modifier"
 
+}
+
+/// **出厂默认值的唯一来源**(2026-09-22 立)。
+///
+/// 为什么单独立一处:这些键原先的默认值散在**每个读取点**里 ——
+/// 设置面板的 `@AppStorage(...) = false` 一份 ✗、拥有者类型里的 `?? false` 又一份 ✗
+/// ⇒ 改默认值时漏改一处,就会出现「设置里显示开着、实际不生效」这种最难查的错 ✗。
+/// 现在:**键名在 `Keys`,默认值在这里**,两边都引同一处 ✓
+///
+/// ⚠️ 改这里只影响"从没写过这个键的人"(全新安装 ✓)——
+///    已有用户的值一律不动(`object(forKey:) ?? 默认` 的语义 ✓)
+enum KeyDefaults {
+    /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
+    static let sheen = true
+    /// 展示 Dock 常驻应用。**开**:未启动的 App 也能在环尾找到 ✓
+    static let showLaunchables = true
+    /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓
+    static let tabEntersLaunchSection = true
+    /// 面板里滚动/双指滑动换选中。**开**(原判)
+    static let scrollMovesSelection = true
+    /// 唤起即切换(与系统 ⌘Tab 行为对齐)。**开**(原判)
+    static let advanceOnOpen = true
+    /// 三指点按唤起面板。**开**(2026-09-22 用户裁定):这是本 App 的头号入口,
+    /// 藏起来等于不存在 —— 新用户根本发现不了手势这条路 ✓(误触风险已由位移判据/落齐计时/截图让权兜住)
+    static let threeFingerTapPanel = true
+    /// 四指点按进未启动环。**开**:与三指同族(手势是一套语言),只开一个会让人以为四指不能用 ✓
+    static let fourFingerTapLaunchRing = true
+    /// 会话内 `` ` `` 循环当前 App 的窗口。**开**:不开就永远不知道面板里能按 ` ✓(面板外不生效 ⇒ 无副作用)
+    static let graveCyclesWindows = true
+    /// 双击 ⌥ 把指针(和键盘焦点)送到另一块屏。**开**:多屏用户的高频痛点 ✓(双击误触概率低)
+    static let doubleOptionJumps = true
+    /// 悬浮触感。**开**:唯一保留的触感,回答"我到底换到下一格了吗" ✓(强度另有一档设置)
+    static let haptic = true
+    /// 强制完整动效。**关**(2026-09-22 改):它真正的含义是"**无视**系统的『减弱动态效果』" ⇒
+    /// 无障碍上不该默认替用户做主 ✓(想要永远带动效的人自己开 ✓)
+    static let alwaysAnimate = false
+    /// 从上一局那一格横滑过来。**关**(保持原判):落点差得远时要横穿整条,视觉很累 ✓
+    /// (它不是"记住你上次选了谁",是入场的一层额外动效 —— 见 `MotionPolicy.slideFromLastApp`)
+    static let slideFromLastApp = false
+    /// 保持面板打开(松手不关)。**关**:钉住是高级玩法 ✓
+    static let pinOnRelease = false
+    /// 接管系统 ⌘Tab / ⌘`。**关**:抢系统快捷键必须先问(ADR-0005)⇒ 出厂不许默认抢 ✓
+    static let takeoverSystemSwitcher = false
+    static let takeoverGraveCyclesWindows = false
 }
