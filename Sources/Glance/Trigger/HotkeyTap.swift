@@ -1002,6 +1002,34 @@ final class ThreeFingerTap {
              + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
+    /// **起拖就撤销这次唤起**(2026-09-22 用户实报「我三指拖拽窗口边框, 也唤起了面板。
+    /// 已经是拖拽了, 怎么还能唤起呢」)。
+    ///
+    /// ★ 为什么不再调阈值(这是同类病的**第三次** ⇒ 按"修到第三次就怀疑设计"的规矩停手):
+    ///   前两次都在收 `maxMove`(0.08 → 0.03 ✓),因为真实的**长拖**位移大、拒得掉 ✓;
+    ///   但这次这条在手指数据上**与轻点完全一致** ✗ ——
+    ///   `TrackpadThreeFingerDrag = 1`(三指拖移开着 ✓)时,**起拖那一拍本身就是一次干净的三指轻点** ✓
+    ///   (带动移锁定时更是如此:轻点起拖、拖完再轻点放下 ⇒ 两次都是"完美轻点" ✗)。
+    ///   手指分不出来 ⇒ 换个**手指之外**的证据:系统真在拖东西时,**鼠标键是按下状态** ✓
+    ///   (三指拖移在系统里就是"按住左键移动指针" ✓)。
+    ///
+    /// 口径:生效之后 0.3s 内只要看到按键按下 ⇒ **撤销这次唤起**(面板收起 ✓)。
+    ///   ⇒ 观感从"拖窗时面板一直挂着"✗ 变成"闪一下"✓(用户原话:点按误触我能理解 ✓);
+    ///     代价诚实说:真轻点唤起后 0.3s 内如果**恰好**有拖拽在进行,这次唤起会被收掉 ✗。
+    @MainActor
+    static func cancelIfDragStarted(reason: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let dragging = NSEvent.pressedMouseButtons != 0
+            if dragging {
+                glog("[指点按] ⚠️ \(reason) 之后系统在拖拽(按键按下) ⇒ **撤销这次唤起**")
+                onDragMisfire?()
+            }
+        }
+    }
+
+    /// 撤销唤起(由 App 层装配到面板:收面板 ✓)
+    static var onDragMisfire: (() -> Void)?
+
     /// **生效后的事后归因**(2026-09-22 用户实报「三指划词的时候好像又误触了」)——
     /// 生效之后 250ms 再看一眼指针有没有**继续移动**:
     ///   · 几乎没动 ⇒ 真是一次轻点 ✓
@@ -1053,6 +1081,7 @@ final class ThreeFingerTap {
                     if tap.enabledFour { tap.onFireFour?() }
                     Haptics.fire(.summonFourFinger)
                     ThreeFingerTap.logPostFirePointerDrift("四指按压")
+                    ThreeFingerTap.cancelIfDragStarted(reason: "四指按压")
                 }
             }
             return 0   // 按压还没结束
@@ -1086,6 +1115,7 @@ final class ThreeFingerTap {
                 if tap.enabled { tap.onFire?() }
                 Haptics.fire(.summonThreeFinger)
                 ThreeFingerTap.logPostFirePointerDrift("三指点按")
+                ThreeFingerTap.cancelIfDragStarted(reason: "三指点按")
             }
         case .fireFour(let held, let norm, let absMove):
             DispatchQueue.main.async {
@@ -1102,6 +1132,7 @@ final class ThreeFingerTap {
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")
+                ThreeFingerTap.cancelIfDragStarted(reason: "四指点按")
             }
         }
         return 0

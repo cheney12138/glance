@@ -97,6 +97,11 @@ struct GlanceApp: App {
                     // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
                     // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
                     ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }
+                    // ★ 三指/四指轻点与"三指起拖"分不开(拖移锁定时更是如此 ✗)⇒
+                    //   生效后 0.3s 若系统真在拖拽,就撤销这次唤起(见 cancelIfDragStarted ✓)
+                    ThreeFingerTap.onDragMisfire = { [weak panelController] in
+                        panelController?.dismissAfterGestureMisfire()
+                    }
                     // 四指轻点(T91)= **唤起并直接进未启动环**。同一枚检测器,手指越多越具体:
                     // 三指 = 打开这个工具;四指 = 跳过已启动的,直接看没启动的。
                     // 走控制器自己的入口(闸都在它手里:launchables 空 / 已经在未启动环里 ⇒ 安静不动)

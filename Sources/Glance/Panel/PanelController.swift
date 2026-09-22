@@ -969,6 +969,15 @@ final class PanelController: ObservableObject {
     /// 代价:确认涟漪随之作废(它需要面板多留 0.45s 才看得见,与"立刻消失"互斥),`confirmPulse` 一并删。
     /// T91 表一 ⑤:别处有输入(非面板按键 / 面板外点击)⇒ 钉住的那一局自己收。
     /// 规格见 `design/gesture-session-spec.md` 表一 ⑤;理由写进日志,复盘时与"闲置超时"分得清。
+    /// **起拖撤销**(2026-09-22):三指轻点与"三指起拖"在手指数据上无法区分 ✗,
+    /// 触发层改为在生效后 0.3s 看一眼鼠标键 —— 真在拖东西就调这里收面板 ✓
+    /// (与 `dismissForOutsideInput` 分开:日志里要能分清"用户点了别处"和"其实是拖动误触" ✓)
+    func dismissAfterGestureMisfire() {
+        guard isVisible else { return }
+        trace("[指点按] 起拖撤销 ⇒ 收面板(这次唤起是拖拽误触)")
+        dismiss(reason: "拖拽误触")
+    }
+
     func dismissForOutsideInput() {
         guard isVisible else { return }
         trace("[T91] 别处有输入 → 收面板(表一 ⑤)")

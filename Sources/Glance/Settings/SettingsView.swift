@@ -19,6 +19,22 @@ import GlanceCore
 ///   5. **语域是产品文档,不是对话**:陈述句、书面语,不用口语与表情符号;只写这个开关做什么,
 ///      不写动机、不写设计史、不写开发者感受(2026-09-15 用户实评:「毕竟是一个产品,功能描述要严谨严肃一点」)。
 struct SettingsView: View {
+    /// 「三指点按唤起面板」的小字。
+    /// ⚠️ 系统开了「三指拖移」时必须**如实说**:拖拽的起手拍与轻点在触控板上是同一个动作 ✗
+    /// (实测这台机器 `TrackpadThreeFingerDrag = 1` ✓,内置域与蓝牙域各一份 ⇒ 两个都看 ✓)
+    /// 我们能做的兜底:真起拖了就把这次唤起收掉(见 `ThreeFingerTap.cancelIfDragStarted` ✓)
+    static var threeFingerTapDesc: String {
+        let base = "三指轻点触控板唤起切换面板,该局不随松手散场。"
+        func dragOn(_ domain: String) -> Bool {
+            UserDefaults(suiteName: domain)?.object(forKey: "TrackpadThreeFingerDrag") as? Bool ?? false
+        }
+        let dragging = dragOn("com.apple.AppleMultitouchTrackpad")
+            || dragOn("com.apple.driver.AppleBluetoothMultitouch.trackpad")
+        guard dragging else { return base }
+        return base + "⚠️ 系统开了「三指拖移」:拖窗/选字时起手会顺带唤醒一次"
+            + "(检测到真在拖拽会自动收起)。不想被它打扰,可在 系统设置 → 辅助功能 → 指针控制 里关掉三指拖移。"
+    }
+
     @ObservedObject var store: SettingsStore
     @ObservedObject var permissions: PermissionMonitor
 
@@ -272,7 +288,7 @@ struct SettingsView: View {
             // 立即生效,不重启(手势层每次事件都现读)
             SettingsGroup(label: "手势操控", anchor: Page.general.anchor("手势操控")) {
                 SettingsRow(title: "三指点按唤起面板",
-                            desc: "三指轻点触控板唤起切换面板,该局不随松手散场。") {
+                            desc: Self.threeFingerTapDesc) {
                     BeamSwitch(isOn: $threeFingerTapPanel)
                 }
                 SettingsRow(title: "四指点按进未启动环",
