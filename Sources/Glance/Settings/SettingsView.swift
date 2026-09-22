@@ -671,8 +671,6 @@ struct ShortcutPane: View {
     @AppStorage(Keys.panelSlideFromLastApp) private var slideFromLastApp = false
     /// 接管系统 ⌘`(opt-in,默认关 ⇒ 关着时一个字都不变 ✓)
     @AppStorage(Keys.triggerTakeoverGraveCyclesWindows) private var graveTakeover = false
-    /// ⌘` 的"当前屏"口径:pointer(指针所在屏,默认) / front(前台窗口所在屏)
-    @AppStorage(Keys.triggerGraveScreenBasis) private var graveScreenBasis = "pointer"   // ← 2026-09-22 随"承接上次选中位置"那一行一起搬来(它只被那一行用)✓
 
     @State private var config = TriggerConfig.load()
     @State private var recording = false
@@ -726,16 +724,11 @@ struct ShortcutPane: View {
                 // ★ 2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」
                 //   「开放到设置面板上,我自己调试」⇒ 两个旋钮都摆在这里 ✓
                 SettingsRow(title: "接管系统 ⌘`",
-                            desc: "关闭时 ⌘` 交给系统(会在所有屏幕的同 App 窗口间跳)。打开后只在当前屏内跳。") {
+                            // ★ 2026-09-22 用户裁掉了"以哪块屏为准"这个配置项 ⇒ 口径只留一种,
+                            //   小字就必须把这一种说清楚(不然又是一个"要试才知道"的开关 ✗)
+                            desc: "关闭时 ⌘` 交给系统(会在所有屏幕的同 App 窗口间跳)。"
+                                + "打开后只在你**当前正在用的那块屏**里跳,与鼠标指针无关。") {
                     BeamSwitch(isOn: $graveTakeover)
-                }
-                SettingsRow(title: "⌘` 以哪块屏为准",
-                            // ★ 2026-09-22 用户看这条「没懂」⇒ 换成人话:讲"两块屏上各有什么、你要跟谁"
-                            desc: "两块屏都有同一个 App 的窗口时,⌘` 在哪块屏里跳:"
-                                + "跟着鼠标停的那块屏走,还是跟着你正在用的那扇窗走。") {
-                    BeamSegmented(options: [.init(id: "pointer", label: "指针所在屏"),
-                                            .init(id: "front", label: "前台窗口所在屏")],
-                                  value: $graveScreenBasis)
                 }
                 SettingsRow(title: "唤起即切换", desc: "关闭后停留在当前 App。") {
                     BeamSwitch(isOn: $advanceOnOpen)

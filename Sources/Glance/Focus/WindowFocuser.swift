@@ -253,15 +253,12 @@ enum WindowFocuser {
 /// 这里换成"只在当前屏内跳" ✓。开关默认**关**(opt-in)⇒ 关着时一个字都不变 ✓。
 enum SameAppScreenCycler {
 
-    /// "当前屏"的口径(设置里可切;用户说"开放到设置面板上,我自己调试" ✓)
-    enum ScreenBasis: String {
-        case pointer     // 指针所在屏(默认:跟你看的地方走 ✓)
-        case front       // 前台窗口所在屏(跟当前这扇窗走 ✓)
-    }
-
-    static var basis: ScreenBasis {
-        ScreenBasis(rawValue: UserDefaults.standard.string(forKey: Keys.triggerGraveScreenBasis) ?? "") ?? .pointer
-    }
+    // ★ 2026-09-22 用户裁掉了"哪块屏"这个配置项,口径**只留一种**:
+    //   「当前焦点在 A 屏 ⇒ 就在 A 屏里的同 App 窗口间切,**与鼠标指针无关**」
+    //   理由(用户原话):「太复杂了, 只做一种场景, 当前焦点在 a 屏幕,
+    //   然后就在 a 屏幕里的 idea 窗口间切换, 跟鼠标指针无关, 而且不要暴露这个配置项」
+    //   ⇒ 焦点窗口 = 前台 App 的**最前一扇**窗(即 key 窗 ✓),它的归属屏就是"当前屏" ✓
+    //   归属判定仍然复用唯一那一套(`ownsByContextScreen`)✓
 
     /// 前台 App 在"当前屏"的窗口,按 **z 序(前→后)** 排 —— 与 `CGWindowList` 的顺序一致 ✓
     /// - Returns: `nil` = 没法判断(前台 App 没有普通窗)⇒ 调用方不动作 ✓
@@ -284,20 +281,13 @@ enum SameAppScreenCycler {
         }
         guard let frontBounds = raw.first?.bounds else { return nil }
 
-        // 当前屏:按设置口径 ✓
-        let screen: NSScreen?
-        switch basis {
-        case .pointer:
-            let p = NSEvent.mouseLocation
-            screen = NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main
-        case .front:
-            screen = NSScreen.screens.max { a, b in
-                let ra = frontBounds.intersection(WindowEnumerator.quartzFrame(of: a))
-                let rb = frontBounds.intersection(WindowEnumerator.quartzFrame(of: b))
-                let aa = ra.isNull ? 0 : ra.width * ra.height
-                let ab = rb.isNull ? 0 : rb.width * rb.height
-                return aa < ab
-            }
+        // 当前屏 = **焦点窗口所在的那块屏**(与指针无关 ✓)
+        let screen = NSScreen.screens.max { a, b in
+            let ra = frontBounds.intersection(WindowEnumerator.quartzFrame(of: a))
+            let rb = frontBounds.intersection(WindowEnumerator.quartzFrame(of: b))
+            let aa = ra.isNull ? 0 : ra.width * ra.height
+            let ab = rb.isNull ? 0 : rb.width * rb.height
+            return aa < ab
         }
         guard let screen else { return nil }
 
@@ -328,7 +318,7 @@ enum SameAppScreenCycler {
         }
         let target = forward ? pool[1] : pool[pool.count - 1]
         if isTraceEnabled {
-            glog("[接管⌘`] \(name) 在当前屏(\(screen.localizedName),口径:\(basis.rawValue)) "
+            glog("[接管⌘`] \(name) 在焦点屏(\(screen.localizedName)) "
                  + "\(pool.count) 扇窗 → 跳第 \(forward ? 2 : pool.count) 扇 wid=\(target.wid)")
         }
         WindowFocuser.focus(window: target)

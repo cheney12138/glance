@@ -1612,6 +1612,11 @@ final class PanelController: ObservableObject {
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
             launchIndex = i
+            // ★ 悬停触感(2026-09-22 用户实报「预览容器的 hover 没做震感吗」):
+            //   托盘**实际走的是帧拍这条路**(逐格 `.onHover` 早就"实测会哑" ⇒ 见 hoverWindow 的注释),
+            //   第一版把触感挂在 `hoverWindow` 里 ⇒ 等于挂在了用不到的那条路上 ✗
+            //   托盘两种内容(窗口卡 / 启动图标行)都算"预览容器" ⇒ 同一个事件 ✓
+            Haptics.fire(.hoverPreviewThumb)
             trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
         } else {
             // 窗口卡:T88 卡宽随窗比例,按**每张卡的实际宽**走查命中;
@@ -1648,6 +1653,7 @@ final class PanelController: ObservableObject {
                 return
             }
             guard i != winIndex else { return }
+            Haptics.fire(.hoverPreviewThumb)     // ★ 见上面启动行那一支的注释(托盘真正的 hover 路在这里 ✓)
             bumpIdle()   // 同上
             winIndex = i
             trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(count)] \(names[i])")

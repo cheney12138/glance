@@ -96,8 +96,7 @@ enum Keys {
     static let hapticStrength = HapticPolicy.strengthKey
     /// 接管系统 ⌘`(与 `trigger.takeoverSystemSwitcher` 同族:都是"接管一条系统快捷键")
     static let triggerTakeoverGraveCyclesWindows = "trigger.takeoverGraveCyclesWindows"
-    /// ⌘` 的"当前屏"口径:`"pointer"`(指针所在屏,默认)/ `"front"`(前台窗口所在屏)
-    static let triggerGraveScreenBasis = "trigger.graveScreenBasis"
+
     /// `switch.scrollMovesSelection`
     static let switchScrollMovesSelection = "switch.scrollMovesSelection"
 
