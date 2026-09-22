@@ -1171,9 +1171,52 @@ final class ThreeFingerTap {
         if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
             // ⚠️ 2026-09-22 这里原本有一条"**中途开火**":四指齐压满 0.25s 就当场生效(不必抬手)✗
             //   四指下滑的前 0.25s 与"四指按住"完全一样 ⇒ 拖/滑被误判(用户实报三次 ✓)。
-            //   照 LumaRing 的做法:**只在全部手指离开那一帧判**(`judge()` ✓)——
+            //   照 LumaRing 的做法:**只在全部手指离开那一帧判**(见下面的 `judge()` ✓)——
             //   "按住"这个意图改由时长窗口 `pressHoldRange` 在抬手时认领 ✓
             //   (LumaRing 的原文只剩一句:`if (!activeCount) { fire = matched && ... }` ✓)
+            return 0
+        }
+        // ★ **抬手帧**(全部手指都离开)⇒ 判卷 —— 照 LumaRing:只有这一帧才可能 fire ✓
+        //   ⚠️ 恢复记录(2026-09-22):我删"中途开火"那一块时,**把这一段一起切掉了** ✗
+        //      ⇒ `judge()` 一夜之间没有任何调用点 ⇒ 三指点按彻底不生效 ✗
+        //      (只靠"构建通过"发现不了 —— 教训:**删块之后必须回读调用点** ✓)
+        let outcome = tap.press.judge()
+        DispatchQueue.main.async {
+            let tap = ThreeFingerTap.shared
+            let now = CFAbsoluteTimeGetCurrent()
+            switch outcome {
+            case let .fireThree(held, norm, absMove):
+                guard now - tap.lastTapAt > 0.35 else {
+                    glog(String(format: "[指点按] 三指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
+                    return
+                }
+                tap.lastTapAt = now
+                if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
+                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
+                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
+                if tap.enabled { tap.onFire?() }
+                Haptics.fire(.summonThreeFinger)
+                ThreeFingerTap.logPostFirePointerDrift("三指点按")
+                ThreeFingerTap.cancelIfDragStarted(reason: "三指点按")
+            case let .fireFour(held, norm, absMove):
+                guard now - tap.lastTapAt > 0.35 else {
+                    glog(String(format: "[指点按] 四指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
+                    return
+                }
+                tap.lastTapAt = now
+                if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
+                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
+                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
+                if tap.enabledFour { tap.onFireFour?() }
+                Haptics.fire(.summonFourFinger)
+                ThreeFingerTap.logPostFirePointerDrift("四指点按")
+                // (四指**轻点**不挂"拖拽撤销":轻点之后拖东西是正当用法 ✓ 见上面的长注 ✓)
+            case let .slide(norm):
+                glog(String(format: "[指点按] 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
+                            norm, ThreeFingerTap.maxMove))
+            case let .rejected(reason):
+                if !reason.isEmpty { glog("[指点按] \(reason)") }
+            }
         }
         return 0
     }
