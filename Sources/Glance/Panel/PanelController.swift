@@ -393,6 +393,7 @@ final class PanelController: ObservableObject {
         // T91:换环意图只活一局。**只在它真的挂着时留账**(日志预算:常态两行,这里是例外才出声)
         if pendingLaunchRing { trace("[T91] 新一局:上一局的换环意图没兑现,丢掉") }
         pendingLaunchRing = false
+        trayChrome?.beginSession()      // 新一局 ⇒ 重新允许托盘上屏(见 ChromeWindow.place 的病例 ✓)
         beginGeneration &+= 1
         let generation = beginGeneration
         // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
@@ -1039,6 +1040,12 @@ final class PanelController: ObservableObject {
         //   ⇒ 之后每一局都以为"它已经在台上" ⇒ **再也不 orderFront** ⇒ 托盘永不出现 ✓。
         //   ★ 这个坑现已由 ChromeWindow 从结构上消掉(placed/teardown 成对,写在同一个类里)✓
         trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
+        // ★ 兜底:0.25s 后再确认一次"托盘窗真下去了" —— 未知的迟到路径也不至于留窗 ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.isVisible, self.previewPanel?.isVisible == true else { return }
+            glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
+            self.previewPanel?.orderOut(nil)
+        }
         panel?.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
         groups = []
@@ -2766,16 +2773,30 @@ final class ChromeWindow {
     private let panel: NSPanel
     private var placed = false              // 本局"已经在台上"(自己记账,不信 isVisible)
     private var hidden = false              // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    /// 这一局是否已经收场(收场后禁止 place ✓ —— 见 `place()` 的病例)
+    private var sessionEnded = true
 
     init(_ panel: NSPanel) { self.panel = panel }
 
     /// 确保在台上 + 内容可见。**幂等**:重复调用不产生任何窗口排序 ✓
+    ///
+    /// ★★ 2026-09-22 用户实报(「有时候环消失了, 预览容器还在。都松手回到 app 了, 容器还在」)——
+    ///   真因:原来是"没在台上就上屏"✗,而它的调用点在 **`updatePreview()`** = **每次 hover 更新**都跑 ✗。
+    ///   收场(`teardown()` 把 `placed` 清成 false ✓)之后,只要**再来一次迟到的更新**
+    ///   (视图重渲染 / 延迟的布局 pass ✓)⇒ 托盘又被 `orderFrontRegardless` ✗;
+    ///   而主面板那次没人再上屏 ⇒ 症状正是"**环没了、托盘还在**" ✓
+    ///   ⇒ 加**会话闸**:收场之后、下一局 `beginSession()` 之前,`place()` 一律 no-op ✓
+    ///   (连 `hidden` 都不碰:会话结束后它就该保持隐藏 ✓)
     func place() {
+        guard !sessionEnded else { return }
         if hidden { setContentHidden(false) }
         guard !placed else { return }
         placed = true
         panel.orderFrontRegardless()
     }
+
+    /// 新一局开始:重新允许上屏 ✓(与 `teardown()` 配对 —— 见 `place()` 的病例)
+    func beginSession() { sessionEnded = false }
 
     /// 内容显隐:只改图层属性(微秒级 ✓)
     func setContentHidden(_ on: Bool) {
@@ -2787,6 +2808,7 @@ final class ChromeWindow {
 
     /// 整局收场:真的腾出窗口 + 清账(与 place 严格配对)
     func teardown() {
+        sessionEnded = true          // ★ 收场 ⇒ 迟到的 place() 不许再上屏(见 place 的病例 ✓)
         placed = false
         hidden = false
         panel.alphaValue = 1
