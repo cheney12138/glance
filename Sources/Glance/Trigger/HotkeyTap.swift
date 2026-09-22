@@ -1114,7 +1114,7 @@ final class ThreeFingerTap {
                     if tap.enabledFour { tap.onFireFour?() }
                     Haptics.fire(.summonFourFinger)
                     ThreeFingerTap.logPostFirePointerDrift("四指按压")
-                    ThreeFingerTap.cancelIfDragStarted(reason: "四指按压")
+                    // (同上:四指没有对应的系统拖移 ⇒ 不挂撤销 ✓)
                 }
             }
             return 0   // 按压还没结束
@@ -1165,7 +1165,13 @@ final class ThreeFingerTap {
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")
-                ThreeFingerTap.cancelIfDragStarted(reason: "四指点按")
+                // ⚠️ **不给四指挂"拖拽撤销"** ✗(2026-09-22 查证后收窄):
+                //   冲突的**唯一来源**是系统的「三指拖移」✓(`TrackpadThreeFingerDrag = 1`);
+                //   系统没有任何"四指拖移"(这台机器上四指手势只有 捏合 / 横竖扫 ✓ 都是**大位移**动作 ✓
+                //   ⇒ 已被 0.03 位移判据挡住 ✓)。
+                //   而日志里那次四指被撤销(`四指点按 … 指针又移动 41pt` ✓)其实是**误撤** ✗ ——
+                //   真四指唤起未启动环之后,用户接着拖了个东西 ⇒ 好端端的面板被收掉 ✗
+                //   ⇒ 撤销只保留给**三指**那条(它才与拖移共用同一个动作 ✓)
             }
         }
         return 0
