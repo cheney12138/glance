@@ -44,8 +44,10 @@ enum Keys {
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
     /// 那一行在设置里摆了很多版本,却因为 App 每次启动都清掉这个 debug 键 ⇒ **永远存不住** ✗)
     static let panelPinOnRelease = "panel.pinOnRelease"
-    /// `debug.screenProbe`
     static let debugScreenProbe = "debug.screenProbe"
+    /// `debug.sweepDelayMs` —— 关面板预拍的**推迟毫秒**(默认 500)
+    /// 见 `DebugFlags.sweepDelayMs` 的病例 ✓(2026-09-22 掉帧:15 窗预拍与入场抢 GPU ✗)
+    static let debugSweepDelayMs = "debug.sweepDelayMs"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 

@@ -45,6 +45,18 @@ enum DebugFlags {
     /// 无论是否隐藏托盘（排查"托盘没被收走"这类收场问题时用）。
     static var hideTray: Bool { UserDefaults.standard.bool(forKey: Keys.debugHideTray) }
 
+    /// **关面板预拍推迟多少毫秒**(默认 500)。
+    ///
+    /// 病例(2026-09-22 用户「体感上有掉帧, 抓下日志」):那次 `max 652ms` 的长帧,与
+    /// 「关面板预拍:15 窗」和 0.13s 后紧接着的**唤起入场**完全同段 ✓
+    /// ⇒ 一次拍 15 扇窗(实打实 GPU 活)与入场抢资源 ✗ —— 仓库自己早写过这句
+    /// (见 `invalidateAll` 的注释 ✓),只是这条路一直没让开 ✓
+    /// 做成**可试档位**:推迟多少才够要在真机上找 ⇒ `defaults write` 一个数就能 A/B ✓
+    /// (设 0 = 恢复旧行为 ✓;能区分"没写过"与"写成 0" ✓)
+    static var sweepDelayMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugSweepDelayMs) as? Int) ?? 500
+    }
+
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
@@ -77,6 +89,11 @@ enum DebugFlags {
     /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
     /// 常态（全关）下**一行都不打** ⇒ 不影响日志预算。
     static func reportHeavySwitchesIfNeeded() {
+        // 这个不是布尔开关(是毫秒档位),但它**改变时序** ⇒ 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if sweepDelayMs != 500 {
+            print("[⚠️ 重型开关] debug.sweepDelayMs = \(sweepDelayMs)ms(默认 500)—— 关面板预拍的推迟量")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugSweepDelayMs)")
+        }
         for s in heavySwitches where s.isOn {
             print("[⚠️ 重型开关] \(s.name) 已打开 —— \(s.cost)")
             print("[⚠️ 重型开关]   排查完请关掉：defaults write com.cheney12138.macswitcher \(s.name) -bool false")
