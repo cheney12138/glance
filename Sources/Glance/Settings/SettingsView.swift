@@ -191,6 +191,31 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                     .allowsHitTesting(false)
             }
+            // ★ 切页:侧栏选中该页**第一组**,并**下一拍再把滚动位置真的送回去**。
+            //
+            // 病例(2026-09-22 用户实报 + 截图):「从通用切到快捷键之后, 直接定位到了**导航**上,
+            //   不应该选中第一个菜单吗」。真因:
+            //   ① 侧栏点页那一拍是"切页 + `selection = 第一组`"同时发生 ⇒ `onChange(navSelection)`
+            //      里的 `proxy.scrollTo` 也发生在**同一拍** ✗ —— 而那时**新页还没进布局**
+            //      ⇒ scrollTo **落空** ✓(SwiftUI 的经典坑:目标 id 此刻还不在视图树里)
+            //   ② 于是 `ScrollView` 保留着**上一页的滚动偏移** ⇒ 顶部正好停在中段(截图里就是"导航")
+            //   ③ 0.4s 静默期过后,"滚动 → 导航跟着走"的回写把它**确认**成当前项 ✓(看着就像它自己跳过去的)
+            // ⇒ 口径:切页必须①选中第一组 ②**等新页布局好**再滚(下一拍 + 50ms 各试一次),③静默期照旧 ✓
+            .onChange(of: page) { _, newPage in
+                let first = newPage.anchor(newPage.groups[0])
+                navSelection = first
+                func pushScroll() {
+                    suppressNavSpyUntil = CFAbsoluteTimeGetCurrent() + 0.4
+                    withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
+                        proxy.scrollTo(first, anchor: .top)
+                    }
+                }
+                DispatchQueue.main.async(execute: pushScroll)                       // 新页提交之后
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {            // 再补一次(布局晚到的兜底)
+                    guard page == newPage else { return }
+                    pushScroll()
+                }
+            }
             // 侧栏子菜单点了 ⇒ 滚到对应组(锚点 id 由 SettingsGroup 挂)
             .onChange(of: navSelection) { _, sel in
                 guard let sel else { return }
