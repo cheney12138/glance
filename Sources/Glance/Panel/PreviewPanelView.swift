@@ -3,7 +3,9 @@ import ImageIO
 import VideoToolbox
 import AppKit
 import CoreImage
-import ScreenCaptureKit
+// ⚠️ `@preconcurrency`:`SCStream`/`SCStreamOutput` 这套 API 的 Sendable 标注还没跟上,
+// 不声明的话每处回调都要报一串 warning(而我们本来就用主线程串行化 ✓)
+@preconcurrency import ScreenCaptureKit
 import GlanceCore
 
 /// 窗口预览托盘 —— 施工契约 = 最新设计 demo 的 `.preview-tray`。
@@ -509,7 +511,9 @@ private struct WindowThumb<Overlay: View>: View {
 ///   I2 每扇窗**自带一帧**(不共享可变渲染资源 —— 病例 A1:共享 CALayer ⇒ 串台 79 次);
 ///   I3 出图规格**首启冻结**(病例 A3/B5:局中重算 ⇒ 画面忽然缩放);
 ///   I7 日志带时间轴(`glog`)。
-final class LivePreviewPool: ObservableObject {
+/// `@unchecked Sendable` 的理由:它的状态**只在自己的 `queue` 上碰** ✓(回调里跨队列只传值),
+/// 编译器看不到这层约定,只好显式声明 ✓
+final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     static let shared = LivePreviewPool()
 
     private init() {
@@ -872,7 +876,8 @@ final class LiveFrameBox: ObservableObject {
 }
 
 /// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
-final class LiveOutput: NSObject, SCStreamOutput {
+/// 同上:回调只在 `LivePreviewPool.queue` 上跑 ⇒ 显式声明 ✓
+final class LiveOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let wid: CGWindowID
     private let onFrame: (CMSampleBuffer) -> Void
     init(wid: CGWindowID, onFrame: @escaping (CMSampleBuffer) -> Void) {

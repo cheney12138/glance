@@ -116,6 +116,28 @@ final class PanelController: ObservableObject {
     private var pendingLaunchAt: CFAbsoluteTime = 0
     private static let pendingMaxAge: Double = 1.5
 
+    /// **名单还没到、手已经松了**的那一次确认(2026-09-22 用户实报「快速 cmd tab 连续切换, 偶尔换不起来」)。
+    ///
+    /// 病例(日志铁证):
+    /// ```text
+    /// [2125575ms] [tap] flagsChanged kc=55 down=true  state=idle
+    /// [2125620ms] [tap] hotkey forward pressed …      → emit begin
+    /// [2125668ms] [tap] flagsChanged kc=55 down=false … → emit confirm
+    /// [2125668ms] [T6] 确认(空列表):面板关闭           ← 枚举(46–69ms)还没回来 ⇒ 什么都没换 ✗
+    /// ```
+    /// 枚举在**后台**跑(2026-09-22 之前就是:为了不卡 tap 回调 ✓),而"按下→松开"只要 40–60ms
+    /// ⇒ 快速 ⌘Tab 会跑在名单前面 ✗ ⇒ 确认时 `groups` 还是空的 ✓
+    /// 口径:**意图已经被接受,就必须执行** —— 先记下来,等名单落地(`finishBegin`)当场兑现 ✓
+    /// (与 `pendingLaunchRing` 同款:触发层比枚举先到的那一瞬,只记意图 ✓)
+    ///
+    /// ⚠️ 这里**不能**顺手 `dismiss()`:那会 `beginGeneration += 1` ⇒ 枚举回来直接被丢弃 ✗
+    ///    (所以这一局要留着等名单;万一名单永远不来,有 `confirmWaitWork` 兜底 ✓)
+    private var confirmBeforeList = false
+    /// 本局名单是否已落地(区分"还没到"与"真的空")✓
+    private var listReady = false
+    /// 等名单的兜底闹钟(见 `confirmBeforeList`)
+    private var confirmWaitWork: DispatchWorkItem?
+
     /// 段切换的行进方向(见 `SegmentTravel`)。PanelView 靠它挑过渡:
     /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
     @Published private(set) var segmentTravel: SegmentTravel = .direct
@@ -372,6 +394,17 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        // ★ 连着快速 ⌘Tab:上一局那次"名单还没到"的确认还挂着 ⇒ **先兑现它**(一次按键 = 一次切换 ✓),
+        //   否则那一发就白按了(用户实报的"偶尔换不起来"里有一部分就是这种叠加 ✓)
+        if confirmBeforeList, listReady, !groups.isEmpty {
+            confirmBeforeList = false
+            confirmWaitWork?.cancel(); confirmWaitWork = nil
+            glog("[T6] 新一局到来 ⇒ 先兑现上一局那一次确认")
+            confirmSelection()      // 内部会 dismiss(收掉上一局)✓
+        }
+        confirmBeforeList = false
+        confirmWaitWork?.cancel(); confirmWaitWork = nil
+        listReady = false
         // 打卡器开账:一局的环节时间轴从这里起算(见 `SessionMarks`)
         SessionMarks.begin("唤起")
         // **先抢优先级,再干活**:`.latencyCritical` 这条断言要从按键那一刻生效,不能等到 `showPanel`
@@ -421,6 +454,7 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        listReady = true
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
@@ -494,6 +528,16 @@ final class PanelController: ObservableObject {
             trace("[T6] 落点顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
         }
         winIndex = 0
+        // ★ 上一发"手已经松了、名单还没到"的确认 ⇒ **就在这里兑现**(一次按键 = 一次切换 ✓)。
+        //   放在预截/建窗**之前**:这一局的目的已经达成,不必再开面板、也不必白拍一批图 ✓
+        if confirmBeforeList {
+            confirmBeforeList = false
+            confirmWaitWork?.cancel(); confirmWaitWork = nil
+            let waited = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
+            glog(String(format: "[T6] 名单晚到(等了 %.0fms)⇒ 兑现刚才那一次确认", waited))
+            confirmSelection()
+            return
+        }
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
         // 不再先闪一下"截图中…"。AltTab 也是这个路子 —— 缓存保活 + 后台刷新。
         // T87 v3 起剪枝改 `reapAlive()`(后台、全量保活):死窗条目本就不会被展示,
@@ -2617,6 +2661,21 @@ final class PanelController: ObservableObject {
             glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
             DockAppsProvider.launch(at: app.path)
             dismiss(reason: "确认(启动 \(app.name))")
+            return
+        }
+        guard listReady else {
+            // 名单还在后台枚举 ⇒ **记下意图**,等 finishBegin 兑现 ✓
+            confirmBeforeList = true
+            let gen = beginGeneration
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, gen == self.beginGeneration, self.confirmBeforeList else { return }
+                self.confirmBeforeList = false
+                self.dismiss(reason: "确认(等名单超时 0.6s)")
+            }
+            confirmWaitWork?.cancel()
+            confirmWaitWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+            trace("[T6] 确认(名单未到 ⇒ 记下意图,等枚举落地就兑现)")
             return
         }
         guard groups.indices.contains(appIndex) else {
