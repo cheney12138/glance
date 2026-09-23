@@ -333,7 +333,11 @@ public enum TapRound {
 
         // MARK: 判卷
 
-        public func judge(now: Double) -> Outcome {
+        /// 判卷。`dragEvidence` = 这轮按压期间系统按下过鼠标(三指拖移被消费的签名,由调用方采集
+        /// —— 时钟与采集都在 App 侧,核里只认布尔 ✓)。真轻点不产生任何鼠标事件 ⇒ 该证据只在
+        /// "看起来像轻点的拖移"上为真,一票否决(2026-09-23 实锤病例见规格文档表二 ✓)。
+        /// 放在时长/手指数闸**之后**:不动作的轮次不因它多话,只有"本该生效"的局才被它拦下 ✓
+        public func judge(now: Double, dragEvidence: Bool = false) -> Outcome {
             if fired { return .rejected("") }
             let snap = snapshot(now: now)
             // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
@@ -365,6 +369,12 @@ public enum TapRound {
                                         snap.fingerCount, snap.releaseSpan * 1000, policy.maxReleaseSpan * 1000))
             }
             if snap.normalizedMove > policy.maxMove { return .slide(norm: snap.normalizedMove) }
+            // ★ 拖移证据门:按压期间系统按下过鼠标 ⇒ 这不是轻点,是拖移的起手/全程(规格表二 ✓)。
+            //   放在滑动判定**之后**:大位移的局照旧按"让给系统"报(不改口 ✓),只有"本该生效"
+            //   的局才被它拦下 —— 日志里它一出现,就说明真拦住了一次误触 ✓
+            if dragEvidence {
+                return .rejected("按压期间出现过鼠标按下(三指拖移被系统消费的签名)⇒ 让给系统,不动作")
+            }
             if snap.held > policy.maxDuration {
                 guard snap.fingerCount == 4, policy.pressHoldRange.contains(snap.held) else {
                     return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",

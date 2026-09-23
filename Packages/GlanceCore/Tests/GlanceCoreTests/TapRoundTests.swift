@@ -20,19 +20,20 @@ final class TapRoundTests: XCTestCase {
     }
 
     /// 模拟 App 的用法：喂帧；某一帧空 ⇒ 当场判卷（照 LumaRing：只在全部离开那一帧判）
-    private func run(_ frames: [TapRound.Frame], policy: TapRound.Policy = .standard) -> TapRound.Outcome {
+    private func run(_ frames: [TapRound.Frame], policy: TapRound.Policy = .standard,
+                     dragEvidence: Bool = false) -> TapRound.Outcome {
         var tr = TapRound.Tracker(policy: policy)
         for f in frames {
             if tr.feed(f) == 0 {
                 // ⚠️ 顺序照 App:**先判卷、再清账** —— 反了就是拿空账本判卷（我第一版写反过 ✗）
-                let out = tr.judge(now: f.time)
+                let out = tr.judge(now: f.time, dragEvidence: dragEvidence)
                 tr.endRound()
                 return out
             }
         }
         // 没等到空帧 ⇒ 用最后一帧时刻判（测试里基本用不到）
         let last = frames.last?.time ?? 0
-        return tr.judge(now: last)
+        return tr.judge(now: last, dragEvidence: dragEvidence)
     }
 
     /// 三根手指：分两帧落齐（第 3 根 40ms 后到 —— 本仓病历里就是常态 ✓）
@@ -308,4 +309,36 @@ final class TapRoundTests: XCTestCase {
         guard case .fireThree = run(frames, policy: p) else { return XCTFail("关掉重量门后应当回到旧行为(会生效)") }
     }
 
+    // MARK: ⑧ 拖移证据一票否决(2026-09-23 实锤:快速选词在接触期间完成拖移,事后撤销抓不到)
+
+    /// 现场(日志 `[27900ms]`):`三指 237ms 位移 norm=0.0251 size=0.6 → 唤起` ✗
+    /// 三指拖移被系统消费时会**合成 leftMouseDown**,真轻点不合成 ⇒ 有这个证据的"轻点"
+    /// 其实是拖移的起手/全程 ⇒ 一票否决(默认参数不传 = 旧行为,上面的生效测试都还过 ✓)
+    func testDragEvidenceVetoesCleanThreeFingerTap() {
+        let frames = heldThree(t0: 0, until: 0.28)      // 今晚误触的形状:237ms、位移压线以下
+        let out = run(frames, dragEvidence: true)
+        guard case let .rejected(reason) = out else { return XCTFail("有拖移证据必须被拦, 实际:\(out)") }
+        XCTAssertTrue(reason.contains("鼠标按下"), "理由要写明是拖移证据挡的: \(reason)")
+    }
+
+    /// 四指那条(进未启动环)同样归它管 —— 拖移期间的四指接触更不该开面板 ✓
+    /// (帧间隔必须 ≤120ms:真实帧率约 40ms 一帧 ✗ 否则会先被丢帧门挡,轮不到证据门 ✓)
+    func testDragEvidenceVetoesFourFingerTap() {
+        let frames = [frame(0.00, c(1, 0.40, 0.4), c(2, 0.44, 0.4), c(3, 0.48, 0.4), c(4, 0.52, 0.4)),
+                      frame(0.08, c(1, 0.40, 0.4), c(2, 0.44, 0.4), c(3, 0.48, 0.4), c(4, 0.52, 0.4)),
+                      frame(0.16, c(1, 0.40, 0.4), c(2, 0.44, 0.4), c(3, 0.48, 0.4), c(4, 0.52, 0.4)),
+                      frame(0.20)]
+        let out = run(frames, dragEvidence: true)
+        guard case let .rejected(reason) = out else { return XCTFail("有拖移证据的四指也必须被拦, 实际:\(out)") }
+        XCTAssertTrue(reason.contains("鼠标按下"), "理由要写明是拖移证据挡的: \(reason)")
+    }
+
+    /// 证据只在"本该生效"的局上说话:滑动的局照旧按"让给系统"报(不因证据改口)✓
+    func testDragEvidenceDoesNotChangeSlideVerdict() {
+        var frames = threeFingers(t0: 0)
+        frames.append(frame(0.08, c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.60, 0.5)))   // 一根手指滑出去
+        frames.append(frame(0.12))
+        let out = run(frames, dragEvidence: true)
+        guard case .slide = out else { return XCTFail("大位移照旧是滑动(让给系统), 实际:\(out)") }
+    }
 }
