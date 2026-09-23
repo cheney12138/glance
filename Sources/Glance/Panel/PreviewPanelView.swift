@@ -896,7 +896,8 @@ final class SeatImageCache {
     /// 三张图缓存合并出来的那一本账(见 `Design/ImageCache.swift`)——
     /// ⚠️ 老实现里有个**真 bug**:`inFlight` 登记之后如果变换失败就提前 return ⇒ 那扇窗永久卡在
     ///    "正在准备" ⇒ 托底图再也不出来 ✗。通用实现里释放只有一条路 ✓
-    private let cache = ImageCache<CGWindowID, CGImage>(label: "glance.seat")
+    /// 键只有窗 id（模糊半径含屏 scale，而换屏会整本 `reset()`）—— 规则在 `GlanceCore/ImageCacheKey.swift` ✓
+    private let cache = ImageCache<UInt32, CGImage>(label: "glance.seat")
     private let ctx = CIContext(options: [.useSoftwareRenderer: false])
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
@@ -909,7 +910,7 @@ final class SeatImageCache {
         // 参数在主线程取好再闭包捕获(后台读这些全局量 = 数据竞争 ✗)
         let radius = PanelMetrics.lightsBlur * PanelScreen.scale
         let ctx = self.ctx
-        return cache.image(for: wid) { Self.blur(cg, radius: radius, ctx: ctx) }
+        return cache.image(for: ImageCacheKey.seat(windowID: wid)) { Self.blur(cg, radius: radius, ctx: ctx) }
     }
 
     /// 预热(面板打开时后台把整个环的窗都算一遍 ⇒ hover 时一次都不用算)
@@ -1056,7 +1057,9 @@ final class CardImageCache {
 
     /// 与 `SeatImageCache` 同一本账(见 `Design/ImageCache.swift`)——合并前它俩是两份同形状的代码,
     /// 于是**同一个"卡在 inFlight"的 bug 被抄了两遍** ✗
-    private let cache = ImageCache<CGWindowID, Prepared>(label: "glance.cardimg")
+    /// ⚠️ 键是 **(窗 id + 像素尺寸)**，不是"只有窗 id" —— 病例见 `GlanceCore/ImageCacheKey.swift`:
+    /// 键只看 id 时，卡片尺寸上限/缩放一变就**永远命中旧尺寸那张图** ✗
+    private let cache = ImageCache<ImageCacheKey.Card, Prepared>(label: "glance.cardimg")
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
     func reset() { cache.reset() }
@@ -1066,9 +1069,10 @@ final class CardImageCache {
         guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let scale = PanelScreen.scale                                    // 主线程取 ✓
         // 目标尺寸由调用方给(方案 A:小窗不放大 ⇒ 目标可能小于卡片框)
-        let pxW = max(2, Int((target.width * scale).rounded()))
-        let pxH = max(2, Int((target.height * scale).rounded()))
-        return cache.image(for: wid) {
+        // 像素尺寸与"钥匙"都由纯函数算 ⇒ 两者不会各算一套(那是这类 bug 的温床 ✗)
+        let key = ImageCacheKey.card(windowID: wid, target: target, scale: scale)
+        let pxW = key.pixelWidth, pxH = key.pixelHeight
+        return cache.image(for: key) {
             var out: CGImage?
             if let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
                                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
