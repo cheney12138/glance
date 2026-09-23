@@ -11,18 +11,27 @@ focuses **that specific window** — not the whole app.
 
 ## Install
 
+With Homebrew:
+
 ```sh
 brew trust cheney12138/tap
 brew install --cask cheney12138/tap/glance
 ```
 
-Or download the DMG from [Releases](https://github.com/cheney12138/glance/releases).
-Requires **macOS 14** or later · Apple Silicon and Intel.
+Without Homebrew: download the DMG from
+[Releases](https://github.com/cheney12138/glance/releases), drag it into Applications,
+then trust it once:
 
-> **First launch only.** Glance is signed but not notarized, so macOS refuses to open
-> it once. Run `xattr -dr com.apple.quarantine "/Applications/Glance.app"`, or allow it
-> in **System Settings ▸ Privacy & Security ▸ Open Anyway**. After that it updates
-> itself and never asks again.
+```sh
+xattr -dr com.apple.quarantine "/Applications/Glance.app"
+```
+
+> **Why the extra step.** Glance is signed but not notarized, so macOS refuses to open it
+> once. The command above clears that flag; if you prefer the UI, use
+> **System Settings ▸ Privacy & Security ▸ Open Anyway**.
+> After that Glance updates itself and never asks again.
+
+Requires **macOS 14** or later · Apple Silicon and Intel.
 
 ## What it does
 
