@@ -223,6 +223,8 @@ struct PanelView: View {
                 ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                     IconCell(
                         group: group,
+                        // 本局被我们缩小收纳过的 App ⇒ 图标上给个标记(用户第 2 条诉求 ✓)
+                        minimized: controller.minimizedPIDs.contains(group.pid),
                         // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
                         // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
                         selected: i == controller.appIndex && !controller.entrySelected,
@@ -356,6 +358,8 @@ struct PanelView: View {
 
 private struct IconCell: View {
     let group: AppGroup
+    /// 本局的窗被我们缩小收纳过(Cmd+M)⇒ 画一枚"已收纳"角标 ✓
+    let minimized: Bool
     let selected: Bool
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
     let motion: Animation?
@@ -385,6 +389,22 @@ private struct IconCell: View {
             // 不变量:阴影跟图片 alpha 走,不裁圆角、不套矩形 box-shadow
             .elevation(.icon, active: selected)   // 帧率优先:只有选中那颗有投影
             .overlay(alignment: .bottom) { windowDots }
+            // ★ "已收纳"角标(2026-09-22 用户第 2 条诉求:标记被缩小收纳的 app ✓)
+            //   位置选右下角:那里平时空着(收纳之后窗数是 0 ⇒ 窗数记号也空着 ✓),不挤任何既有元素 ✓
+            //   ⚠️ 形状/颜色是一行的事:想换别的记号(比如小箭头、或整个图标压暗)改这里就够 ✓
+            .overlay(alignment: .bottomTrailing) {
+                if minimized {
+                    Image(systemName: "arrow.down.to.line")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(PanelColors.thumbTitle)   // 与卡片标题同一套墨色 ✓
+                        .padding(2)
+                        .background(Circle().fill(PanelColors.chipBg))     // 底衬:图标深色时也读得清 ✓
+                        .overlay(Circle().strokeBorder(PanelColors.chipBorder,
+                                                       lineWidth: PanelMetrics.hairline))
+                        .offset(x: -2, y: -1)
+                        .allowsHitTesting(false)
+                }
+            }
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
             .contentShape(Rectangle())
             // 真实弹簧:response 越小越"脆",dampingFraction 越小回弹越明显。

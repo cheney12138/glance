@@ -280,6 +280,15 @@ final class PanelController: ObservableObject {
     /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
     /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
     private var purgedWIDs: Set<CGWindowID> = []
+    /// **本局被我们缩小(Cmd+M)过的窗与 App**(2026-09-22 用户实报)。
+    ///
+    /// 病例:「唤起面板的时候, cmd m 会缩小, 这时候面板上的 app 是没变化的, 松开之后会立马把缩小的窗口
+    ///   又换起来」✗ —— 最小化窗本来就不在列表里(`optimisticRemoval(.minimize)` ✓),但**组还在环里** ✓
+    ///   ⇒ 松开时走 `confirmSelection` 的"无窗应用 ⇒ 激活它"那条路 ✗ ⇒ 刚缩下去的窗又被抬起来 ✓
+    /// 这与当初 `H` 那个 bug **是同一个病**(「松开 ⌥ 又把刚隐藏的 App 唤起来了」✓)⇒ 照它的先例办:
+    ///   **本局不许再唤醒它** ✓;顺带把 App 标记上(用户第 2 条诉求:标记被缩小收纳的 app ✓)
+    private(set) var minimizedPIDs: Set<pid_t> = []
+    private var minimizedWIDs: Set<CGWindowID> = []
 
     // MARK: - 触发层入口
 
@@ -422,6 +431,8 @@ final class PanelController: ObservableObject {
         hiddenPIDs.removeAll() // 新一局:以系统现在的真实状态为准,清掉上一局的隐藏记忆
         quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
         purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
+        minimizedPIDs.removeAll() // 同上:"被缩小收纳"的标记只活一局(用户第 2 条诉求 ✓)
+        minimizedWIDs.removeAll()
         // T91:换环意图只活一局。**只在它真的挂着时留账**(日志预算:常态两行,这里是例外才出声)
         if pendingLaunchRing { trace("[T91] 新一局:上一局的换环意图没兑现,丢掉") }
         pendingLaunchRing = false
@@ -2415,6 +2426,8 @@ final class PanelController: ObservableObject {
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
             purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
+            minimizedWIDs.insert(w.wid)   // 本局"是我们缩的" ⇒ 松开时不许再唤醒它(见字段注释的病例)
+            minimizedPIDs.insert(g.pid)   // 环上那枚图标要标记"已收纳"(用户第 2 条诉求 ✓)
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
@@ -2700,6 +2713,14 @@ final class PanelController: ObservableObject {
         if hiddenPIDs.contains(g.pid) {
             glog("[T29] 选中的组已被隐藏:本轮结束,不唤起它")
             dismiss(reason: "确认(已隐藏)")
+            return
+        }
+        // ★ 本局**被我们缩小过的** App:松开时**什么都不做**(照 H 的先例 ✓)
+        //   病例(2026-09-22 用户实报):「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗
+        //   ⇒ 它此刻是"无窗应用"(窗都收进 Dock 了 ✓),而下面那条会把 App 激活 ⇒ 系统把窗抬回来 ✗
+        //   判据:该 App 在本局被我们缩小过 ∧ 它在本屏已经没有可选的窗 ✓(还有别的窗就照常切 ✓)
+        if minimizedPIDs.contains(g.pid), g.windows.isEmpty {
+            dismiss(reason: "确认(刚被缩小收纳 ⇒ 不唤醒它)")
             return
         }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
