@@ -295,11 +295,13 @@ final class PanelController: ObservableObject {
     var minimizedPIDs: Set<pid_t> { Set(minimizedWIDs.values) }
     /// 让 `minimizedWIDs` 的变化**一定会**触发重绘(它是普通字典,不会自己 publish ✗)
     @Published private var marksRevision = 0
-    /// 环上这枚图标该打什么记号(隐藏优先 —— 一个位置只放一枚 ✓)
+    /// 环上这枚图标该打什么记号 —— 判据在领域层(`PanelMarkPolicy` ✓),这里只喂两个事实 ✓
+    ///
+    /// ⚠️ 优先级 2026-09-22 反转过(用户:「又退回不可见的角标了, 不是遗照灰」✗):
+    ///   原来"隐藏优先" ⇒ 一个 App 同时满足"有窗收在 Dock 里"与"系统说它 hidden"时,显示角标 ✗
+    ///   而用户刚按的是 ⌘M,要看见的是"那扇窗收起来了" ⇒ **有收纳就显示灰** ✓
     func mark(for pid: pid_t) -> PanelMark? {
-        if hidingPIDs.contains(pid) { return .hidden }       // "只要还是 hide" 就一直有 ✓
-        if minimizedPIDs.contains(pid) { return .tucked }    // 常驻到那扇窗回屏幕为止 ✓
-        return nil
+        PanelMarkPolicy.mark(hidden: hidingPIDs.contains(pid), tucked: minimizedPIDs.contains(pid))
     }
 
     /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓
@@ -2654,7 +2656,21 @@ final class PanelController: ObservableObject {
         for g in groups where NSRunningApplication(processIdentifier: g.pid)?.isHidden == true {
             hiding.insert(g.pid)
         }
-        if hiding != hidingPIDs { hidingPIDs = hiding }
+        if hiding != hidingPIDs {
+            if isTraceEnabled {
+                // 谁被判定成 hidden —— 2026-09-22 病例(⌘M 之后冒出"隐藏"角标 ✗)需要这行才能定案:
+                // 到底是系统把"窗都收走的 App"报成了 hidden,还是别处动了它 ✓
+                let names = hiding.subtracting(hidingPIDs).map {
+                    NSRunningApplication(processIdentifier: $0)?.localizedName ?? "\($0)"
+                }
+                let gone = hidingPIDs.subtracting(hiding).map {
+                    NSRunningApplication(processIdentifier: $0)?.localizedName ?? "\($0)"
+                }
+                if !names.isEmpty { glog("[记号] 系统报告这些 App 变成隐藏: \(names.joined(separator: " · "))") }
+                if !gone.isEmpty { glog("[记号] 这些 App 不再隐藏: \(gone.joined(separator: " · "))") }
+            }
+            hidingPIDs = hiding
+        }
     }
 
     /// 系统的"某个 App 被藏了 / 被放出来了"通知 ⇒ 立刻跟上(全局只装一次 ✓)

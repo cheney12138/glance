@@ -357,24 +357,20 @@ struct PanelView: View {
 // MARK: - 图标格(选中 = 上浮 14 + 放大 1.14 + 提亮;未选 = 压暗去饱和)
 
 /// 环上图标的**状态记号**(用户 2026-09-22 要求:常驻 + 贴切)
-enum PanelMark {
-    case tucked    // 有窗被我们收起在 Dock 里(⌘M)
-    case hidden    // App 被隐藏了(⌘H),只要还藏着就一直有 ✓
-
-    /// ⚠️ 语义与表现要分开看(2026-09-22 定版):
-    ///   · `.tucked`(有窗收在 Dock 里)⇒ **整枚图标变灰 + 退半步** ✓ —— **不画角标** ✓
-    ///   · `.hidden`(⌘H)⇒ `eye.slash` 角标 ✓
-    /// (角标只在 `.hidden` 用得上,`symbol` 因此只为它而设 ✓)
+extension PanelMark {
+    /// 记号怎么画 —— **视图细节,留在 App 层** ✓(领域层只有 `PanelMark` 这个两态枚举 ✓)
     ///
-    /// 旧案留档:`.tucked` 曾用 `rectangle.inset.bottomleft.filled` —— **一扇窗框里嵌着一扇小窗** ✓
-    /// 「用这个画中画的 icon 吧, 在这个语义下我觉得也合适」✓
-    /// (在此之前走过三条错路,留档:`arrow.down.to.line` = 下载图标 ✗;
-    ///  `rectangle.compress.vertical` = 只有"被压缩",没有"小窗" ✗;
-    ///  我自己手画"窗身 + 标题栏 + 两颗小点" ⇒ 用户评「还是有点丑, 复杂了, 图标一缩小就看着很脏」✗
-    ///  ⇒ 教训:角标只有 15pt,**一个块面**就读懂 > 画得"准" ✓)
+    /// ⚠️ 语义与表现分开看(2026-09-22 定版):
+    ///   · `.tucked`(有窗被我们收进 Dock)⇒ **整枚图标变灰 + 压暗** ✓ —— 不画角标 ✓(见 IconCell)
+    ///   · `.hidden`(⌘H)⇒ `eye.slash` 角标 ✓
+    ///   `symbol` 因此只为 `.hidden` 而设 ✓
+    /// 旧案留档(`.tucked` 走过的路):`arrow.down.to.line` = 下载图标 ✗ /
+    /// `rectangle.compress.vertical` = 只有"被压缩" ✗ / 手画窗身+标题栏+小点 ⇒
+    /// 用户评「有点丑, 复杂了, 一缩小就看着很脏」✗ / `rectangle.inset.bottomleft.filled` = 画中画 ✓
+    /// ⇒ 最后**整枚变灰**顶替了角标 ✓ 教训:15pt 里"一个块面读懂" > 画得"准" ✓
     var symbol: String {
         switch self {
-        case .tucked: return "rectangle.inset.bottomleft.filled"
+        case .tucked: return "rectangle.inset.bottomleft.filled"   // 已收纳不画角标:这里只为穷尽枚举 ✓
         case .hidden: return "eye.slash"
         }
     }
