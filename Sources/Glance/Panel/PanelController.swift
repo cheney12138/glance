@@ -309,6 +309,7 @@ final class PanelController: ObservableObject {
     ///   · ② 「关闭再唤起之后, 选中 app 拉不起窗口了」✗ ⇒ **另起一局**的确认必须能把它拉回来 ✓
     /// ⇒ 记号(视觉)常驻 ✓;守卫只活一局 ✓ —— 用户的手离开键盘之后再确认,就是"我要它回来" ✓
     private var sessionMinimizedPIDs: Set<pid_t> = []
+    private var didObserveHiding = false
 
     /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
     /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
@@ -454,6 +455,7 @@ final class PanelController: ObservableObject {
         contextScreen = screen
         hiddenPIDs.removeAll() // 新一局:以系统现在的真实状态为准,清掉上一局的隐藏记忆
         quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
+        observeHidingChanges()  // 装一次即可(全局通知 ✓)—— 让"藏着"的角标当场跟上 ✓
         purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
         // ★ "已收纳"的账**跨局保留**(用户 2026-09-22:「角标要常驻」✓)—— 只靠下面的自愈剪枝 ✓
         hidingPIDs.removeAll()          // 隐藏标记是现读系统的 ✓ 这里只是清掉上一帧的缓存
@@ -2637,12 +2639,41 @@ final class PanelController: ObservableObject {
             }
             return NSRunningApplication(processIdentifier: pid)?.isTerminated == false
         }
+        refreshHidingMarks()
+        if minimizedWIDs.count != before { marksRevision &+= 1 }   // 表变了 ⇒ 保证重绘一次 ✓
+    }
+
+    /// 重算"哪些 App 现在藏着" —— 角标 `eye.slash` 的唯一数据源 ✓
+    ///
+    /// ⚠️ 2026-09-22 用户问:「刚才怎么还偶然看到了一个闭眼不可见的角标…是写在哪了, 什么状态下会出现」
+    ///   —— 他之所以是"偶然看到",就是因为这里**原来只在**重枚举时才算(唤起 / 我们自己动作之后)
+    ///   ⇒ 面板**开着**的时候,别处把 App 藏了/放出来了,角标都要等到下一次刷才跟上 ✗
+    /// ⇒ 现在多两个触发源:`NSWorkspace` 的 hide / unhide 通知(见 `observeHidingChanges`)✓
+    private func refreshHidingMarks() {
         var hiding = Set<pid_t>()
         for g in groups where NSRunningApplication(processIdentifier: g.pid)?.isHidden == true {
             hiding.insert(g.pid)
         }
         if hiding != hidingPIDs { hidingPIDs = hiding }
-        if minimizedWIDs.count != before { marksRevision &+= 1 }   // 表变了 ⇒ 保证重绘一次 ✓
+    }
+
+    /// 系统的"某个 App 被藏了 / 被放出来了"通知 ⇒ 立刻跟上(全局只装一次 ✓)
+    ///
+    /// 注意口径:这里认的是**系统事实**(`isHidden`),不是"我们按过 ⌘H" ✓
+    /// ⇒ 别的工具 / "隐藏其他(⌥⌘H)" / App 自己藏的,都会让这枚角标出现 ✓ 这是有意的 ✓
+    private func observeHidingChanges() {
+        guard !didObserveHiding else { return }
+        didObserveHiding = true
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didHideApplicationNotification,
+                     NSWorkspace.didUnhideApplicationNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                // 在台上就顺手重枚举一次:被藏起来的 App,它的窗**还在列表里**(枚举要到下一次
+                // 重枚举才把它们除掉)⇒ 光改角标会留下几张"已经看不见的卡" ✗
+                if self.isVisible { self.refreshAfterAction() } else { self.refreshHidingMarks() }
+            }
+        }
     }
 
     private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {
