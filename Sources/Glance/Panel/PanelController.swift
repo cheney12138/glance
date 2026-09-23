@@ -317,6 +317,7 @@ final class PanelController: ObservableObject {
         case .minimizeWindow: destructive(.minimize)
         case .toggleFullscreen: destructive(.fullscreen)
         case .hideApp: destructive(.hide)
+        case .moveToNextScreen: moveSelectedWindowToNextScreen()
         }
     }
 
@@ -2447,6 +2448,34 @@ final class PanelController: ObservableObject {
             WindowFocuser.zoom(window: w)
             // 缩放不改列表:窗还在同一格,只是尺寸剧变 —— 不重枚举,面板继续陪
         }
+    }
+
+    /// T:**把选中的窗搬到下一块屏**(P2,2026-09-22 用户点名要做的那一条)。
+    ///
+    /// 三处口径(每一处都是要用户点头的产品决定 —— 先用默认做出来,改起来都是一行 ✓):
+    ///   · 落点 = `ScreenMovePolicy.relative`(源屏相对位置等比映射 ✓);想改"落在正中" ⇒ 改那一个常量 ✓
+    ///   · **尺寸不变**(pt 原样搬 ✓)—— 按目标屏比例缩放读起来像"窗口变了" ✗
+    ///   · 搬完这扇窗就**不归本屏了**(ADR-0008 按屏归属 ✓)⇒ 立刻复枚举,它会从本屏候选集里消失 ✓
+    ///     (若它原本是那个 App 在本屏的**最后一扇窗**,那一格也会随之从环上退场 —— 这是正确行为 ✓)
+    /// 单屏 ⇒ 没有目的地:记一行日志、什么都不做(不假装成功 ✓)
+    private func moveSelectedWindowToNextScreen() {
+        guard groups.indices.contains(appIndex),
+              groups[appIndex].windows.indices.contains(winIndex) else { return }
+        let w = groups[appIndex].windows[winIndex]
+        let screens = NSScreen.screens
+        guard let src = contextScreen ?? screens.first,
+              let si = screens.firstIndex(where: { $0 === src }),
+              let ni = ScreenMovePolicy.nextScreenIndex(current: si, count: screens.count) else {
+            glog("[T33] 只有一块屏 ⇒ 没有可搬的目的地")
+            return
+        }
+        let dst = screens[ni]
+        let target = ScreenMovePolicy.targetFrame(current: w.bounds,
+                                                 source: WindowEnumerator.quartzFrame(of: src),
+                                                 target: WindowEnumerator.quartzFrame(of: dst))
+        glog("[T33] 搬到 \(dst.localizedName):\(w.title)")
+        _ = WindowFocuser.move(window: w, to: target)
+        refreshAfterAction()      // 归属变了 ⇒ 本屏候选集要跟着更新 ✓
     }
 
     /// 退出的**复核**(2026-09-17 初版"放回被拒者"的语义已被 09-18 三修取代 ——

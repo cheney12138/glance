@@ -55,6 +55,9 @@ final class HotkeyTapCenter {
         case minimizeWindow   // M:最小化选中窗(T12)
         case toggleFullscreen // F:选中窗进出全屏(T29,AltTab 同键)
         case hideApp          // H:隐藏选中 App(T29,AltTab 同键)
+        /// T:把选中的窗**搬到下一块屏**(2026-09-22 用户点名的 P2)。
+        /// 单屏时什么都不做(会记一行日志说明 ✓);两块屏以上**循环** ⇒ 再按一次就搬回来 ✓
+        case moveToNextScreen
     }
 
     private(set) var state: State = .idle
@@ -115,6 +118,9 @@ final class HotkeyTapCenter {
     private static let keyM: Int64 = 0x2E
     private static let keyF: Int64 = 0x03
     private static let keyH: Int64 = 0x04
+    /// `T`(0x11)—— **搬到下一块屏**(P2)。选它是因为:字母区空着的位置 ✓、
+    /// 且 `T` 与既有动作键(Q/W/M/F/H)不冲突 ✓
+    private static let keyT: Int64 = 0x11
     /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)+ 数字 1…9
     /// ⚠️ 唯一的例外是**截图会话里的回车**:那一发不吞(它是截图工具的"完成"),见 `handleReturn()`
     ///
@@ -124,7 +130,8 @@ final class HotkeyTapCenter {
     /// 按 2 不选中,还把 "2" 放行给底下的 App)。
     /// `Set([...])` 必须显式写:直接写数组字面量再 `.union` 会被推成 `[Int64]`(实测编译错)。
     private static let navKeys: Set<Int64> =
-        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keySpace, keyQ, keyW, keyM, keyF, keyH, keyGrave])
+        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keySpace,
+             keyQ, keyW, keyM, keyF, keyH, keyT, keyGrave])
             .union(digitKeys.keys)
     /// **⌘ + 动作键**(全匹配)⇒ 作用在"选中的那个 App / 那一扇窗"上。
     ///
@@ -139,6 +146,7 @@ final class HotkeyTapCenter {
     private static let cmdActionKeys: [Int64: Action] = [
         keyQ: .quitApp, keyW: .closeWindow, keyM: .minimizeWindow,
         keyF: .toggleFullscreen, keyH: .hideApp,
+        keyT: .moveToNextScreen,
     ]
     
     /// `(kVK_ANSI_Grave = 0x32):会话期可选地接管"当前 App 的窗口循环"。
@@ -506,6 +514,7 @@ final class HotkeyTapCenter {
         case Self.keyM: emit(.minimizeWindow)
         case Self.keyF: emit(.toggleFullscreen)
         case Self.keyH: emit(.hideApp)
+        case Self.keyT: emit(.moveToNextScreen)
         case Self.keyLeft: emit(.firstGroup)
         case Self.keyRight: emit(.lastGroup)
         case Self.keyDown: emit(.enterLaunchRing)   // ↓ 换环:未启动的 App
@@ -637,6 +646,7 @@ final class HotkeyTapCenter {
         case .minimizeWindow: return "M → 最小化选中窗(T12)"
         case .toggleFullscreen: return "F → 全屏切换(T29)"
         case .hideApp: return "H → 隐藏 App(T29)"
+        case .moveToNextScreen: return "T → 把选中窗搬到下一块屏(P2)"
         case .enterLaunchRing: return "↓ → 换环:把环换成未启动的 App(T91)"
         case .leaveLaunchRing: return "↑ → 换环:换回已启动的 App 组(T91)"
         }
