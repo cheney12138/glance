@@ -481,6 +481,11 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        // ★ 唤起**也要**剪一次记号(2026-09-22 用户实报「已经从缩率态回来了, 图标没有消失」的真因 ✓):
+        //   剪枝原本只挂在 `applyRefreshed` 上 —— 而它只在我们**自己的动作后**才跑(⌘M/W/H ✓)。
+        //   "从 Dock 把窗点回来"**不产生我们的任何动作** ✗ ⇒ 那条路根本没人剪 ✗
+        //   ⇒ 局面重设的这一刻就是最好的机会(而且这里最便宜:一局一次 ✓)
+        reconcileMinimizedMarks(raw)
         listReady = true
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
@@ -2584,6 +2589,11 @@ final class PanelController: ObservableObject {
         let before = minimizedWIDs.count
         var onScreen = Set<CGWindowID>()
         for g in raw { for w in g.windows { onScreen.insert(w.wid) } }
+        // 每个被标记的 App 问一次 AX 真相(只有 1–2 个 App ✓;问不到就 nil ⇒ 不据此下结论 ✓)
+        var axTucked: [pid_t: Bool?] = [:]
+        for pid in Set(minimizedWIDs.values) where axTucked[pid] == nil {
+            axTucked[pid] = WindowFocuser.hasMinimizedWindow(ofPID: pid)
+        }
         minimizedWIDs = minimizedWIDs.filter { wid, pid in
             // ⚠️ **不许拿 purgedWIDs 里的窗当"回来了"** ✗
             //    病例(2026-09-22 用户实报:「没有常驻, 只出现了一下就消失了」):
@@ -2591,8 +2601,14 @@ final class PanelController: ObservableObject {
             //    见 purgedWIDs 的注释 ✓),我这里却当场把记号剪掉了 ✗ ⇒ 记号一闪就没 ✓
             //    ⇒ 按 purgedWIDs 的老规矩:复核期(0.9s)内**不算数** ✓
             guard !purgedWIDs.contains(wid) else { return true }              // 复核期内:不动它 ✓
-            guard !onScreen.contains(wid) else {                              // 真的回来了 ⇒ 摘记号 ✓
+            if onScreen.contains(wid) {                                       // ① 真的回到屏上了 ✓
                 glog("[记号] 摘掉已收纳:窗 \(wid) 回到屏上了")
+                return false
+            }
+            // ② AX 说这个 App 已经一扇缩着的窗都没有了 ⇒ 记号失效 ✓
+            //    ★ 这条才治得住"还原之后 window id 变了"的 App(见 hasMinimizedWindow 的注释 ✓)
+            if let stillTucked = axTucked[pid], stillTucked == false {
+                glog("[记号] 摘掉已收纳:App \(pid) 已经没有缩着的窗了")
                 return false
             }
             return NSRunningApplication(processIdentifier: pid)?.isTerminated == false
