@@ -163,29 +163,58 @@ enum WindowFocuser {
 
     /// **搬窗**。`resize = true` 时**连尺寸一起设**(撑满用 ✓),否则只挪位置 ✓
     ///
-    /// ⚠️ 顺序有讲究:**先尺寸、后位置**。反过来的话,一扇 1600×1000 的窗先挪到小屏上,
-    /// 系统会先把它夹小 ✗、再设尺寸又变回大 —— 一来一回 App 会闪一下 ✓;
-    /// 先设尺寸再定位,只发生"一次改变" ✓
-    /// 设完**回读**一次:有些 App 有最小尺寸/贴边约束 ⇒ 实得与请求不一致是**它的属性**,不是 bug ✗
-    /// ⇒ 这一行日志就是为此存在的(`[T33] 搬窗: … 请求 … · 实得 …`)✓
+    /// ⚠️ **顺序有讲究:位置 → 尺寸 → 再钉一次位置**（这条被实机证伪过两轮 ✓）：
+    ///
+    /// 病例（2026-09-22 用户实报「没有撑满屏幕」+ 日志铁证）：
+    /// ```text
+    /// 搬到外接屏: 请求 0,30 1920x1050 · 实得 0,30 **1728**x1050   ← 宽被夹成**内建屏**的宽 ✗
+    /// 搬到内建屏: 请求 -1728,33 1728x1084 · 实得 -1728,33 1728x**1050** ← 高被夹成**外接屏**的高 ✗
+    /// ```
+    /// 真因：**窗口还在源屏上时设尺寸，会被源屏夹住** ✗
+    /// 我上一版把顺序定成"先尺寸后位置"（想避免"先挪到小屏被夹小再变大"的闪 ✗）——
+    /// 那个担忧是假的，这个夹才是真的 ✓
+    /// ⇒ 正解：**先把它挪过去**（此刻它归目标屏 ✓）⇒ 再设尺寸 ⇒ 尺寸变化可能让系统重排/夹位置，
+    ///   所以最后**再钉一次位置** ✓；仍不一致就再补一轮（最多两轮 ✓）
+    ///
+    /// 设完**回读**:有些 App 有最小尺寸/贴边约束 ⇒ 实得 ≠ 请求是**它的属性**，不是 bug ✗
+    /// ⇒ 这就是这行日志存在的意义（`[T33] 搬窗: … 请求 … · 实得 …`）✓
     @discardableResult
     static func move(window w: WindowRecord, to frame: CGRect, resize: Bool = false) -> Bool {
         guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
-        var ok = false
-        if resize {
-            var size = frame.size
-            if let value = AXValueCreate(.cgSize, &size) {
-                ok = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) == .success
-            }
+
+        func setPosition(_ p: CGPoint) -> Bool {
+            var p = p
+            guard let value = AXValueCreate(.cgPoint, &p) else { return false }
+            return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) == .success
         }
-        var origin = frame.origin
-        if let value = AXValueCreate(.cgPoint, &origin) {
-            ok = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) == .success && ok
+        func setSize(_ s: CGSize) -> Bool {
+            var s = s
+            guard let value = AXValueCreate(.cgSize, &s) else { return false }
+            return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) == .success
+        }
+        /// 期望 frame 是否已经达到（宽高各容 2pt:AX 会取整 ✓）
+        func reached() -> Bool {
+            guard let now = readFrame(element) else { return false }
+            return abs(now.minX - frame.minX) <= 2 && abs(now.minY - frame.minY) <= 2
+                && abs(now.width - frame.width) <= 2 && abs(now.height - frame.height) <= 2
+        }
+
+        var ok = true
+        if resize {
+            for _ in 0..<2 {                       // 最多两轮:第一轮通常就够,第二轮兜"系统重排"✓
+                ok = setPosition(frame.origin) && ok   // ① 先挪过去(关键:尺寸不再被源屏夹 ✓)
+                ok = setSize(frame.size) && ok         // ② 在新屏上设尺寸
+                ok = setPosition(frame.origin) && ok   // ③ 尺寸变化可能挪位 ⇒ 再钉一次
+                if reached() { break }
+            }
+        } else {
+            ok = setPosition(frame.origin)
         }
         var line = "[T33] 搬窗: \(w.title) → 请求 \(Int(frame.minX)),\(Int(frame.minY))"
             + " \(Int(frame.width))x\(Int(frame.height))\(resize ? "(含尺寸)" : "(只挪位)")"
         if let now = readFrame(element) {
             line += " · 实得 \(Int(now.minX)),\(Int(now.minY)) \(Int(now.width))x\(Int(now.height))"
+            if resize, !reached() { line += " ⚠️ 未达预期(多半是这扇窗有自己的尺寸约束)" }
         }
         glog(line)
         return ok
