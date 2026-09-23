@@ -132,7 +132,7 @@ enum SameAppScreenCycler {
     @MainActor
     @discardableResult
     static func step(forward: Bool) -> Bool {
-        guard let (_, name, pool, screen) = windowsOnContextScreen() else {
+        guard let (pid, name, pool, screen) = windowsOnContextScreen() else {
             if isTraceEnabled { glog("[接管⌘`] 前台 App 没有普通窗 ⇒ 不动作") }
             return false
         }
@@ -142,10 +142,20 @@ enum SameAppScreenCycler {
             }
             return false
         }
-        let target = forward ? pool[1] : pool[pool.count - 1]
+        // ★ 环的顺序必须**稳定**:池子是"最近使用"序 ⇒ 换到谁,谁就跑到最前 ✗
+        //   ⇒ 永远取 pool[1] 的话,任何 N 扇都会退化成两扇来回跳(2026-09-22 用户实报 ✓)
+        //   ⇒ 按窗口 id 升序当环(稳定、可预期 ✓;id 大致就是创建顺序 ✓),起点 = 当前落焦那扇 ✓
+        let ring = pool.sorted { $0.wid < $1.wid }
+        let focusedWID = WindowFocuser.focusedWindow(ofPID: pid)?.wid
+        let start = ring.firstIndex { $0.wid == focusedWID }
+        guard let next = WindowRing.nextIndex(current: start, count: ring.count, forward: forward) else {
+            if isTraceEnabled { glog("[接管⌘`] \(name) 环里只有 1 扇窗 ⇒ 不动作") }
+            return false
+        }
+        let target = ring[next]
         if isTraceEnabled {
-            glog("[接管⌘`] \(name) 在焦点屏(\(screen.localizedName)) "
-                 + "\(pool.count) 扇窗 → 跳第 \(forward ? 2 : pool.count) 扇 wid=\(target.wid)")
+            glog("[接管⌘`] \(name) 在焦点屏(\(screen.localizedName)) \(ring.count) 扇窗"
+                 + "(稳定序) 从第 \((start ?? -1) + 1) 扇 → 第 \(next + 1) 扇 wid=\(target.wid)")
         }
         WindowFocuser.focus(window: target)
         return true
