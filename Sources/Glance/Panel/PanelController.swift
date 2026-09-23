@@ -293,6 +293,8 @@ final class PanelController: ObservableObject {
     private var minimizedWIDs: [CGWindowID: pid_t] = [:]
     /// 环上要打"已收纳"记号的 App(由上面那张表推出来 ✓ —— 单一源 ✓)
     var minimizedPIDs: Set<pid_t> { Set(minimizedWIDs.values) }
+    /// 让 `minimizedWIDs` 的变化**一定会**触发重绘(它是普通字典,不会自己 publish ✗)
+    @Published private var marksRevision = 0
     /// 环上这枚图标该打什么记号(隐藏优先 —— 一个位置只放一枚 ✓)
     func mark(for pid: pid_t) -> PanelMark? {
         if hidingPIDs.contains(pid) { return .hidden }       // "只要还是 hide" 就一直有 ✓
@@ -302,7 +304,7 @@ final class PanelController: ObservableObject {
 
     /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
     /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
-    private(set) var hidingPIDs: Set<pid_t> = []
+    @Published private(set) var hidingPIDs: Set<pid_t> = []
 
     // MARK: - 触发层入口
 
@@ -2441,6 +2443,8 @@ final class PanelController: ObservableObject {
             WindowFocuser.minimize(window: w)
             purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
             minimizedWIDs[w.wid] = g.pid // 是我们缩的 ⇒ ①松开时不许再唤醒它 ②环上常驻"已收纳"记号 ✓
+            glog("[记号] 记下已收纳:窗 \(w.wid) @ \(g.appName)")
+        marksRevision &+= 1
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
@@ -2577,10 +2581,20 @@ final class PanelController: ObservableObject {
     ///   · 它的 App 已经不在了 ⇒ 剪掉 ✓(wid 会被系统复用,必须靠 pid 判断,不能只认 wid ✓)
     /// 隐藏标记同理:现读 `isHidden` ⇒ 只有"还藏着"的才留 ✓
     private func reconcileMinimizedMarks(_ raw: [AppGroup]) {
+        let before = minimizedWIDs.count
         var onScreen = Set<CGWindowID>()
         for g in raw { for w in g.windows { onScreen.insert(w.wid) } }
         minimizedWIDs = minimizedWIDs.filter { wid, pid in
-            guard !onScreen.contains(wid) else { return false }               // 回来了 ⇒ 摘记号 ✓
+            // ⚠️ **不许拿 purgedWIDs 里的窗当"回来了"** ✗
+            //    病例(2026-09-22 用户实报:「没有常驻, 只出现了一下就消失了」):
+            //    缩下去之后 0.18s 那次重枚举**还会把它报回来**(本仓早就记过这个"诈尸" ✓
+            //    见 purgedWIDs 的注释 ✓),我这里却当场把记号剪掉了 ✗ ⇒ 记号一闪就没 ✓
+            //    ⇒ 按 purgedWIDs 的老规矩:复核期(0.9s)内**不算数** ✓
+            guard !purgedWIDs.contains(wid) else { return true }              // 复核期内:不动它 ✓
+            guard !onScreen.contains(wid) else {                              // 真的回来了 ⇒ 摘记号 ✓
+                glog("[记号] 摘掉已收纳:窗 \(wid) 回到屏上了")
+                return false
+            }
             return NSRunningApplication(processIdentifier: pid)?.isTerminated == false
         }
         var hiding = Set<pid_t>()
@@ -2588,6 +2602,7 @@ final class PanelController: ObservableObject {
             hiding.insert(g.pid)
         }
         if hiding != hidingPIDs { hidingPIDs = hiding }
+        if minimizedWIDs.count != before { marksRevision &+= 1 }   // 表变了 ⇒ 保证重绘一次 ✓
     }
 
     private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {

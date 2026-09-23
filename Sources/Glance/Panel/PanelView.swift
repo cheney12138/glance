@@ -356,17 +356,52 @@ struct PanelView: View {
 
 // MARK: - 图标格(选中 = 上浮 14 + 放大 1.14 + 提亮;未选 = 压暗去饱和)
 
+/// **"已收纳"记号:一扇小窗**(手画 ✓)
+///
+/// 用户 2026-09-22:「我觉得这个没有小窗的语义, 只能看出来是被压缩的」✗
+/// ⇒ 不再借符号,直接**画出那扇窗**:实心窗身 + 极细标题栏 + 两颗小点(标题栏的签名 ✓)✓
+///
+/// 几何数据是**离屏渲染挑出来的**(`docs/assets/mark-tucked-window.png` ✓ 真图标 + 真角标 15pt):
+///   · 窗身 11.5 × 8.0、圆角 1.7 —— 再小就认不出是窗,再大就在 15pt 圆里顶边 ✗
+///   · 标题栏**必须细**(1.15 = 高度 14%):第一版做成粗白杠 ⇒ 读成"一条横杠 / 减号" ✗
+///   · 两颗小点直径 1.1 —— 1× 下几乎看不见,但它让 4× 的眼睛确认"这是窗" ✓(不添乱 ✓)
+/// 颜色用 `thumbTitle`(深/浅自动反色 ✓)⇒ 浅色模式下是"深窗 + 浅栏",深色模式下反过来 ✓ 都读得清 ✓
+struct TuckedWindowMark: View {
+    var body: some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: 1.7, style: .continuous)
+                .fill(PanelColors.thumbTitle)
+            // 细标题栏(用芯片自己的底色 ⇒ 与窗身必然反差 ✓)
+            RoundedRectangle(cornerRadius: 0.55, style: .continuous)
+                .fill(PanelColors.chipBg)
+                .frame(height: 1.15)
+                .padding(.horizontal, 0.9)
+                .padding(.top, 0.85)
+                .overlay(alignment: .leading) {
+                    HStack(spacing: 0.7) {
+                        Circle().fill(PanelColors.thumbTitle.opacity(0.55)).frame(width: 1.1, height: 1.1)
+                        Circle().fill(PanelColors.thumbTitle.opacity(0.55)).frame(width: 1.1, height: 1.1)
+                    }
+                    .padding(.leading, 1.9)
+                    .padding(.top, 0.85)
+                }
+        }
+        .frame(width: 11.5, height: 8)
+    }
+}
+
 /// 环上图标的**状态记号**(用户 2026-09-22 要求:常驻 + 贴切)
 enum PanelMark {
     case tucked    // 有窗被我们收起在 Dock 里(⌘M)
     case hidden    // App 被隐藏了(⌘H),只要还藏着就一直有 ✓
 
-    var symbol: String {
+    /// ⚠️ 只有"已隐藏"用系统符号;**"已收纳"是手画的**(见 `TuckedWindowMark`)——
+    /// 因为符号库里**没有一个**既是"窗"、又能在 15pt 角标里读清的 ✗
+    /// (名字最贴切的 `dock.rectangle` 实测糊成一团 ✗;`rectangle.compress.vertical` 用户评
+    ///  「没有小窗的语义, 只能看出来是被压缩的」✗)⇒ 与其借一个近似的符号,不如画准它 ✓
+    var symbol: String? {
         switch self {
-        case .tucked: return "rectangle.compress.vertical"   // 一扇被压扁的窗 ✓
-        // ⚠️ 选它的**不是隐喻、是尺寸**:名字最贴切的 `dock.rectangle`(窗 + Dock 那条线)在真实的
-        //    9pt 角标里**糊成一团** ✗(对照图 docs/assets/mark-candidates.png 是我离屏渲染实测的 ✓)
-        //    ⇒ 角标只有 15pt,符号必须"一个块面就看懂" ✓ 要换别的记号改这一行即可 ✓
+        case .tucked: return nil          // 走 TuckedWindowMark ✓
         case .hidden: return "eye.slash"
         }
     }
@@ -426,9 +461,15 @@ private struct IconCell: View {
     /// 底衬沿用芯片那套材料(chipBg + hairline + 极淡投影 ✓)—— 深浅底都读得清,且不是贴纸 ✓
     @ViewBuilder private var markBadge: some View {
         if let mark {
-            Image(systemName: mark.symbol)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(PanelColors.thumbTitle)
+            Group {
+                if let s = mark.symbol {
+                    Image(systemName: s)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(PanelColors.thumbTitle)
+                } else {
+                    TuckedWindowMark()
+                }
+            }
                 .frame(width: 15, height: 15)
                 .background(Circle().fill(PanelColors.chipBg))
                 .overlay(Circle().strokeBorder(PanelColors.chipBorder,
