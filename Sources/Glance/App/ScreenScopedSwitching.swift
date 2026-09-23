@@ -217,6 +217,44 @@ enum DoubleOptionJump {
     }
 }
 
+// MARK: - 显示器顺序(全 App 唯一一处口径)
+
+/// **显示器的顺序** —— 所有"下一块屏/上一块屏"都用它 ✓
+///
+/// 为什么不用 `NSScreen.screens`:它的顺序**没有文档保证** ✗,而 CoreGraphics 的活动显示器列表
+/// 是稳定的,而且"双击 ⌥ 跳指针"(`DoubleOptionJump`)一直在用它 ✓ —— **两条功能必须同一套顺序**,
+/// 否则"下一块屏"会各走各的 ✗(2026-09-22 统一,顺手把"送窗"从 NSScreen.screens 换过来 ✓)
+///
+/// 屏数 >2 时的口径(用户 2026-09-22):「这个 app 就不是给超多屏场景设计的 ⇒ 给窗口排个序,
+/// 123 循环移动就行了」✓ —— 就是这里的顺序 + `ScreenMovePolicy.nextScreenIndex` 的 `(i+1) % n` ✓
+enum DisplayOrder {
+
+    /// 按 CoreGraphics 的顺序返回屏(映射不全时**退回系统顺序** —— 宁可顺序不保证,也不能丢屏 ✗)
+    @MainActor
+    static func screens() -> [NSScreen] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return NSScreen.screens }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return NSScreen.screens }
+        let all = NSScreen.screens
+        let ordered = ids.compactMap { id in all.first { displayID(of: $0) == id } }
+        return ordered.count == all.count ? ordered : all
+    }
+
+    /// 这块屏在这份顺序里的下标(先按对象身份,再按 displayID ✓)
+    @MainActor
+    static func index(of screen: NSScreen, in list: [NSScreen]) -> Int? {
+        if let i = list.firstIndex(where: { $0 === screen }) { return i }
+        let id = displayID(of: screen)
+        return list.firstIndex { displayID(of: $0) == id }
+    }
+
+    @MainActor
+    static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+}
+
 // MARK: - ⇧+双击 ⌥:把落焦窗送到下一块屏(脱面板的全局动作)
 
 /// 用户口径(2026-09-22):「cmd t 是很多 app 的新建快捷键, 我期望做成**脱离面板**的 ——
@@ -233,7 +271,7 @@ enum MoveFocusedWindowToNextScreen {
     /// `@MainActor`:它要动 AX 与窗口 —— 与 `DoubleOptionJump` 同款隔离 ✓
     @MainActor
     static func run() {
-        let screens = NSScreen.screens
+        let screens = DisplayOrder.screens()      // ★ 与"双击 ⌥ 跳指针"同一套顺序 ✓
         guard screens.count > 1 else {
             glog("[T33] 只有一块屏 ⇒ 没有可搬的目的地")
             return
@@ -267,7 +305,9 @@ enum MoveFocusedWindowToNextScreen {
                                                  source: WindowEnumerator.quartzVisibleFrame(of: src),
                                                  target: WindowEnumerator.quartzVisibleFrame(of: dst))
         let fill = ScreenMovePolicy.defaultPlacement == .fillScreen
-        glog("[T33] 送屏 \(src.localizedName) → \(dst.localizedName):\(name) — \(win.title)"
+        // 屏数 >2 时,这行日志就是"循环对不对"的唯一凭据 ⇒ 必须写明"第 i/N 块屏" ✓
+        glog("[T33] 送屏 第 \(srcIdx + 1)/\(screens.count) 块 → 第 \(dstIdx + 1)/\(screens.count) 块"
+             + "(\(src.localizedName) → \(dst.localizedName)):\(name) — \(win.title)"
              + " \(ScreenMovePolicy.defaultPlacement.displayName)")
         _ = WindowFocuser.move(window: win, to: target, resize: fill)
     }

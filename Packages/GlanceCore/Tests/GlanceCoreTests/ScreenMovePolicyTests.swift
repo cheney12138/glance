@@ -74,6 +74,24 @@ final class ScreenMovePolicyTests: XCTestCase {
         XCTAssertEqual(out.size, w.size, "显式要 keepSize 时,尺寸仍然原样 ✓")
     }
 
+    /// 用户口径(2026-09-22):「如果是 >2 display 的场景…给窗口排个序, 123 循环移动就行了」
+    /// —— 他**测不了**三块屏 ⇒ 至少让纯核把这条循环证明掉 ✓
+    func testThreeScreenCycleVisitsEveryDisplayThenWraps() {
+        var seen: [Int] = []
+        var i = 0
+        for _ in 0..<3 {
+            seen.append(i)
+            i = ScreenMovePolicy.nextScreenIndex(current: i, count: 3)!
+        }
+        XCTAssertEqual(seen, [0, 1, 2], "1→2→3 走满一遍 ✓")
+        XCTAssertEqual(i, 0, "第四下回到第一块 ✓(123 循环 ✓)")
+    }
+
+    func testFourAndMoreScreensStillWrap() {
+        XCTAssertEqual(ScreenMovePolicy.nextScreenIndex(current: 3, count: 4), 0, "4 块屏也要回卷 ✓")
+        XCTAssertEqual(ScreenMovePolicy.nextScreenIndex(current: 4, count: 5), 0)
+    }
+
     func testNextScreenIndexCyclesAndRejectsSingleScreen() {
         XCTAssertEqual(ScreenMovePolicy.nextScreenIndex(current: 0, count: 2), 1)
         XCTAssertEqual(ScreenMovePolicy.nextScreenIndex(current: 1, count: 2), 0, "两块屏要能来回 ✓")

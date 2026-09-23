@@ -816,7 +816,7 @@ struct ShortcutPane: View {
                 }
                 // ★ 2026-09-22 用户裁定:这条做成**快捷键**(不是手势),并放在设置面板里 ✓
                 //   默认 **⌘⇧M**("M = move")—— 出厂默认值住在 `TriggerConfig.moveWindowDefault` 一处 ✓
-                SettingsRow(title: "把窗口送到另一块屏",
+                SettingsRow(title: "移动窗口到另一块屏幕",
                             desc: "不用打开面板：直接把当前 App 正在用的那扇窗送到另一块屏。"
                                 + "点击右侧可重新录制。") {
                     Button {
