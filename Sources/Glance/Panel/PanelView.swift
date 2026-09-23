@@ -361,7 +361,12 @@ enum PanelMark {
     case tucked    // 有窗被我们收起在 Dock 里(⌘M)
     case hidden    // App 被隐藏了(⌘H),只要还藏着就一直有 ✓
 
-    /// 用户 2026-09-22 亲自定版:`rectangle.inset.bottomleft.filled` —— **一扇窗框里嵌着一扇小窗** ✓
+    /// ⚠️ 语义与表现要分开看(2026-09-22 定版):
+    ///   · `.tucked`(有窗收在 Dock 里)⇒ **整枚图标变灰 + 退半步** ✓ —— **不画角标** ✓
+    ///   · `.hidden`(⌘H)⇒ `eye.slash` 角标 ✓
+    /// (角标只在 `.hidden` 用得上,`symbol` 因此只为它而设 ✓)
+    ///
+    /// 旧案留档:`.tucked` 曾用 `rectangle.inset.bottomleft.filled` —— **一扇窗框里嵌着一扇小窗** ✓
     /// 「用这个画中画的 icon 吧, 在这个语义下我觉得也合适」✓
     /// (在此之前走过三条错路,留档:`arrow.down.to.line` = 下载图标 ✗;
     ///  `rectangle.compress.vertical` = 只有"被压缩",没有"小窗" ✗;
@@ -377,7 +382,9 @@ enum PanelMark {
 
 private struct IconCell: View {
     let group: AppGroup
-    /// 图标右下角的状态记号(nil = 无记号)
+    /// 图标右下角的状态记号(nil = 无记号)。
+    /// ⚠️ `.tucked` **不画这个角标**(用户 2026-09-22 定版,见下面 `tuckedStyle`)——
+    /// 它的表现是"整枚图标变灰",`mark` 只是携带那条信息 ✓
     let mark: PanelMark?
     let selected: Bool
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
@@ -396,8 +403,22 @@ private struct IconCell: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
+            // ★ **"已收纳"= 整枚图标变灰**(2026-09-22 用户提案,我附议 ⇒ 定版)
+            //   用户原话:「这个角标不够明显, 要不大胆一点, 不用角标表示了. 直接给 app 颜色改成
+            //   遗照灰 哈哈哈」✓
+            //   为什么同意:角标 15pt 这一路已经试过四种画法(箭头/压缩/手画窗/画中画),
+            //   用户两次评"不够明白/有点丑/复杂了" ⇒ **"够明显"这条上,角标这条路已被证伪** ✓
+            //   为什么不算乱来:macOS 自己对**隐藏的 App** 就是这个画法(Dock 里那枚淡淡的)⇒
+            //   "变灰 = 不在台上"是系统已有的语言,不是我们新造的符号 ✓
+            //   ⚠️ 与"选中"不冲突:选中是**形**(放大 + 上浮 + 托底 ✓),灰掉的是**光** ✓
+            //      —— 仓库里早就定过这条口径(见 IconCell 顶部关于"光效总闸"的注释 ✓)
+            //   ⚠️ 与"已隐藏"分得开:隐藏仍走 `eye.slash` 角标 ✓ 两套语言,一眼分辨 ✓
+            .saturation(mark == .tucked ? 0 : (glow ? (selected ? 1.15 : 0.92) : 1))
             .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
+            // 退多少是**可试的**:0.55 与 0.45 只差一点点(见 docs/assets/tucked-gray.png ✓)
+            // ⇒ 取中间 0.5 ✓;**深色面板下这一档偏弱**(图标本身就暗 ✓ 那张图里能看到 ✓)
+            //    —— 想更狠就改这一个数(或再加一道 lighten),一行的事 ✓
+            .opacity(mark == .tucked ? 0.5 : 1)
             // 倍率 = 选中放大 × 图标透明边距补偿。**补偿是必须的**:macOS 图标的画面只占画布
             // 87.5%(Finder/Safari/Xcode/Terminal 实测 .875,Chrome .867,Obsidian .83),
             // 直接铺进 78pt 格子,画面就只有 68pt —— 比 demo 里铺满格子的色块小一圈,
@@ -411,6 +432,7 @@ private struct IconCell: View {
             // ★ "已收纳"角标(2026-09-22 用户第 2 条诉求:标记被缩小收纳的 app ✓)
             //   位置选右下角:那里平时空着(收纳之后窗数是 0 ⇒ 窗数记号也空着 ✓),不挤任何既有元素 ✓
             //   ⚠️ 形状/颜色是一行的事:想换别的记号(比如小箭头、或整个图标压暗)改这里就够 ✓
+            // 角标只为"已隐藏"服务;"已收纳"走整枚变灰(见上面的 saturation/opacity ✓)
             .overlay(alignment: .bottomTrailing) { markBadge }
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
             .contentShape(Rectangle())
@@ -428,7 +450,7 @@ private struct IconCell: View {
     ///   · **已隐藏**(⌘H)= `eye.slash` —— 「看不见了」✓(与"收纳"必须能一眼分清 ✓)
     /// 底衬沿用芯片那套材料(chipBg + hairline + 极淡投影 ✓)—— 深浅底都读得清,且不是贴纸 ✓
     @ViewBuilder private var markBadge: some View {
-        if let mark {
+        if let mark, mark == .hidden {   // ★ 只有"已隐藏"画角标("已收纳"= 整枚变灰 ✓)
             Image(systemName: mark.symbol)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(PanelColors.thumbTitle)
