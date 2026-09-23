@@ -20,19 +20,28 @@ import GlanceCore
 ///      不写动机、不写设计史、不写开发者感受(2026-09-15 用户实评:「毕竟是一个产品,功能描述要严谨严肃一点」)。
 struct SettingsView: View {
     /// 「三指点按唤起面板」的小字。
-    /// ⚠️ 系统开了「三指拖移」时必须**如实说**:拖拽的起手拍与轻点在触控板上是同一个动作 ✗
-    /// (实测这台机器 `TrackpadThreeFingerDrag = 1` ✓,内置域与蓝牙域各一份 ⇒ 两个都看 ✓)
-    /// 我们能做的兜底:真起拖了就把这次唤起收掉(见 `ThreeFingerTap.cancelIfDragStarted` ✓)
+    /// ⚠️ 常态小字**只留一句话**;那层"与系统三指拖移共用同一个动作"的解释放在 `threeFingerTapHelp`
+    /// (hover ✓)—— 判卷修好之后它已不是"需要贴在脸上"的警告 ✓(用户裁定 ✓)
+    /// 悬停才展开的解释(常态小字只留一句结论 ✓)
+    static var threeFingerTapHelp: String {
+        """
+        与系统的「三指拖移」共用同一个手指动作:拖窗/选字的起手那一下，\
+        在触控板上和一次轻点无法区分。
+
+        已经做的甄别:只在**全部手指离开**的那一帧才算数(手指还压在板上时不动作)；
+        若这一下其实是拖拽(系统开始拖动)，这次唤起会被自动收起。
+
+        仍然会看到面板闪一下。若连这一下也不想要:\
+        系统设置 → 辅助功能 → 指针控制 → 关闭「使用触控板拖移」，或关掉这个开关。
+        """
+    }
+
     static var threeFingerTapDesc: String {
-        let base = "三指轻点触控板唤起切换面板,该局不随松手散场。"
-        func dragOn(_ domain: String) -> Bool {
-            UserDefaults(suiteName: domain)?.object(forKey: "TrackpadThreeFingerDrag") as? Bool ?? false
-        }
-        let dragging = dragOn("com.apple.AppleMultitouchTrackpad")
-            || dragOn("com.apple.driver.AppleBluetoothMultitouch.trackpad")
-        guard dragging else { return base }
-        return base + "⚠️ 系统开了「三指拖移」:拖窗/选字时起手会顺带唤醒一次"
-            + "(检测到真在拖拽会自动收起)。不想被它打扰,可在 系统设置 → 辅助功能 → 指针控制 里关掉三指拖移。"
+        // ★ 2026-09-22 两轮修改后的定版:
+        //   用户先嫌长(「描述敢再长一点吧」✓)→ 我加了一句警告并把它按"短句 + hover"拆开 ✓
+        //   随后判卷修好(拖拽/滑动不再误触 ✓)⇒ 用户:「现在改好了, 就没有这个冲突问题了吧」✓
+        //   ⇒ **常态只留一句话** ✓;那层"会和系统手势抢动作"的解释只放在 `.help` hover 里 ✓
+        "三指轻点触控板唤起切换面板,该局不随松手散场。"
     }
 
     @ObservedObject var store: SettingsStore
@@ -182,6 +191,31 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                     .allowsHitTesting(false)
             }
+            // ★ 切页:侧栏选中该页**第一组**,并**下一拍再把滚动位置真的送回去**。
+            //
+            // 病例(2026-09-22 用户实报 + 截图):「从通用切到快捷键之后, 直接定位到了**导航**上,
+            //   不应该选中第一个菜单吗」。真因:
+            //   ① 侧栏点页那一拍是"切页 + `selection = 第一组`"同时发生 ⇒ `onChange(navSelection)`
+            //      里的 `proxy.scrollTo` 也发生在**同一拍** ✗ —— 而那时**新页还没进布局**
+            //      ⇒ scrollTo **落空** ✓(SwiftUI 的经典坑:目标 id 此刻还不在视图树里)
+            //   ② 于是 `ScrollView` 保留着**上一页的滚动偏移** ⇒ 顶部正好停在中段(截图里就是"导航")
+            //   ③ 0.4s 静默期过后,"滚动 → 导航跟着走"的回写把它**确认**成当前项 ✓(看着就像它自己跳过去的)
+            // ⇒ 口径:切页必须①选中第一组 ②**等新页布局好**再滚(下一拍 + 50ms 各试一次),③静默期照旧 ✓
+            .onChange(of: page) { _, newPage in
+                let first = newPage.anchor(newPage.groups[0])
+                navSelection = first
+                func pushScroll() {
+                    suppressNavSpyUntil = CFAbsoluteTimeGetCurrent() + 0.4
+                    withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
+                        proxy.scrollTo(first, anchor: .top)
+                    }
+                }
+                DispatchQueue.main.async(execute: pushScroll)                       // 新页提交之后
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {            // 再补一次(布局晚到的兜底)
+                    guard page == newPage else { return }
+                    pushScroll()
+                }
+            }
             // 侧栏子菜单点了 ⇒ 滚到对应组(锚点 id 由 SettingsGroup 挂)
             .onChange(of: navSelection) { _, sel in
                 guard let sel else { return }
@@ -291,6 +325,9 @@ struct SettingsView: View {
                             desc: Self.threeFingerTapDesc) {
                     BeamSwitch(isOn: $threeFingerTapPanel)
                 }
+                // ★ 长解释搬进 hover(用户:「如果太长了就做成问号hover的表达吧」✓)
+                //   `.help` = macOS 原生的 tooltip ⇒ 鼠标停上去才展开 ✓ 小字保持一句话 ✓
+                .help(Self.threeFingerTapHelp)
                 SettingsRow(title: "四指点按进未启动环",
                             desc: "四指轻点触控板,唤起并直接进入未启动环。",
                             hairline: false) {
@@ -703,6 +740,10 @@ struct ShortcutPane: View {
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
+    /// **跨屏送窗**的快捷键(脱面板 ✓ ADR-0016):默认 ⌘⇧M,可在这里重录 ✓
+    @State private var moveConfig = TriggerConfig.loadMoveWindow()
+    @State private var recordingMove = false
+    @State private var moveMonitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
     @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = KeyDefaults.advanceOnOpen
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
@@ -773,8 +814,23 @@ struct ShortcutPane: View {
                             desc: "关闭后选中标记不再滑动,仅上浮。") {
                     BeamSwitch(isOn: $slideFromLastApp)
                 }
+                // ★ 2026-09-22 用户裁定:这条做成**快捷键**(不是手势),并放在设置面板里 ✓
+                //   默认 **⌘⇧M**("M = move")—— 出厂默认值住在 `TriggerConfig.moveWindowDefault` 一处 ✓
+                SettingsRow(title: "移动窗口到另一块屏幕",
+                            desc: "不用打开面板：直接把当前 App 正在用的那扇窗送到另一块屏。"
+                                + "点击右侧可重新录制。") {
+                    Button {
+                        recordingMove ? stopRecordingMove() : startRecordingMove()
+                    } label: {
+                        KeyChip(text: recordingMove ? "按下新组合…" : chip(moveConfig),
+                                editable: true, highlighted: recordingMove)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                    .help(recordingMove ? "按 Esc 取消录制" : "点一下开始录制新的快捷键")
+                }
                 SettingsRow(title: "触发键",
-                            desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃。",
+                            desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃、⌘⇧。",
                             hairline: false) {
                     Button {
                         recording ? stopRecording() : startRecording()
@@ -809,7 +865,7 @@ struct ShortcutPane: View {
                 }
             }
         }
-        .onDisappear { stopRecording() }
+        .onDisappear { stopRecording(); stopRecordingMove() }
     }
 
     /// 触发键胶囊文案:demo 的键位块是"修饰键 + 空格 + 键名",`TriggerConfig.display` 是紧贴写法
@@ -864,7 +920,31 @@ struct ShortcutPane: View {
         recording = false
     }
 
+    /// 录制**送窗快捷键**(与触发键同一套交互 ✓,只是写到 `moveWindow.*` 两个键上)
+    private func startRecordingMove() {
+        recordingMove = true
+        moveMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 0x35 { stopRecordingMove(); return nil }   // Esc 取消
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard let mod = allowedModifier(in: flags) else { return event }  // 没有合法修饰键 ⇒ 继续等
+            UserDefaults.standard.set(Int(event.keyCode), forKey: Keys.moveWindowKeyCode)
+            UserDefaults.standard.set(mod, forKey: Keys.moveWindowModifier)
+            moveConfig = TriggerConfig.loadMoveWindow()
+            print("[T33] 送窗快捷键改为: \(moveConfig.display)")
+            stopRecordingMove()
+            return nil
+        }
+    }
+
+    private func stopRecordingMove() {
+        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
+        moveMonitor = nil
+        recordingMove = false
+    }
+
     private func allowedModifier(in flags: NSEvent.ModifierFlags) -> String? {
+        // ★ 组合修饰键:⌘⇧(送窗的默认档 ✓)—— 必须在单键判断**之前**(否则会被当成 "command" ✗)
+        if flags.contains(.command), flags.contains(.shift) { return "commandShift" }
         if flags.contains(.option) { return "option" }
         if flags.contains(.command) { return "command" }
         if flags.contains(.control) { return "control" }

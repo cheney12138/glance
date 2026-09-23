@@ -14,6 +14,8 @@
 		5A0000000000000000000013 /* PermissionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000024 /* PermissionGuideView.swift */; };
 		5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000025 /* CursorScreenAnchor.swift */; };
 		5A0000000000000000000015 /* HotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000026 /* HotkeyTap.swift */; };
+		AA0000000000000000000F21 /* ThreeFingerTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F31 /* ThreeFingerTap.swift */; };
+		AA0000000000000000000F22 /* DoubleOptionTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F32 /* DoubleOptionTap.swift */; };
 		5A0000000000000000000016 /* WindowEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000027 /* WindowEnumerator.swift */; };
 		5A0000000000000000000017 /* MruEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000028 /* MruEvidence.swift */; };
 		5A00000000000000000000E0 /* DockApps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000E1 /* DockApps.swift */; };
@@ -59,6 +61,8 @@
 		5A0000000000000000000024 /* PermissionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGuideView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000025 /* CursorScreenAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorScreenAnchor.swift; sourceTree = "<group>"; };
 		5A0000000000000000000026 /* HotkeyTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyTap.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F31 /* ThreeFingerTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreeFingerTap.swift; sourceTree = "<group>"; };
+		AA0000000000000000000F32 /* DoubleOptionTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleOptionTap.swift; sourceTree = "<group>"; };
 		5A0000000000000000000027 /* WindowEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowEnumerator.swift; sourceTree = "<group>"; };
 		5A0000000000000000000028 /* MruEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MruEvidence.swift; sourceTree = "<group>"; };
 		5A00000000000000000000E1 /* DockApps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockApps.swift; sourceTree = "<group>"; };
@@ -152,6 +156,8 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000026 /* HotkeyTap.swift */,
+				AA0000000000000000000F31 /* ThreeFingerTap.swift */,
+				AA0000000000000000000F32 /* DoubleOptionTap.swift */,
 				5A0000000000000000000094 /* NativeHotkeyGuards.swift */,
 				AA0000000000000000000F11 /* CaptureSessionProbe.swift */,
 			);
@@ -330,6 +336,8 @@
 				5A0000000000000000000013 /* PermissionGuideView.swift in Sources */,
 				5A0000000000000000000014 /* CursorScreenAnchor.swift in Sources */,
 				5A0000000000000000000015 /* HotkeyTap.swift in Sources */,
+				AA0000000000000000000F21 /* ThreeFingerTap.swift in Sources */,
+				AA0000000000000000000F22 /* DoubleOptionTap.swift in Sources */,
 				5A0000000000000000000016 /* WindowEnumerator.swift in Sources */,
 				AA0000000000000000000F07 /* AXWindowList.swift in Sources */,
 				AA0000000000000000000F05 /* ThumbnailRefresher.swift in Sources */,

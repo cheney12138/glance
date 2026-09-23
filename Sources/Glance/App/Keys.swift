@@ -23,6 +23,12 @@ enum Keys {
     static let debugAutoOpenSettings = "debug.autoOpenSettings"
     /// `debug.axprobePid`
     static let debugAxprobePid = "debug.axprobePid"
+    /// `debug.entranceMotion` —— **入场弹簧可试档位**(`fast`/`smooth`/`slow`/`snappy`)。
+    /// 2026-09-22 用户问「app 上浮的帧率不够流畅, 有没有参数可调」时加。
+    /// 为什么先做成调试键:这是"手感档位"(本仓规矩:手感参数要**能试** ✓),
+    /// 定下来之后再决定要不要进设置面板(那时是一个**产品决定** ✓)。
+    /// ★ 它在**用动画的那一刻**读 ⇒ 改完**不用重启**,下一次唤起就生效 ✓
+    static let debugEntranceMotion = "debug.entranceMotion"
     /// `debug.dumpSources`
     static let debugDumpSources = "debug.dumpSources"
     /// `debug.hideTray`
@@ -111,6 +117,10 @@ enum Keys {
     static let triggerKeyCode = "trigger.keyCode"
     /// `trigger.modifier`
     static let triggerModifier = "trigger.modifier"
+    /// **跨屏送窗**的快捷键(默认 ⌘⇧M ⇒ 默认值住在 `GlanceCore.TriggerConfig.moveWindowDefault` ✓
+    /// —— 与触发键同一套约定:Keys 只管键名,不抄默认值 ✗)
+    static let moveWindowKeyCode = "moveWindow.keyCode"
+    static let moveWindowModifier = "moveWindow.modifier"
 
 }
 

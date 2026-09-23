@@ -217,6 +217,118 @@ enum DoubleOptionJump {
     }
 }
 
+// MARK: - 显示器顺序(全 App 唯一一处口径)
+
+/// **显示器的顺序** —— 所有"下一块屏/上一块屏"都用它 ✓
+///
+/// 为什么不用 `NSScreen.screens`:它的顺序**没有文档保证** ✗,而 CoreGraphics 的活动显示器列表
+/// 是稳定的,而且"双击 ⌥ 跳指针"(`DoubleOptionJump`)一直在用它 ✓ —— **两条功能必须同一套顺序**,
+/// 否则"下一块屏"会各走各的 ✗(2026-09-22 统一,顺手把"送窗"从 NSScreen.screens 换过来 ✓)
+///
+/// 屏数 >2 时的口径(用户 2026-09-22):「这个 app 就不是给超多屏场景设计的 ⇒ 给窗口排个序,
+/// 123 循环移动就行了」✓ —— 就是这里的顺序 + `ScreenMovePolicy.nextScreenIndex` 的 `(i+1) % n` ✓
+enum DisplayOrder {
+
+    /// 按 CoreGraphics 的顺序返回屏(映射不全时**退回系统顺序** —— 宁可顺序不保证,也不能丢屏 ✗)
+    @MainActor
+    static func screens() -> [NSScreen] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return NSScreen.screens }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return NSScreen.screens }
+        let all = NSScreen.screens
+        let ordered = ids.compactMap { id in all.first { displayID(of: $0) == id } }
+        return ordered.count == all.count ? ordered : all
+    }
+
+    /// 这块屏在这份顺序里的下标(先按对象身份,再按 displayID ✓)
+    @MainActor
+    static func index(of screen: NSScreen, in list: [NSScreen]) -> Int? {
+        if let i = list.firstIndex(where: { $0 === screen }) { return i }
+        let id = displayID(of: screen)
+        return list.firstIndex { displayID(of: $0) == id }
+    }
+
+    @MainActor
+    static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+}
+
+// MARK: - ⇧+双击 ⌥:把落焦窗送到下一块屏(脱面板的全局动作)
+
+/// 用户口径(2026-09-22):「cmd t 是很多 app 的新建快捷键, 我期望做成**脱离面板**的 ——
+/// 跟 double option 一样。在**当前落焦的 app** 上使用快捷键之后, 直接移动到另一块屏幕」。
+///
+/// 为什么住在 App 层:要同时看 Inventory(窗/屏归属)与 Focus(AX 搬窗)——
+/// 放 Trigger 里就是**双向越界** ✗(架构脚本会报 ✓;与 `DoubleOptionJump` 同一条理由 ✓)
+///
+/// 口径:
+///   · 对象 = **当前落焦 App 的落焦窗**(AXFocusedWindow ✓)—— 与面板里选中哪一格**无关** ✓
+///   · 目的地 = 它**现在所在屏**的下一块(多屏循环 ✓;单屏 ⇒ 什么都不做,只记一行 ✓)
+///   · 落点/尺寸 = `GlanceCore.ScreenMovePolicy`(尺寸不变 ✓ 相对位置 ✓)✓
+enum MoveFocusedWindowToNextScreen {
+    /// `@MainActor`:它要动 AX 与窗口 —— 与 `DoubleOptionJump` 同款隔离 ✓
+    /// ## 性能(2026-09-22 用户问「这个功能不会有缓存吧, 不要影响性能哈」)
+    ///
+    /// **没有缓存,也没有常驻开销** ✓:
+    ///   · 触发 = `RegisterEventHotKey`(系统注册 ✓)**不是**事件监听 ⇒ 不按快捷键时**开销为零** ✓
+    ///     (没有 tap、没有 monitor、没有定时器 ✓ —— 本文件这段代码里一个都没有 ✓)
+    ///   · 每次按下**现算**:2 次 `CGGetActiveDisplayList` + `NSScreen.screens` + 一次 AX 读落焦窗
+    ///     + 纯函数算落点 + 几次 AX 写(位置/尺寸)✓ 全程没有能过期的中间状态 ✓
+    ///   · 所以也**不需要**缓存:按下是"人手一次"的频率,缓存只会引入"过期值"这类新 bug ✗
+    /// ⚠️ 唯一的真实代价:**AX 是跨进程调用** —— 若前台 App 卡死,这一下会等它
+    ///   (本仓全局 AX 超时 0.5s,见 T29 ✓)⇒ 所以这里把**耗时打出来**,别靠感觉 ✓
+    @MainActor
+    static func run() {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer {
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            glog(String(format: "[T33] 送窗耗时 %.1fms", ms))
+        }
+        let screens = DisplayOrder.screens()      // ★ 与"双击 ⌥ 跳指针"同一套顺序 ✓
+        guard screens.count > 1 else {
+            glog("[T33] 只有一块屏 ⇒ 没有可搬的目的地")
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+            glog("[T33] 前台就是本 App ⇒ 不搬自己")
+            return
+        }
+        let pid = app.processIdentifier
+        let name = app.localizedName ?? "?"
+        guard let win = WindowFocuser.focusedWindow(ofPID: pid), win.bounds.width > 1 else {
+            glog("[T33] 取不到 \(name) 的落焦窗 ⇒ 什么都不做")
+            return
+        }
+        // 它现在归哪块屏(ADR-0008 的归属判据 ✓ —— 与面板同一套,别另立口径 ✗)
+        guard let srcIdx = screens.firstIndex(where: {
+            WindowEnumerator.ownsByContextScreen(win.bounds, contextScreen: $0)
+        }), let dstIdx = ScreenMovePolicy.nextScreenIndex(current: srcIdx, count: screens.count) else {
+            glog("[T33] 认不出这扇窗归哪块屏 ⇒ 什么都不做")
+            return
+        }
+        let src = screens[srcIdx], dst = screens[dstIdx]
+        // ★ 用户口径(2026-09-22):「移动过去之后能**默认撑满整个屏幕**吗, 不是全屏」
+        //   ⇒ 目标 = **目标屏的可见区**（避开菜单栏与 Dock ✓）;`.fillScreen` 是默认档 ✓
+        //   ⚠️ 这不是 macOS 全屏：不进独立 Space、不播全屏动画、也不改窗口的全屏状态 ✓
+        //   想回到"保持原尺寸只挪位置" ⇒ `ScreenMovePolicy.defaultPlacement = .keepSize` 一行 ✓
+        // ⚠️ 用**可见区**(`quartzVisibleFrame`)而不是整块屏:整块屏会把窗口送到菜单栏底下,
+        //    连标题栏都抓不到 ✗(Quartz 坐标里 y 越小越靠上 ✓)
+        let target = ScreenMovePolicy.targetFrame(current: win.bounds,
+                                                 source: WindowEnumerator.quartzVisibleFrame(of: src),
+                                                 target: WindowEnumerator.quartzVisibleFrame(of: dst))
+        let fill = ScreenMovePolicy.defaultPlacement == .fillScreen
+        // 屏数 >2 时,这行日志就是"循环对不对"的唯一凭据 ⇒ 必须写明"第 i/N 块屏" ✓
+        glog("[T33] 送屏 第 \(srcIdx + 1)/\(screens.count) 块 → 第 \(dstIdx + 1)/\(screens.count) 块"
+             + "(\(src.localizedName) → \(dst.localizedName)):\(name) — \(win.title)"
+             + " \(ScreenMovePolicy.defaultPlacement.displayName)")
+        _ = WindowFocuser.move(window: win, to: target, resize: fill)
+    }
+}
+
+
 // MARK: - (已放弃)轻点 ⌘Tab 不弹面板
 
 // 2026-09-22 试过:轻点(短按快松)不弹面板、直接切 App;按住才弹。

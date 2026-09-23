@@ -68,12 +68,17 @@ final class HotkeyTapCenter {
     var onElsewhereInput: (() -> Void)?
     /// T7.5:⌘+左键点击(Quartz 全局坐标)。导航态里挂起(Q9-④)
     var onCmdClick: ((CGPoint) -> Void)?
+    /// **跨屏送窗**的快捷键(默认 ⌘⇧M,可在设置里录 ✓)—— 脱面板的全局动作(ADR-0016 ✓)。
+    /// 与触发键同一套 Carbon 注册(不吞键盘事件流,也不依赖面板 ✓)
+    var onMoveWindowToNextScreen: (() -> Void)?
 
     private var flagsTap: CFMachPort?
     private var mouseTap: CFMachPort?
     private var navTap: CFMachPort?
     private var hotKeyRef: EventHotKeyRef?
     private var reverseHotKeyRef: EventHotKeyRef?
+    /// 跨屏送窗(ADR-0016)的注册句柄
+    private var moveWindowHotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var appliedTrigger: TriggerConfig?
     private var appliedTakeover = false
@@ -81,7 +86,7 @@ final class HotkeyTapCenter {
 
     /// 自家 Carbon 热键的签名与 id(签名用来挡住别人的热键事件串门)
     private static let hotKeySignature = OSType(0x676C6E63) // 'glnc'
-    private enum HotKeyId: UInt32 { case forward = 1, reverse = 2 }
+    private enum HotKeyId: UInt32 { case forward = 1, reverse = 2, moveWindow = 3 }
 
     /// 1…9:直接跳到**当前 App 的第 N 扇窗**(数字 = 跳,与 ` 的"走"并存,CONTEXT.md「走 / 跳」)。
     /// **主键盘与小键盘都收**:用户原话"有时候不想用小数字键盘选窗口"——
@@ -263,10 +268,17 @@ final class HotkeyTapCenter {
         unregisterHotKeys()
         hotKeyRef = registerHotKey(config, extras: [], id: .forward)
         reverseHotKeyRef = registerHotKey(config, extras: [.maskShift], id: .reverse)
+        // ★ 跨屏送窗(ADR-0016):**独立**的和弦(默认 ⌘⇧M ✓),与触发键各注册各的 ✓
+        let moveCfg = TriggerConfig.loadMoveWindow()
+        moveWindowHotKeyRef = registerHotKey(moveCfg, extras: [], id: .moveWindow)
+        glog("[热键] 送窗键注册 = \(moveCfg.display)")
         appliedTrigger = config
         appliedTakeover = TriggerConfig.takeoverEnabled
         let take = NativeHotkeys.plan(for: config, takeover: appliedTakeover).disable.isEmpty ? "否" : "是"
         print("[T13] 触发键注册:\(config.display)(+ ⇧ 反向);接管原生 = \(take)")
+        // ★ 2026-09-22 加:这条原来只 print 到 stdout ⇒ trace.log 里**看不到** ✗
+        //   病例:「单指单击怎么也唤起了」—— 我先要能确认"到底注册的是哪个和弦" ✓
+        glog("[热键] 触发键注册 = \(config.display)(+⇧ 反向) · 接管原生 = \(take)")
     }
 
     private func registerHotKey(_ config: TriggerConfig, extras: CGEventFlags, id: HotKeyId) -> EventHotKeyRef? {
@@ -285,8 +297,10 @@ final class HotkeyTapCenter {
     private func unregisterHotKeys() {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let reverseHotKeyRef { UnregisterEventHotKey(reverseHotKeyRef) }
+        if let moveWindowHotKeyRef { UnregisterEventHotKey(moveWindowHotKeyRef) }
         hotKeyRef = nil
         reverseHotKeyRef = nil
+        moveWindowHotKeyRef = nil
     }
 
     private static func carbonModifiers(_ flags: CGEventFlags) -> UInt32 {
@@ -303,6 +317,16 @@ final class HotkeyTapCenter {
         // 释放不参与语义:确认由"修饰键释放"决定(hold 语义)
         guard pressed, let hotKey = HotKeyId(rawValue: id) else { return }
         trace("hotkey \(hotKey) pressed state=\(state)")
+        // ★ 送窗键(ADR-0016)与面板/会话状态**完全无关** ⇒ 在动状态机之前分派掉 ✓
+        //   (它不该把 state 设成 navigating,也不该因为"正在导航"而被丢掉 ✗)
+        if hotKey == .moveWindow {
+            glog("[热键] \(TriggerConfig.loadMoveWindow().display) → 送窗")
+            onMoveWindowToNextScreen?()
+            return
+        }
+        // ★ 热键开面板会**大声报一行**(手势那条另有日志);两条互斥出现 ⇒ 一眼知道是谁按的 ✓
+        //   (Carbon 回调只给 id,给不出"物理上是哪颗键"—— 但注册的和弦启动时已报 ✓)
+        glog("[热键] \(hotKey == .reverse ? "反向" : "正向") 触发键开面板 — 进之前的状态=\(state)")
         // **只在"开局"这一发用它**。实机病:同一个和弦按住期间,系统不会重复投递 `kEventHotKeyPressed`
         // (按住 ⌘ 连按 Tab,只来第一发)→ 于是"继续按 Tab 移动"在旧版里彻底不动(用户实机反馈)。
         // 循环移动改回 navTap 接(会话期它本来就在收 keyDown),这里会话已在跑就什么都不做,
@@ -423,6 +447,12 @@ final class HotkeyTapCenter {
         //   把 tap 看见的**每一颗会话期按键**都记下来(带状态与修饰键)⇒ 一眼能分清是
         //   ① 键根本没被看见(navTap 没开/会话已结束)还是 ② 看见了但下游没做事。
         let __kc = event.getIntegerValueField(.keyboardEventKeycode)
+        // ★ 2026-09-22:面板没开时若 tap 看见 ⌘Tab ⇒ 记一行。配合上面的 `[热键]` 日志可判定:
+        //   两行都有 = 真的有人按了 ⌘Tab ✓;只有 `[热键]` 那行 = **Carbon 幽灵事件**(要另查)✗
+        if __kc == 48, state != .navigating,
+           event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]) == [.maskCommand] {
+            glog("[热键] tap 看见 ⌘Tab(面板没开)")
+        }
         // ★★ 接管系统 ⌘`(2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」)
         //   口径:**只在面板没开**的时候接管 —— 面板开着时 ⌘` / ` 照旧走"会话内窗口循环" ✓
         //   修饰键**精确匹配** {⌘} 或 {⌘,⇧}:多一个(⌃/⌥)都是别人的快捷键 ⇒ 放行 ✗(见下面那把门禁的病例)
@@ -662,583 +692,3 @@ private func hotKeyEventHandler(
     return noErr
 }
 
-// MARK: - 三指点按唤起面板(钉住,不散场)
-
-/// 三指点按 = 唤起面板,并且**这一局不散场**(没有键可松 ⇒ 一直留着,直到选一个/Esc/点外面)。
-///
-/// 为什么必须借私有框架:触控板的**原始触摸**不在 CGEvent 里 —— 三指点按既不是 `.gesture`,
-/// 也不是鼠标事件;系统把它当"查词/拖移"的手势自己消费掉了。能看到"现在几根手指、按了多久"的
-/// 唯一地方是 `/System/Library/PrivateFrameworks/MultitouchSupport.framework`
-/// (MiddleClick 一类工具同一条路)。
-///
-/// ⚠️ 本机**三指拖移是开着的**(`TrackpadThreeFingerDrag = 1`,2026-09-17 实测),所以判据必须
-/// 和拖移分得开。这里只用两条:**恰好三指** + **按下到抬起 ≤ 0.30s** —— 拖移天然要按住一段时间,
-/// 点按天然是一碰就走。
-/// 刻意**不看触摸坐标**:那个结构体的字段布局是反推来的,一旦猜错,位移永远算成离谱的大值,
-/// 结果是"这个功能永远不触发" ✗。少一个判据,换来一个不会因为布局猜错而死掉的探针。
-/// 代价:三指**快速**甩一下(拖移起手,<0.3s)会误开面板 —— 代价只是面板开了一下,点外面就散。
-///
-/// **失败即关门**:框架/符号/设备任一取不到 ⇒ 记一行日志、功能静默不可用,绝不拖垮 App。
-/// 历史名字:它最早只认三指;T91 起 **3 与 4 指都归它判卷** ——
-/// 按 maxTouches(这一整次按压里出现过的最大手指数)分派:3 = 唤起,4 = 唤起并直接进未启动环。
-/// (改名的收益抵不过这轮的风险 ⇒ 名字保留,但这里写明它的真实职责。)
-final class ThreeFingerTap {
-    static let shared = ThreeFingerTap()
-    private init() {}
-
-    /// 设置项。**默认关**(新开关一律默认对齐 macOS:macOS 没有这个功能)。
-    /// UserDefaults 直读 ⇒ 设置里一改立刻生效,不用重启(与 DoubleOptionTap 同一套约定)。
-    static let defaultsKey = Keys.pointerThreeFingerTapPanel
-    private var enabled: Bool {
-        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.threeFingerTapPanel
-    }
-
-    /// 四指轻点(T91)= **直接进未启动环**。与三指那条同一条纪律:**默认关**
-    /// (默认对齐 macOS:macOS 没有这个功能),而且**区分"没写过"与"写成 false"** ——
-    /// `object(forKey:) as? Bool ?? false`:取不到 = 没写过 = 关,取到 false = 用户关掉了。
-    /// (本机实测:系统没有占用"四指轻点"—— `TrackpadFourFingerTapGesture` 这个键根本不存在;
-    ///  四指只有横扫/竖扫/捏合。见 design/入口槽-底部形态实验台.html 的记账。)
-    static let defaultsKeyFour = Keys.pointerFourFingerTapLaunchRing
-    private var enabledFour: Bool {
-        UserDefaults.standard.object(forKey: Self.defaultsKeyFour) as? Bool ?? KeyDefaults.fourFingerTapLaunchRing
-    }
-
-    var onFire: (() -> Void)?
-    /// 四指的落点:唤起 + 直接切到未启动环。接线在 GlanceApp,与 onFire 并排
-    var onFireFour: (() -> Void)?
-
-    // MARK: 私有框架的接口(反推布局,只读 state 一个字段)
-
-    private struct MTPoint { var x: Float = 0; var y: Float = 0 }
-    private struct MTVector { var pos = MTPoint(); var vel = MTPoint() }
-    private struct Finger {
-        var frame: Int32 = 0
-        var timestamp: Double = 0
-        var identifier: Int32 = 0
-        var state: Int32 = 0        // 4 = 正在触摸
-        var fingerId: Int32 = 0
-        var handId: Int32 = 0
-        var normalized = MTVector()
-        var size: Float = 0
-        var zero1: Int32 = 0
-        var angle: Float = 0
-        var majorAxis: Float = 0
-        var minorAxis: Float = 0
-        var absolute = MTVector()
-        var zero2: Int32 = 0
-        var zero3: Int32 = 0
-    }
-
-    private typealias ContactCallback = @convention(c) (Int32, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
-
-    // MARK: T91 表二:手势的**位移**判据(先量后定,规格见 design/gesture-session-spec.md)
-    //
-    // 为什么要有它:2026-09-17 用户实测「四指**上下滑也会唤出环**」—— 判据里刻意没有坐标
-    // (怕反推的结构体布局猜错、整个探针当场死掉),代价就是"滑"和"点"分不开。
-    // 现在这个代价已经付过,改用位移判据;**阈值不猜,先量**:这一步只记账,不改行为。
-    //
-    // 同时量两套坐标(normalized 与 absolute)—— 反推布局若错,其中一套会给出荒唐值,
-    // 一眼就能看出来该信哪一套。
-    // ⚠️ 第一版量错了(记在这里,别再犯):量的是"所有触摸点的**包围盒**" —— 而轻点也有 3–4 根
-    // 手指**张在**触控板上,包围盒天生就大(实测 abs≈50–66 = 手指之间的张开距离),
-    // 于是"点"和"滑"分不开。正确的量是:**每根手指离开它落点时走了多远**(按 fingerId 跟踪)。
-    /// T91 表二:**3 与 4 指都要过"位移"这一关**。阈值来自实测:
-    ///   真轻点   norm≈0.002–0.007(2026-09-18 又量一轮:0.0023–0.0060,口径不变)
-    ///   三指拖移 norm≈0.11–0.30(短拖)  0.13–0.55(长拖/滑动)
-    /// ★ 2026-09-18 从 0.08 收窄到 0.03(用户实报「操作着操作着就出现了」):
-    ///   0.08 时代,"短拖"(拖一下窗、小距离选字,位移 0.05–0.08)会压线判成轻点唤起面板
-    ///   —— 正是"容易误触"的真身。0.03 对真轻点仍有 **4 倍**余量,0.05+ 的拖动全拒。
-    ///   (LumaRing 的 TapRecognizer 用 0.025/0.035,同一量级 —— 佐证这个量级是对的。)
-    ///
-    /// ⚠️ 病例(别再犯):第一版**只给四指**加,理由写的是"三指的横扫/竖扫在系统里都是关的"——
-    /// **漏查了一个键**:`TrackpadThreeFingerDrag = 1`(**三指拖移开着**,用户天天在用:拖窗、选字)。
-    /// 于是"拖窗"的那种快速三指被我们判成了轻点 ⇒ 用户实报「三指滑动改坏了」。
-    /// 教训:查"系统占用了什么手势"时,要把**拖移(Drag)**和**轻扫(Swipe)**两类键都过一遍。
-    static let maxMove: Float = 0.03
-    static let maxDuration: Double = 0.30
-
-    private var started = false
-    /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
-    /// 判卷逻辑越来越长,再跟"读 C 结构体 + 回调线程纪律"搅在一起,每次动都会伤到别的)
-    private var press = Press()
-    /// 上一次成功判卷的时刻。**0.35s 防抖**(LumaRing 同款):连击的第二发不重复动作 ——
-    /// 用户连着试几次的时候,面板被反复拆建,读起来就是"闪"
-    private var lastTapAt: CFAbsoluteTime = 0
-
-    /// **一次按压**从第一帧触点到全部抬起的完整账本。
-    ///
-    /// 2026-09-18 用户实报「三指唤起了未启动, 四指失灵」—— 日志铁证:
-    /// ```text
-    /// [指点按] 5 指 154ms 位移 norm=0.0035 → 不动作     ← 干净的四指点按,被数成 5
-    /// [指点按] 四指 113ms 位移 norm=0.0060 → 进未启动环   ← 三指点按,被数成 4
-    /// ```
-    /// **每个触点都被多数了 +1**:掌缘/拇指根搭在板上也被 `state == 4` 计进手指数。
-    /// T91 把计数从"抬手瞬间的手指数"改成"整轮 maxTouches"(治四指慢落误判)之后,
-    /// 这类**搭着的杂触点**就再也躲不掉计数了 —— 三指→4(开错环)、四指→5(不动作)。
-    /// 解法用的是这份数据里早就躺着、只是没读的信号:`size` / `majorAxis`(触点面积/长轴)
-    /// —— 指尖小、掌大,这是系统手势识别同款的第一道掌缘豁免。
-    ///
-    /// 阈值纪律照旧:**先量后定**。真值会记进 [指点按] 日志(size=/major= 字段),
-    /// 第一版先放很宽(只挡明显是掌的),宁可漏挡也别把真手指挡掉 —— 漏挡 = 病复发,可再调;
-    /// 误挡 = 真四指永远唤不醒,更难查。
-    struct Press {
-        /// 掌缘豁免线(第一版,待真值收紧):长轴 ≥22 或面积 ≥4.5 的触点不计入手指数
-        static let palmMajorAxis: Float = 22
-        static let palmSize: Float = 4.5
-
-        /// ★ 账本卡死自愈上限(2026-09-20「三指四指又失效了」的病根):
-        /// 账本只在"收口帧"判卷,而收口条件一旦满足不了,账本就**无限期撑开** ——
-        /// 之后所有触摸全被吸进同一条账本,手指数/时长/位移全爆表,判卷永远失败,
-        /// 而且**一条日志都不留**(判卷不跑 = 沉默失效)。实锤:
-        /// ```text
-        /// [5049394ms] [指点按] 5 指(豁免掌 1) 2941951ms … size=4.6 → 不动作
-        /// ```
-        /// 一条按压持续 **49 分钟**(size=4.6 = 掌缘):掌搭在板上打字,收口帧永远等不来。
-        /// 1.0s = 点按 ≤0.30s、按压触发 ≤0.25s 之后的三倍余量 —— 真手势到不了 1s 还不收口。
-        static let stuckLedgerAfter: Double = 1.0
-
-        private(set) var maxTouches = 0
-        /// **去重手指 id 数**(2026-09-18 补,治「不灵敏」):极快的轻点(实测 ~50ms)里,
-        /// 四根手指可能**从未同帧落齐** —— 按"同帧最大手指数"就数成 2/3,判成不动作。
-        /// 每个触点有稳定 fingerId,整轮去重计数兜住"先后落、没同帧"的竞态;
-        /// 掌缘豁免的 id 不进这个集合(豁免的本意就是它不算手指)。
-        private(set) var distinctIDs: Set<Int32> = []
-        private(set) var maxNormMove: Float = 0
-        private(set) var maxAbsMove: Float = 0
-        private(set) var palmCount = 0           // 被豁免的触点数(记账,不计数)
-        private(set) var maxSeenSize: Float = 0  // 量尺:本轮真实触点的最大面积/长轴
-        private(set) var maxSeenMajor: Float = 0
-        private(set) var statesSeen: Set<Int32> = []   // 本轮见过的 state 档(判"漏在哪档"的量尺)
-        private var beganAt: CFAbsoluteTime = 0
-        private var pressActive = false
-        /// 本轮**真手指**是否已经落板(掌不算)。掌先落时表不掐,真手指落的这帧才掐 ——
-        /// 掌缘搭着打字时,"搭着"的时长不该算进点按时长
-        private var sawRealTouch = false
-        /// ★ **手指数最近一次变多**的时刻(2026-09-22 修「过了一夜三指/四指又换不起来」)。
-        ///
-        /// 病例:日志里所有 3/4 指点按都被同一条判据否掉,而量到的时长是 **302 / 330 / 391 / 511 / 555 / 615ms** ✗
-        ///   —— 用户只是"轻点",但 `beganAt` 是"**第一根手指**落板"那一刻,而 3/4 指是**先后落齐**的
-        ///   (本文件自己的注释都写着"先落 3 根、第 4 根 40ms 后到是常态")。
-        ///   ⇒ "落得慢"的轻点被算成 300ms+ ⇒ 被 `maxDuration(0.30s)` 一刀切掉 ✗
-        /// 口径:**点按的"按住时长"应当从"手指落齐"那一刻起算** —— 手指还在往上加的时候,
-        ///   用户还没"按完"这个手势,那段时间不该计入。手指每变多一次,这里就重掐一次表。
-        private var countedSince: CFAbsoluteTime = 0
-        private var firstNorm: [Int32: MTPoint] = [:]
-        private var firstAbs: [Int32: MTPoint] = [:]
-
-        /// 判卷结果。
-        enum Outcome {
-            case fireThree(held: Double, norm: Float, abs: Float)
-            case fireFour(held: Double, norm: Float, abs: Float)
-            case slide(norm: Float)                  // 位移过大 = 滑动,让给系统
-            case rejected(String)                    // 不动作(带原因,进日志)
-        }
-
-        /// 喂一帧。返回"当前正在触摸的**真手指**数"(>0 = 这一轮还没结束)。
-        /// 线程纪律:只在 MultitouchSupport 的回调线程跑,只碰自己的标量;判卷在抬手帧同步出。
-        mutating func feed(nFingers: Int, data: UnsafeMutableRawPointer?) -> Int {
-            var touching = 0
-            var palmTouching = 0
-            // ★ 卡死自愈:账本超过 stuckLedgerAfter 还没收口 ⇒ 整本作废重来。
-            //   (丢收口帧/幽灵触点常驻都会把账本撑成毒账本 —— 见 stuckLedgerAfter 的病历)
-            if pressActive, CFAbsoluteTimeGetCurrent() - beganAt > Self.stuckLedgerAfter {
-                let stale = CFAbsoluteTimeGetCurrent() - beganAt
-                pressActive = false
-                pressFired = false
-                maxTouches = 0; distinctIDs.removeAll()
-                maxNormMove = 0; maxAbsMove = 0
-                palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
-                statesSeen.removeAll(); sawRealTouch = false
-                firstNorm.removeAll(); firstAbs.removeAll()
-                DispatchQueue.main.async {
-                    glog(String(format: "[指点按] 账本 %.1fs 未收口 ⇒ 强制重置(丢帧/幽灵触点自愈)", stale))
-                }
-            }
-            if let data, nFingers > 0 {
-                for i in 0..<nFingers {
-                    let f = data.assumingMemoryBound(to: Finger.self)[i]
-                    // 1–4 = 在板上(落板全过程),5–7 = 离板。
-                    // (state 记账保留:失败日志自答"漏在哪档")
-                    guard f.state >= 1 && f.state <= 4 else { continue }
-                    statesSeen.insert(f.state)
-                    // ★★ 跟踪键必须是 **identifier**(每触点唯一流水号),不是 fingerId!
-                    //   fingerId 是手内槽位号(拇指 0/食指 1/中指 2…),四指同点时槽位撞号,
-                    //   去重只剩 2–3 个 —— 这就是「四指十次唤不醒七次」的全部真相。
-                    //   口径对齐 LumaRing:LRContact.id = touches[j].identifier(MIT)。
-                    let id = f.identifier
-                    // 掌缘豁免:大触点不计入手指数(位移照记 —— 掌动了就是真滑,该让给系统)
-                    let isPalm = f.size >= Self.palmSize || f.majorAxis >= Self.palmMajorAxis
-                    if isPalm { palmTouching += 1 } else { touching += 1; distinctIDs.insert(id) }
-                    maxSeenSize = max(maxSeenSize, f.size)
-                    maxSeenMajor = max(maxSeenMajor, f.majorAxis)
-                    if let p0 = firstNorm[id] {
-                        let dx = Double(f.normalized.pos.x - p0.x), dy = Double(f.normalized.pos.y - p0.y)
-                        maxNormMove = max(maxNormMove, Float((dx * dx + dy * dy).squareRoot()))
-                    } else {
-                        firstNorm[id] = f.normalized.pos
-                    }
-                    if let p0 = firstAbs[id] {
-                        let dx = Double(f.absolute.pos.x - p0.x), dy = Double(f.absolute.pos.y - p0.y)
-                        maxAbsMove = max(maxAbsMove, Float((dx * dx + dy * dy).squareRoot()))
-                    } else {
-                        firstAbs[id] = f.absolute.pos
-                    }
-                }
-            }
-            if touching > 0 || palmTouching > 0 {
-                if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
-                    pressActive = true
-                    beganAt = CFAbsoluteTimeGetCurrent()
-                    firstNorm.removeAll(); firstAbs.removeAll()
-                    maxNormMove = 0; maxAbsMove = 0
-                    palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
-                    statesSeen.removeAll()
-                    sawRealTouch = false
-                    countedSince = 0
-                }
-                if touching > 0, !sawRealTouch {
-                    // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
-                    //   2026-09-20 病例:掌搭着打字,掐表从掌落起,0.3s 上限必爆)
-                    sawRealTouch = true
-                    beganAt = CFAbsoluteTimeGetCurrent()
-                    firstNorm.removeAll(); firstAbs.removeAll()
-                    maxNormMove = 0; maxAbsMove = 0
-                    maxTouches = 0
-                }
-                if touching > maxTouches {
-                    // 手指数**变多** ⇒ 手势还没"落齐" ⇒ 重掐点按计时(见 countedSince 的病例)
-                    countedSince = CFAbsoluteTimeGetCurrent()
-                    maxTouches = touching
-                }
-                palmCount = max(palmCount, palmTouching)
-                // ★ 返回**真手指数**,不是 total:掌还搭着不该挡收口 ——
-                //   (2026-09-20 病例:收口条件曾是"total == 0",掌缘搭板 = 账本永不收口,
-                //   后续三/四指点按全部被无声吞掉,这正是「三指四指又失效了」的主病根)
-                return touching
-            }
-            pressActive = false
-            return 0
-        }
-
-        private(set) var pressFired = false   // 本轮已经"按压触发"过(抬手后不再按点按重复生效)
-
-        /// **按压触发**(2026-09-18 用户提议:「给四指加上点按 + 按压」):四根手指齐压
-        /// ≥0.25s 且几乎没动 ⇒ **当场生效**,不必抬手。点按失手时的兜底 —— 按住的手指
-        /// 有几十帧把 identifier 记全,不存在"没同帧落齐"的竞态。
-        /// ★ **必须同帧 4 指**(2026-09-19 修「三指变成未启动环」):曾经只看
-        /// distinctIDs ≥ 4 —— 而 id 跨帧累计,手势落指帧相互沾边时(滚动→点按)按压
-        /// 被合并、id 累到 4,三指点按就被误当"四指按压"唤起了未启动环。
-        /// 同帧 4 指 = 真的"四根手指此刻都在板上",三指点按永远凑不齐这个条件。
-        /// 防误触其余双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
-        mutating func pressFireIfDue() -> Bool {
-            guard !pressFired, maxTouches >= 4, distinctIDs.count >= 4,
-                  CFAbsoluteTimeGetCurrent() - beganAt >= 0.25,
-                  maxNormMove <= ThreeFingerTap.maxMove else { return false }
-            pressFired = true
-            return true
-        }
-
-        /// 全部抬起 ⇒ 判卷。
-        /// T91:按 **maxTouches**(整轮最大值)而不是抬手瞬间的手指数 —— 四根手指不可能
-        /// 同一帧落齐(先落 3 根、第 4 根 40ms 后到是常态),只看当前帧会把"四指慢落"误判成三指。
-        func judge() -> Outcome {
-            if pressFired { return .rejected("") }   // 按压已生效,抬手不再按点按重复计
-            // ★ 时长从"**手指落齐**"起算,不是从"第一根手指落板"起算(见 countedSince 的病例)
-            let held = CFAbsoluteTimeGetCurrent() - (countedSince > 0 ? countedSince : beganAt)
-            let heldTotal = CFAbsoluteTimeGetCurrent() - beganAt   // 只进日志,便于对账
-            // 手指数 = max(同帧最大, 去重 id 数) —— 前者管"同帧落齐"的常态,后者兜"极快轻点
-            // 从未同帧"的竞态(实测 ~50ms 的四指点按曾被数成 2)
-            let n = max(maxTouches, distinctIDs.count)
-            // <30ms = 瞬时毛刺(LumaRing 同款下限):一次真实的四指轻点至少也要 30ms+
-            guard held >= 0.03 else { return .rejected("") }
-            guard (n == 3 || n == 4), held <= ThreeFingerTap.maxDuration else {
-                // 不匹配也要留账(要能分辨"0 是干净"还是"0 是没看见");带上豁免账与量尺。
-                // states 供"漏在哪一档"对账:真手指若整轮只报了 1/2,这里一眼可见
-                if n >= 2 || palmCount > 0 {
-                    let st = statesSeen.sorted().map(String.init).joined(separator: "/")
-                    return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且落齐后 ≤%.0fms;整轮 %.0fms)",
-                                            n, palmCount, st, held * 1000, maxNormMove, maxAbsMove,
-                                            maxSeenSize, maxSeenMajor, ThreeFingerTap.maxDuration * 1000, heldTotal * 1000))
-                }
-                return .rejected("")   // 一指的普通点按:不进账
-            }
-            if maxNormMove > ThreeFingerTap.maxMove {
-                return .slide(norm: maxNormMove)
-            }
-            let heldMs = held * 1000
-            return n == 4 ? .fireFour(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
-                          : .fireThree(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
-        }
-    }
-
-    func start() {
-        guard !started else { return }   // 幂等
-        started = true
-        let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
-        guard let lib = dlopen(path, RTLD_NOW),
-              let symList = dlsym(lib, "MTDeviceCreateList"),
-              let symRegister = dlsym(lib, "MTRegisterContactFrameCallback"),
-              let symStart = dlsym(lib, "MTDeviceStart") else {
-            glog("[指点按] 取不到 MultitouchSupport ⇒ 该手势不可用(其余照常)")
-            return
-        }
-        typealias CreateList = @convention(c) () -> CFMutableArray?
-        typealias Register = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
-        typealias StartDevice = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
-        let createList = unsafeBitCast(symList, to: CreateList.self)
-        let register = unsafeBitCast(symRegister, to: Register.self)
-        let startDevice = unsafeBitCast(symStart, to: StartDevice.self)
-        guard let devices = createList() else {
-            glog("[指点按] 拿不到触控设备 ⇒ 该手势不可用(其余照常)")
-            return
-        }
-        let count = CFArrayGetCount(devices)
-        for i in 0..<count {
-            guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
-            register(UnsafeMutableRawPointer(mutating: raw), ThreeFingerTap.contactFrame)
-            startDevice(UnsafeMutableRawPointer(mutating: raw), 0)
-        }
-        glog("[指点按] 已上线(\(count) 个设备)· 三指=\(enabled ? "开" : "关")(\(Self.defaultsKey))"
-             + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
-    }
-
-    /// **起拖就撤销这次唤起**(2026-09-22 用户实报「我三指拖拽窗口边框, 也唤起了面板。
-    /// 已经是拖拽了, 怎么还能唤起呢」)。
-    ///
-    /// ★ 为什么不再调阈值(这是同类病的**第三次** ⇒ 按"修到第三次就怀疑设计"的规矩停手):
-    ///   前两次都在收 `maxMove`(0.08 → 0.03 ✓),因为真实的**长拖**位移大、拒得掉 ✓;
-    ///   但这次这条在手指数据上**与轻点完全一致** ✗ ——
-    ///   `TrackpadThreeFingerDrag = 1`(三指拖移开着 ✓)时,**起拖那一拍本身就是一次干净的三指轻点** ✓
-    ///   (带动移锁定时更是如此:轻点起拖、拖完再轻点放下 ⇒ 两次都是"完美轻点" ✗)。
-    ///   手指分不出来 ⇒ 换个**手指之外**的证据:系统真在拖东西时,**鼠标键是按下状态** ✓
-    ///   (三指拖移在系统里就是"按住左键移动指针" ✓)。
-    ///
-    /// 口径:生效之后 0.3s 内只要看到按键按下 ⇒ **撤销这次唤起**(面板收起 ✓)。
-    ///   ⇒ 观感从"拖窗时面板一直挂着"✗ 变成"闪一下"✓(用户原话:点按误触我能理解 ✓);
-    ///     代价诚实说:真轻点唤起后 0.3s 内如果**恰好**有拖拽在进行,这次唤起会被收掉 ✗。
-    @MainActor
-    static func cancelIfDragStarted(reason: String) {
-        // ⚠️ 第一版用的是 `NSEvent.pressedMouseButtons != 0` —— **错的信号** ✗:
-        //   它反映的是**物理**按键状态,而"三指拖移"是系统**合成**的拖动 ⇒ 它一直是 0 ✗
-        //   (用户当场报"拖拽还是误触了" ✓;日志里那条位移诊断同时抓到了真凭实据:
-        //    `⚠️ 三指点按 生效后 250ms 指针又移动 **399pt**` ✓ 而真轻点那一刻指针几乎不动 ✓)
-        // ⇒ 换成**指针位移**:轻点的位移 ≈ 0(实测 0.1–0.8pt ✓),拖拽是几百 pt ✓ —— 同一台机器上量出来的 ✓
-        let p0 = NSEvent.mouseLocation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            let p1 = NSEvent.mouseLocation
-            let moved = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
-            // 15pt:真轻点那一下指针连 1pt 都不动(实测 0.1–0.8 ✓)⇒ 15pt 是**30 倍**余量 ✓
-            guard moved > 15 else { return }
-            glog(String(format: "[指点按] ⚠️ %@ 之后 250ms 指针又移动 %.0fpt ⇒ **撤销这次唤起(拖拽误触)**",
-                        reason, moved))
-            onDragMisfire?()
-        }
-    }
-
-    /// 撤销唤起(由 App 层装配到面板:收面板 ✓)
-    static var onDragMisfire: (() -> Void)?
-
-    /// **生效后的事后归因**(2026-09-22 用户实报「三指划词的时候好像又误触了」)——
-    /// 生效之后 250ms 再看一眼指针有没有**继续移动**:
-    ///   · 几乎没动 ⇒ 真是一次轻点 ✓
-    ///   · 又挪了 8pt 以上 ⇒ 这一发其实是**划词/拖选的开头** ✗(手指还在板上滑,人是在选文字)
-    /// 它**只记日志、不改行为** ✓ —— 先把"哪些生效其实是误触"变成可数的数,
-    /// 再决定要不要"发现拖选就撤掉面板"(那是行为改动,得先问用户 ✓)。
-    @MainActor
-    static func logPostFirePointerDrift(_ what: String) {
-        let p0 = NSEvent.mouseLocation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            let p1 = NSEvent.mouseLocation
-            let dist = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
-            if dist > 8 {
-                glog(String(format: "[指点按] ⚠️ %@ 生效后 250ms 指针又移动 %.0fpt ⇒ 这一发**像是划词/拖选的开头**",
-                            what, dist))
-            }
-        }
-    }
-
-    /// **截图会话里,手势也要让权**(2026-09-22 用户实报后加)。
-    ///
-    /// 病例:用户「我刚才截图, 然后好像误触唤起启动环了」—— 日志铁证:
-    ///   `[指点按] 四指 75ms 位移 norm=0.0028 abs=0.3 → 唤起并直接进未启动环(钉住)` ✗
-    ///   手指/掌缘压在触控板上,被读成"干净的四指轻点"(位移 0.3pt ✓ 时长 75ms ✓ 全都过闸)。
-    /// 结构缺口:键盘那条早就让权了(`captureSessionTookOver(keyCode:)` ⇒ 截图时放行导航键 ✓),
-    ///   而**手势这条(MultitouchSupport)从来没问过截图会话** ✗ ⇒ 截图时照样唤起 ✓
-    /// ⇒ 这里把同一套判据接到手势的两个生效点上(点按 + 四指按压)✓
-    @MainActor
-    private static func gestureBlockedByCapture(_ what: String) -> Bool {
-        let capture = CaptureSessionProbe.verdict()
-        guard capture.isCapture else { return false }
-        glog("[T32] 截图会话里忽略手势(\(what)):\(capture.reason)")
-        return true
-    }
-
-    /// C 回调:主线程之外也可能被调 ⇒ 只喂数据、只在抬手帧判卷,回主线程才动作。
-    private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
-        let tap = ThreeFingerTap.shared
-        if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
-            // 按压路径:四指齐压到时 ⇒ 当场生效(点按失手的兜底,不必抬手)
-            if tap.press.pressFireIfDue() {
-                DispatchQueue.main.async {
-                    let tap = ThreeFingerTap.shared
-                    let now = CFAbsoluteTimeGetCurrent()
-                    guard now - tap.lastTapAt > 0.35 else { return }
-                    tap.lastTapAt = now
-                    if ThreeFingerTap.gestureBlockedByCapture("四指按压") { return }
-                    glog("[指点按] 四指按压 0.25s → 唤起并直接进未启动环(钉住)")
-                    if tap.enabledFour { tap.onFireFour?() }
-                    Haptics.fire(.summonFourFinger)
-                    ThreeFingerTap.logPostFirePointerDrift("四指按压")
-                    ThreeFingerTap.cancelIfDragStarted(reason: "四指按压")
-                }
-            }
-            return 0   // 按压还没结束
-        }
-        // 全部抬起 ⇒ 判卷(账本换新,下一轮从零记)
-        let outcome = tap.press.judge()
-        tap.press = Press()
-        switch outcome {
-        case .rejected(""):
-            break                              // 一指的普通点按:不进账
-        case .rejected(let why):
-        if !why.isEmpty { Haptics.fire(.gestureRejected, trace: String(why.prefix(48))) }
-            DispatchQueue.main.async { glog("[指点按] \(why)") }
-        case .slide(let norm):
-            DispatchQueue.main.async {
-                glog(String(format: "[指点按] 滑动(位移 norm=%.3f > %.2f)→ 让给系统,不动作",
-                            norm, ThreeFingerTap.maxMove))
-            }
-        case .fireThree(let held, let norm, let absMove):
-            DispatchQueue.main.async {
-                let tap = ThreeFingerTap.shared
-                let now = CFAbsoluteTimeGetCurrent()
-                guard now - tap.lastTapAt > 0.35 else {
-                    glog(String(format: "[指点按] 三指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
-                    return
-                }
-                tap.lastTapAt = now
-                if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
-                if tap.enabled { tap.onFire?() }
-                Haptics.fire(.summonThreeFinger)
-                ThreeFingerTap.logPostFirePointerDrift("三指点按")
-                ThreeFingerTap.cancelIfDragStarted(reason: "三指点按")
-            }
-        case .fireFour(let held, let norm, let absMove):
-            DispatchQueue.main.async {
-                let tap = ThreeFingerTap.shared
-                let now = CFAbsoluteTimeGetCurrent()
-                guard now - tap.lastTapAt > 0.35 else {
-                    glog(String(format: "[指点按] 四指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
-                    return
-                }
-                tap.lastTapAt = now
-                if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, tap.press.statesSeen.sorted().map(String.init).joined(separator: "/"), norm, absMove))
-                if tap.enabledFour { tap.onFireFour?() }
-                Haptics.fire(.summonFourFinger)
-                ThreeFingerTap.logPostFirePointerDrift("四指点按")
-                ThreeFingerTap.cancelIfDragStarted(reason: "四指点按")
-            }
-        }
-        return 0
-    }
-}
-
-// MARK: - 双击 ⌥ 把指针送到下一块屏幕
-
-/// 双击 ⌥ 把指针送到**下一块屏幕**（今天双屏场景 = 另一块屏，多屏自动循环 ✓）。
-///
-/// 为什么不是"注册一个热键"：⌘/⌃/⌥/⇧ 是**修饰键**，系统热键 API 只接受"修饰键 + 一个真实按键"，
-/// 单独一个 ⌥ 注册不了。所以换一种做法：**监听事件流**，只看不改 ——
-/// 两处监听都把事件**原样返回**（`return e`），一个字节都不吞，因此不可能影响 ⌥Tab、⌥⇧ 等任何既有操作。
-///
-/// 触发键史:曾是双击 ⌃(2026-09-15)—— 用户实测与 IDEA 的 ⌃ 系快捷键打架,2026-09-17 改 ⌥。
-///
-/// 要小心的不是"冲突"（双 ⌥ 不是 macOS 的系统快捷键 —— 按住 ⌥ 出音标选单那是"按住",
-/// 只有一次 down,凑不出双击），而是**误触发**：
-/// 一天要按几百次"⌥ + 别的键"。所以规则是 —— **两次干净的 ⌥ 之间只要夹了任何别的按键，立刻作废**。
-/// 于是 ⌥ 组合键、⌥Tab(触发键自己也走 ⌥+键的路,被 dirty 拦住)永不误触发；只有"干干净净连按两下 ⌥"才动。
-/// 最坏情况的代价也只是指针跳了一下，再双击一次就回来 —— 自纠正。
-///
-/// 放在这个文件里而不是新建文件：本工程的 pbxproj 用的是**显式文件引用**，
-/// 新建 .swift 必须同时在四处登记（PBXBuildFile / PBXFileReference / group / Sources phase），
-/// 漏一处就是 `cannot find 'X' in scope`。同一个 domain 的代码就近放，先避免这类机械风险。
-final class DoubleOptionTap {
-    /// 双击 ⌥:把"跳到下一块屏"整件事交给 **App 层**(见 `App/ScreenScopedSwitching.swift` ✓)
-    var onJumpToNextDisplay: (() -> Void)?
-    static let shared = DoubleOptionTap()
-    private init() {}
-
-    /// 设置项。**默认关**：macOS 本身没有这个功能，按"新开关一律默认对齐 macOS"的规则应为关。
-    /// UserDefaults 直读 ⇒ 设置里一改立刻生效，不用重启（和 panel.sheen 等既有开关同一套约定）。
-    /// key 随触发键换名(⌃→⌥),**不做旧值迁移**:功能默认关,丢一次开关状态无伤
-    /// (先例:panel.puckRiseFromBottom → panel.slideFromLastApp 也是不迁移)。
-    static let defaultsKey = Keys.pointerDoubleOptionJumps
-    // ⚠️ 这里原来用 `bool(forKey:)`(没写过 ⇒ false,于是默认值写不成 true ✗)⇒
-    //    与别处统一成 `object(forKey:) as? Bool ?? KeyDefaults.*` ✓
-    private var enabled: Bool {
-        UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.doubleOptionJumps
-    }
-
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
-    private var lastCleanDown: CFAbsoluteTime?   // 上一次"干净地按下 ⌥"的时刻
-    private var dirty = false                    // 这一轮按住 ⌥ 期间有没有夹别的键
-    private var optionWasDown = false
-    private static let minGap: Double = 0.06     // 太快 ⇒ 同一次按住的抖动，不算双击
-    private static let maxGap: Double = 0.30     // 超过 ⇒ 不像"有意双击"（苹果 ~500ms 对修饰键太松）
-
-    func start() {
-        guard globalMonitor == nil else { return }   // 幂等：重复 start 不会挂两套监听
-        let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown]
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] e in
-            self?.handle(e)
-        }
-        // 我们自己的窗口在最前时，全局监听**看不到**事件（macOS 的设计）⇒ 补一个本地监听。
-        // 注意返回 e 而不是 nil：nil 会**吞掉**事件，那正是要绝对避免的事。
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in
-            self?.handle(e)
-            return e
-        }
-    }
-
-    private func handle(_ e: NSEvent) {
-        switch e.type {
-        case .keyDown:
-            dirty = true                       // 夹了别的按键 ⇒ 这一轮作废
-        case .flagsChanged:
-            // ⌘/⌃/⇧ 动过也算"夹了别的键"（fn / capsLock 常驻，不算；⌥ 自己是触发键，不算）
-            if !e.modifierFlags.intersection([.command, .control, .shift]).isEmpty { dirty = true }
-            let optionDown = e.modifierFlags.contains(.option)
-            guard optionDown != optionWasDown else { return }   // 只认状态翻转
-            optionWasDown = optionDown
-            guard optionDown else { return }                     // 抬起：什么都不做
-            let now = CFAbsoluteTimeGetCurrent()
-            if let prev = lastCleanDown, now - prev >= Self.minGap, now - prev <= Self.maxGap, !dirty {
-                lastCleanDown = nil
-                dirty = false
-                if enabled { jumpToNextDisplay() }
-            } else {
-                lastCleanDown = now
-                dirty = false
-            }
-        default:
-            break
-        }
-    }
-
-    /// 移到下一块屏幕，**保持相对位置**（右屏 70% 高处 ⇒ 左屏 70% 高处），
-    /// 而不是丢到角落 —— 指针像"平移"过去，这是体感的关键。
-    /// ★ 2026-09-22:整段逻辑搬到 **App 层**(`DoubleOptionJump`)——
-    ///   它要看清点(Inventory)又要落焦(Focus),放在 Trigger 里会**双向越界** ✗
-    ///   (架构脚本报了很久,记在已知账上;现在按同一套"闭包钩子 + App 层装配"还掉 ✓)
-    ///   这里只判"这一下该不该算一次跳屏"(拖拽途中不算 ✓),然后把话交给 App 层 ✓
-    private func jumpToNextDisplay() {
-        guard NSEvent.pressedMouseButtons == 0 else { return }   // 拖拽途中不动（别把拖拽目标搞乱）
-        onJumpToNextDisplay?()
-    }
-
-}

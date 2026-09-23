@@ -116,6 +116,28 @@ final class PanelController: ObservableObject {
     private var pendingLaunchAt: CFAbsoluteTime = 0
     private static let pendingMaxAge: Double = 1.5
 
+    /// **名单还没到、手已经松了**的那一次确认(2026-09-22 用户实报「快速 cmd tab 连续切换, 偶尔换不起来」)。
+    ///
+    /// 病例(日志铁证):
+    /// ```text
+    /// [2125575ms] [tap] flagsChanged kc=55 down=true  state=idle
+    /// [2125620ms] [tap] hotkey forward pressed …      → emit begin
+    /// [2125668ms] [tap] flagsChanged kc=55 down=false … → emit confirm
+    /// [2125668ms] [T6] 确认(空列表):面板关闭           ← 枚举(46–69ms)还没回来 ⇒ 什么都没换 ✗
+    /// ```
+    /// 枚举在**后台**跑(2026-09-22 之前就是:为了不卡 tap 回调 ✓),而"按下→松开"只要 40–60ms
+    /// ⇒ 快速 ⌘Tab 会跑在名单前面 ✗ ⇒ 确认时 `groups` 还是空的 ✓
+    /// 口径:**意图已经被接受,就必须执行** —— 先记下来,等名单落地(`finishBegin`)当场兑现 ✓
+    /// (与 `pendingLaunchRing` 同款:触发层比枚举先到的那一瞬,只记意图 ✓)
+    ///
+    /// ⚠️ 这里**不能**顺手 `dismiss()`:那会 `beginGeneration += 1` ⇒ 枚举回来直接被丢弃 ✗
+    ///    (所以这一局要留着等名单;万一名单永远不来,有 `confirmWaitWork` 兜底 ✓)
+    private var confirmBeforeList = false
+    /// 本局名单是否已落地(区分"还没到"与"真的空")✓
+    private var listReady = false
+    /// 等名单的兜底闹钟(见 `confirmBeforeList`)
+    private var confirmWaitWork: DispatchWorkItem?
+
     /// 段切换的行进方向(见 `SegmentTravel`)。PanelView 靠它挑过渡:
     /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
     @Published private(set) var segmentTravel: SegmentTravel = .direct
@@ -141,7 +163,6 @@ final class PanelController: ObservableObject {
         let p = NSEvent.mouseLocation
         guard glass.contains(p) else { return }
         let (rows, cols) = launchLayout(count: launchables.count)
-        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
@@ -373,6 +394,17 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        // ★ 连着快速 ⌘Tab:上一局那次"名单还没到"的确认还挂着 ⇒ **先兑现它**(一次按键 = 一次切换 ✓),
+        //   否则那一发就白按了(用户实报的"偶尔换不起来"里有一部分就是这种叠加 ✓)
+        if confirmBeforeList, listReady, !groups.isEmpty {
+            confirmBeforeList = false
+            confirmWaitWork?.cancel(); confirmWaitWork = nil
+            glog("[T6] 新一局到来 ⇒ 先兑现上一局那一次确认")
+            confirmSelection()      // 内部会 dismiss(收掉上一局)✓
+        }
+        confirmBeforeList = false
+        confirmWaitWork?.cancel(); confirmWaitWork = nil
+        listReady = false
         // 打卡器开账:一局的环节时间轴从这里起算(见 `SessionMarks`)
         SessionMarks.begin("唤起")
         // **先抢优先级,再干活**:`.latencyCritical` 这条断言要从按键那一刻生效,不能等到 `showPanel`
@@ -393,6 +425,7 @@ final class PanelController: ObservableObject {
         // T91:换环意图只活一局。**只在它真的挂着时留账**(日志预算:常态两行,这里是例外才出声)
         if pendingLaunchRing { trace("[T91] 新一局:上一局的换环意图没兑现,丢掉") }
         pendingLaunchRing = false
+        trayChrome?.beginSession()      // 新一局 ⇒ 重新允许托盘上屏(见 ChromeWindow.place 的病例 ✓)
         beginGeneration &+= 1
         let generation = beginGeneration
         // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
@@ -421,6 +454,7 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        listReady = true
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
@@ -494,6 +528,16 @@ final class PanelController: ObservableObject {
             trace("[T6] 落点顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
         }
         winIndex = 0
+        // ★ 上一发"手已经松了、名单还没到"的确认 ⇒ **就在这里兑现**(一次按键 = 一次切换 ✓)。
+        //   放在预截/建窗**之前**:这一局的目的已经达成,不必再开面板、也不必白拍一批图 ✓
+        if confirmBeforeList {
+            confirmBeforeList = false
+            confirmWaitWork?.cancel(); confirmWaitWork = nil
+            let waited = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
+            glog(String(format: "[T6] 名单晚到(等了 %.0fms)⇒ 兑现刚才那一次确认", waited))
+            confirmSelection()
+            return
+        }
         // 缩略图缓存**剪枝而不是清场**(2026-09-14):上一局的图还留着,第一帧就有图可上屏,
         // 不再先闪一下"截图中…"。AltTab 也是这个路子 —— 缓存保活 + 后台刷新。
         // T87 v3 起剪枝改 `reapAlive()`(后台、全量保活):死窗条目本就不会被展示,
@@ -794,7 +838,8 @@ final class PanelController: ObservableObject {
         // 这也正是这个仓库最早的口径(见 PanelView 顶部注释:「⌘Tab 是效率动作, 面板要"已经在"」)——
         // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
         contentEntryRise = 0   // 不再是 entryFloatDistance
-        trace("[T6] 入场:上浮" + (willSlide
+        // 把**这一次用的弹簧档位**写进日志 ✓(不然试完分不清刚才那个是哪个 ✗)
+        trace("[T6] 入场:上浮(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 
@@ -1033,12 +1078,23 @@ final class PanelController: ObservableObject {
         endActivity()
         FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
         PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
+        // ★ 取证:收窗**之前**两扇窗各是什么状态(下次再看到"残留"时,这一行能分清
+        //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
+        trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
+        // 环与托盘**并进同一次 flush**(见 ChromeWindow.teardown 的病例 ✓)
+        panel?.disableScreenUpdatesUntilFlush()
         panel?.orderOut(nil)
         // ★ 2026-09-21 修我自己引入的 bug:标记必须与 orderOut **成对**清掉。
         //   病例(用户实报「本次不显示预览窗了」):第一次收场把托盘 orderOut 了,而标记没清 ✗
         //   ⇒ 之后每一局都以为"它已经在台上" ⇒ **再也不 orderFront** ⇒ 托盘永不出现 ✓。
         //   ★ 这个坑现已由 ChromeWindow 从结构上消掉(placed/teardown 成对,写在同一个类里)✓
         trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
+        // ★ 兜底:0.25s 后再确认一次"托盘窗真下去了" —— 未知的迟到路径也不至于留窗 ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.isVisible, self.previewPanel?.isVisible == true else { return }
+            glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
+            self.previewPanel?.orderOut(nil)
+        }
         panel?.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
         groups = []
@@ -1292,9 +1348,13 @@ final class PanelController: ObservableObject {
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { note in
-                guard let w = note.object as? NSWindow, w is GlancePanel else { return }
-                let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
-                glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
+                // `queue: .main` 只保证"送到主队列";闭包本身是 @Sendable ⇒
+                // 读主线程隔离状态必须**显式**声明(否则两条 warning ✗)
+                MainActor.assumeIsolated {
+                    guard let w = note.object as? NSWindow, w is GlancePanel else { return }
+                    let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
+                    glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
+                }
             }
         }
     }
@@ -2586,10 +2646,17 @@ final class PanelController: ObservableObject {
         guard launchables.indices.contains(i) else { return }
         let app = launchables[i]
         glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+        dismiss(reason: "确认(启动 \(app.name))")                  // ★ 先收面板 ✓
         DockAppsProvider.launch(at: app.path)
-        dismiss(reason: "确认(启动 \(app.name))")
     }
 
+    /// ## ⚡ 关闭顺序:**先收面板,再聚焦**(2026-09-22 用户实报「关闭不干脆, 慢一拍 / 像有残留」)
+    ///
+    /// 旧顺序是 `WindowFocuser.focus(...)` 然后 `dismiss(...)` ✗ —— 而聚焦要等一次**激活往返**
+    /// (实测 30–51ms:`→ emit confirm` 到 `[T7] 已聚焦`),这期间面板还挂在屏幕上 ✗
+    /// ⇒ 观感就是"松手了, 面板还赖着" ✓(而且目标 App 已经在往前台动画,面板浮在上面更像残留 ✓)
+    /// 新顺序:先 `orderOut`(啪一下就没 —— 与"取消淡出"那次的用户口径一致 ✓),**之后再聚焦** ✓
+    /// 代价:旧 App 会露出来几十毫秒 —— 那正是原生切换器的观感,也是用户要的"跟手" ✓
     func confirmSelection() {
         // 启动区(方案 E):入口槽选中 = 没有可生效之物(它在等用户进到某格),no-op;
         // 启动图标选中 = **启动并激活**,面板即关(与「确认」的"生效即散场"同款)。
@@ -2604,8 +2671,23 @@ final class PanelController: ObservableObject {
             }
             let app = launchables[j]
             glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+            dismiss(reason: "确认(启动 \(app.name))")              // ★ 先收面板 ✓(启动要等几百 ms ✗)
             DockAppsProvider.launch(at: app.path)
-            dismiss(reason: "确认(启动 \(app.name))")
+            return
+        }
+        guard listReady else {
+            // 名单还在后台枚举 ⇒ **记下意图**,等 finishBegin 兑现 ✓
+            confirmBeforeList = true
+            let gen = beginGeneration
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, gen == self.beginGeneration, self.confirmBeforeList else { return }
+                self.confirmBeforeList = false
+                self.dismiss(reason: "确认(等名单超时 0.6s)")
+            }
+            confirmWaitWork?.cancel()
+            confirmWaitWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+            trace("[T6] 确认(名单未到 ⇒ 记下意图,等枚举落地就兑现)")
             return
         }
         guard groups.indices.contains(appIndex) else {
@@ -2622,13 +2704,13 @@ final class PanelController: ObservableObject {
         }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
+            dismiss(reason: "确认(无窗应用)")                       // ★ 先收面板 ✓
             WindowFocuser.focusWindowlessApp(pid: g.pid, contextScreen: contextScreen)
-            dismiss(reason: "确认(无窗应用)")
             return
         }
         let w = g.windows[winIndex]
+        dismiss(reason: "确认")                                     // ★ 先收面板 ✓
         WindowFocuser.focus(window: w)
-        dismiss(reason: "确认")
     }
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
@@ -2766,16 +2848,30 @@ final class ChromeWindow {
     private let panel: NSPanel
     private var placed = false              // 本局"已经在台上"(自己记账,不信 isVisible)
     private var hidden = false              // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    /// 这一局是否已经收场(收场后禁止 place ✓ —— 见 `place()` 的病例)
+    private var sessionEnded = true
 
     init(_ panel: NSPanel) { self.panel = panel }
 
     /// 确保在台上 + 内容可见。**幂等**:重复调用不产生任何窗口排序 ✓
+    ///
+    /// ★★ 2026-09-22 用户实报(「有时候环消失了, 预览容器还在。都松手回到 app 了, 容器还在」)——
+    ///   真因:原来是"没在台上就上屏"✗,而它的调用点在 **`updatePreview()`** = **每次 hover 更新**都跑 ✗。
+    ///   收场(`teardown()` 把 `placed` 清成 false ✓)之后,只要**再来一次迟到的更新**
+    ///   (视图重渲染 / 延迟的布局 pass ✓)⇒ 托盘又被 `orderFrontRegardless` ✗;
+    ///   而主面板那次没人再上屏 ⇒ 症状正是"**环没了、托盘还在**" ✓
+    ///   ⇒ 加**会话闸**:收场之后、下一局 `beginSession()` 之前,`place()` 一律 no-op ✓
+    ///   (连 `hidden` 都不碰:会话结束后它就该保持隐藏 ✓)
     func place() {
+        guard !sessionEnded else { return }
         if hidden { setContentHidden(false) }
         guard !placed else { return }
         placed = true
         panel.orderFrontRegardless()
     }
+
+    /// 新一局开始:重新允许上屏 ✓(与 `teardown()` 配对 —— 见 `place()` 的病例)
+    func beginSession() { sessionEnded = false }
 
     /// 内容显隐:只改图层属性(微秒级 ✓)
     func setContentHidden(_ on: Bool) {
@@ -2787,10 +2883,16 @@ final class ChromeWindow {
 
     /// 整局收场:真的腾出窗口 + 清账(与 place 严格配对)
     func teardown() {
+        sessionEnded = true          // ★ 收场 ⇒ 迟到的 place() 不许再上屏(见 place 的病例 ✓)
         placed = false
         hidden = false
         panel.alphaValue = 1
         panel.ignoresMouseEvents = false
+        // ★ 2026-09-22 用户实报「预览容器会在环之后才消失, 看着跟有残留一样」:
+        //   环与托盘是**两扇窗**,两次 `orderOut` = **两次独立提交** ⇒ 合成器可能有一帧
+        //   只收走了环 ✗(16ms 的残留,肉眼刚好看得见)。
+        //   `disableScreenUpdatesUntilFlush()` 把这次改动**并进下一次 flush** ⇒ 与环同批消失 ✓
+        panel.disableScreenUpdatesUntilFlush()
         panel.orderOut(nil)
     }
 }

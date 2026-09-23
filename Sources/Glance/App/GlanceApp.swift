@@ -94,6 +94,9 @@ struct GlanceApp: App {
                     DoubleOptionTap.shared.start()
                     // ★ 双击 ⌥ 的"跳屏 + 落焦"整件事在 App 层(Trigger 只报"发生了" ✓)
                     DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
+                    // 跨屏送窗(ADR-0016):走**独立注册的快捷键**(默认 ⌘⇧M,可在设置里录 ✓)
+                    // —— 脱面板:和面板开没开、选中哪一格都无关 ✓
+                    hotkeys.onMoveWindowToNextScreen = { MoveFocusedWindowToNextScreen.run() }
                     // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
                     // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
                     ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }
@@ -184,8 +187,8 @@ struct GlanceApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [panelController] in
             panelController.prewarmPanels()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [panelController] in
-            ThumbnailRefresher.shared.coldStartSweep()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            ThumbnailRefresher.shared.coldStartSweep()   // 这一支用不到 panelController ⇒ 别写 capture ✗
         }
         // 诊断钩子(自动化复现用,平时不生效):`open … --args -debug.autoOpenSettings 1`
         // 启动后自动开一次设置窗 —— 复现"设置窗关闭后 Glance 仍在环里"的病例

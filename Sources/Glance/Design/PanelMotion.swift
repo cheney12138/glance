@@ -93,10 +93,8 @@ enum PanelMotion {
     /// 0.32/0.55 → **0.22/0.60**。指哪一格,那一格的上浮与托底都更快到位。
     /// ⚠️ 它必须与下面的 `slide` **同一档速度**:托底与选中的图标是同一次 withAnimation 的两个面,
     /// 只调一个就会出现"图标先到、托底后到"(README 的动效口径:两者永远同步)。
-    static let select = Animation.spring(response: 0.22, dampingFraction: 0.60)
     /// puck 滑移(demo .puck 的 .38s):阻尼比图标大一点,托底不抖
     /// 与 `select` 同步提速:0.38/0.62 → **0.26/0.66**(见上面 select 的注释,两者必须同一档)
-    static let slide = Animation.spring(response: 0.26, dampingFraction: 0.66)
     /// **入场动效**(上浮 / 承接上一格;唯一的使用点是 `PanelController` 把 `contentEntryRise` 归零那一发)。
     /// 比 `slide` 快一档 —— 它是"入场",不是"跟手",不该让人等。会话内的横滑仍用 `slide`。
     ///
@@ -124,7 +122,66 @@ enum PanelMotion {
     /// 露头那件事**不再靠"同步曲线"解决**了(它解决不了:图标是两根弹簧叠加、托盘只有一根 ✗),
     /// 改由**托盘比图标晚到 0.06s** + **托盘顶部裁剪**这两条结构性措施兜住 ✓
     /// ⇒ 曲线回归"快"这一档,手感照用户原来的口径 ✓
-    static let entrance = Animation.spring(response: 0.16, dampingFraction: 0.62)
+    // ⚡ 2026-09-22 用户问:「app 上浮动画帧率不够流畅, 有没有参数可调」⇒ 做成**可试档位** ✓
+    //
+    // ★ 先把"这个动画到底是谁"说清(读代码 + 日志核对):
+    //   · **入场"上浮"那一段其实早就整段取消了** —— `PanelController` 把 `contentEntryRise` 的
+    //     起点给成 **0**,所以 `withAnimation(...) { contentEntryRise = 0 }` 是 **0→0 的空转** ✗
+    //     (见那里的注释:"今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到'够快',
+    //      答案是这段动画根本不该有" ✓)
+    //   · 于是唤起时**看得见**的动效只有两根弹簧:
+    //       ① **选中的那一格图标**上浮 −`iconLift`  ← `select`
+    //       ② **托底(puck)** 滑到落点              ← `slide`
+    //     ⇒ 它们**必须同一档**(同一次 `withAnimation` 的两个面 ✓ 本仓反复强调 ✓)
+    //
+    // ★ 是不是掉帧?日志里入场那一刻的帧账:`[帧] 面板8App 共 26–36 帧 | P50 16.7ms · P95 17.3ms
+    //   | 长帧 0(0%)` ⇒ **没有掉帧** ✓。读作"不流畅"的两个真实原因:
+    //   ① 它跑在 **60Hz** 外接屏(T27p)上 ⇒ 16.7ms 一步,天然比内建 120Hz 粗 ✗
+    //   ② 这两根弹簧都很短(0.22s / 0.26s ≈ 13–16 帧)⇒ 位移又快又少帧,像"跳"到位的 ✓
+    //   ③ 唤起时**首帧**偶尔很晚(实测 141 次:中位 10.2ms,尾部 43–110ms ✗)⇒ 弹簧的头几步被推迟 ✓
+    //
+    // ⇒ 档位(改完**不用重启**:`MotionPolicy` 是在"用动画的那一刻"读的 ✓):
+    //      defaults write com.cheney12138.macswitcher debug.entranceMotion -string smooth
+    //      试完想回默认:defaults delete com.cheney12138.macswitcher debug.entranceMotion
+    static var select: Animation { gears.select }
+    static var slide: Animation { gears.slide }
+    static var entrance: Animation { gears.entrance }
+
+    struct Gear {
+        let select: Animation
+        let slide: Animation
+        let entrance: Animation
+    }
+
+    /// 档位表。名字会进 `[T6] 入场:…(弹簧档 xxx)` ✓(不然试完分不清刚才那个是哪个 ✗)
+    /// ⚠️ 一个档位里三根弹簧**一起动** —— 只调一根就会出现"图标先到、托底后到"✗
+    static var gears: Gear {
+        switch entranceGearName {
+        case "smooth":   // 帧数更多、不回弹:最接近"流畅"的治法 ✓
+            return Gear(select: .spring(response: 0.34, dampingFraction: 0.90),
+                        slide: .spring(response: 0.38, dampingFraction: 0.92),
+                        entrance: .spring(response: 0.28, dampingFraction: 0.90))
+        case "slow":     // 试上限(明显慢,用来确认"慢一点是不是就顺了")
+            return Gear(select: .spring(response: 0.48, dampingFraction: 0.92),
+                        slide: .spring(response: 0.52, dampingFraction: 0.94),
+                        entrance: .spring(response: 0.40, dampingFraction: 0.92))
+        case "snappy":   // 试下限(更快更弹:用来确认"是不是快到看不清")
+            return Gear(select: .spring(response: 0.14, dampingFraction: 0.50),
+                        slide: .spring(response: 0.16, dampingFraction: 0.55),
+                        entrance: .spring(response: 0.10, dampingFraction: 0.50))
+        default:         // fast = **现状**(没设置过这个键的人,一个字都不变 ✓)
+            return Gear(select: .spring(response: 0.22, dampingFraction: 0.60),
+                        slide: .spring(response: 0.26, dampingFraction: 0.66),
+                        entrance: .spring(response: 0.16, dampingFraction: 0.62))
+        }
+    }
+
+    /// 当前档位名(未设置/写错 ⇒ `fast` = 现状 ✓)
+    static var entranceGearName: String {
+        let raw = UserDefaults.standard.string(forKey: Keys.debugEntranceMotion) ?? "fast"
+        return ["fast", "smooth", "slow", "snappy"].contains(raw) ? raw : "fast"
+    }
+
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 }

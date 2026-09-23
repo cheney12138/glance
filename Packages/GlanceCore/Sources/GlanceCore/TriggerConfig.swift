@@ -50,8 +50,26 @@ public struct TriggerConfig: Equatable {
     public static func load(from d: UserDefaults) -> TriggerConfig {
         guard d.object(forKey: "trigger.keyCode") != nil,
               let mod = d.string(forKey: "trigger.modifier") else { return .default }
-        let keyCode = Int64(d.integer(forKey: "trigger.keyCode"))
-        switch mod {
+        return make(keyCode: Int64(d.integer(forKey: "trigger.keyCode")), modifier: mod) ?? .default
+    }
+
+    /// **跨屏送窗**的快捷键（脱面板的全局动作 ✓，ADR-0016）。
+    /// 默认 **⌘⇧M**（用户 2026-09-22 口径:「快捷键用 cmd + shift默认」）——
+    /// 出厂默认值就写在这里一处 ✓（`Keys` 只管键名，不抄默认值 ✗）
+    public static func loadMoveWindow(from d: UserDefaults = .standard) -> TriggerConfig {
+        guard d.object(forKey: "moveWindow.keyCode") != nil,
+              let mod = d.string(forKey: "moveWindow.modifier") else { return moveWindowDefault }
+        return make(keyCode: Int64(d.integer(forKey: "moveWindow.keyCode")), modifier: mod) ?? moveWindowDefault
+    }
+
+    public static let moveWindowDefault = TriggerConfig(
+        keyCode: 0x2E, modifierMask: [.maskCommand, .maskShift],       // M = "move" ✓
+        modifierKeyCodes: [0x37, 0x36, 0x38, 0x3C], modifierSymbol: "⌘⇧", keyName: "M"
+    )
+
+    /// 键 + 修饰键名 ⇒ 配置（**唯一一处**解析修饰键名 ✓；送窗与触发键共用 ✓）
+    public static func make(keyCode: Int64, modifier: String) -> TriggerConfig? {
+        switch modifier {
         case "command":
             return TriggerConfig(keyCode: keyCode, modifierMask: .maskCommand,
                                  modifierKeyCodes: [0x37, 0x36], modifierSymbol: "⌘", keyName: keyName(of: keyCode))
@@ -61,8 +79,12 @@ public struct TriggerConfig: Equatable {
         case "option":
             return TriggerConfig(keyCode: keyCode, modifierMask: .maskAlternate,
                                  modifierKeyCodes: [0x3A, 0x3D], modifierSymbol: "⌥", keyName: keyName(of: keyCode))
+        case "commandShift":
+            return TriggerConfig(keyCode: keyCode, modifierMask: [.maskCommand, .maskShift],
+                                 modifierKeyCodes: [0x37, 0x36, 0x38, 0x3C],
+                                 modifierSymbol: "⌘⇧", keyName: keyName(of: keyCode))
         default:
-            return .default
+            return nil
         }
     }
 

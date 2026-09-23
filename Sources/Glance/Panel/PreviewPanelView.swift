@@ -3,7 +3,9 @@ import ImageIO
 import VideoToolbox
 import AppKit
 import CoreImage
-import ScreenCaptureKit
+// ⚠️ `@preconcurrency`:`SCStream`/`SCStreamOutput` 这套 API 的 Sendable 标注还没跟上,
+// 不声明的话每处回调都要报一串 warning(而我们本来就用主线程串行化 ✓)
+@preconcurrency import ScreenCaptureKit
 import GlanceCore
 
 /// 窗口预览托盘 —— 施工契约 = 最新设计 demo 的 `.preview-tray`。
@@ -509,7 +511,9 @@ private struct WindowThumb<Overlay: View>: View {
 ///   I2 每扇窗**自带一帧**(不共享可变渲染资源 —— 病例 A1:共享 CALayer ⇒ 串台 79 次);
 ///   I3 出图规格**首启冻结**(病例 A3/B5:局中重算 ⇒ 画面忽然缩放);
 ///   I7 日志带时间轴(`glog`)。
-final class LivePreviewPool: ObservableObject {
+/// `@unchecked Sendable` 的理由:它的状态**只在自己的 `queue` 上碰** ✓(回调里跨队列只传值),
+/// 编译器看不到这层约定,只好显式声明 ✓
+final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     static let shared = LivePreviewPool()
 
     private init() {
@@ -872,7 +876,8 @@ final class LiveFrameBox: ObservableObject {
 }
 
 /// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
-final class LiveOutput: NSObject, SCStreamOutput {
+/// 同上:回调只在 `LivePreviewPool.queue` 上跑 ⇒ 显式声明 ✓
+final class LiveOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let wid: CGWindowID
     private let onFrame: (CMSampleBuffer) -> Void
     init(wid: CGWindowID, onFrame: @escaping (CMSampleBuffer) -> Void) {
@@ -896,7 +901,8 @@ final class SeatImageCache {
     /// 三张图缓存合并出来的那一本账(见 `Design/ImageCache.swift`)——
     /// ⚠️ 老实现里有个**真 bug**:`inFlight` 登记之后如果变换失败就提前 return ⇒ 那扇窗永久卡在
     ///    "正在准备" ⇒ 托底图再也不出来 ✗。通用实现里释放只有一条路 ✓
-    private let cache = ImageCache<CGWindowID, CGImage>(label: "glance.seat")
+    /// 键只有窗 id（模糊半径含屏 scale，而换屏会整本 `reset()`）—— 规则在 `GlanceCore/ImageCacheKey.swift` ✓
+    private let cache = ImageCache<UInt32, CGImage>(label: "glance.seat")
     private let ctx = CIContext(options: [.useSoftwareRenderer: false])
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
@@ -909,7 +915,7 @@ final class SeatImageCache {
         // 参数在主线程取好再闭包捕获(后台读这些全局量 = 数据竞争 ✗)
         let radius = PanelMetrics.lightsBlur * PanelScreen.scale
         let ctx = self.ctx
-        return cache.image(for: wid) { Self.blur(cg, radius: radius, ctx: ctx) }
+        return cache.image(for: ImageCacheKey.seat(windowID: wid)) { Self.blur(cg, radius: radius, ctx: ctx) }
     }
 
     /// 预热(面板打开时后台把整个环的窗都算一遍 ⇒ hover 时一次都不用算)
@@ -1056,7 +1062,9 @@ final class CardImageCache {
 
     /// 与 `SeatImageCache` 同一本账(见 `Design/ImageCache.swift`)——合并前它俩是两份同形状的代码,
     /// 于是**同一个"卡在 inFlight"的 bug 被抄了两遍** ✗
-    private let cache = ImageCache<CGWindowID, Prepared>(label: "glance.cardimg")
+    /// ⚠️ 键是 **(窗 id + 像素尺寸)**，不是"只有窗 id" —— 病例见 `GlanceCore/ImageCacheKey.swift`:
+    /// 键只看 id 时，卡片尺寸上限/缩放一变就**永远命中旧尺寸那张图** ✗
+    private let cache = ImageCache<ImageCacheKey.Card, Prepared>(label: "glance.cardimg")
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
     func reset() { cache.reset() }
@@ -1066,9 +1074,10 @@ final class CardImageCache {
         guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let scale = PanelScreen.scale                                    // 主线程取 ✓
         // 目标尺寸由调用方给(方案 A:小窗不放大 ⇒ 目标可能小于卡片框)
-        let pxW = max(2, Int((target.width * scale).rounded()))
-        let pxH = max(2, Int((target.height * scale).rounded()))
-        return cache.image(for: wid) {
+        // 像素尺寸与"钥匙"都由纯函数算 ⇒ 两者不会各算一套(那是这类 bug 的温床 ✗)
+        let key = ImageCacheKey.card(windowID: wid, target: target, scale: scale)
+        let pxW = key.pixelWidth, pxH = key.pixelHeight
+        return cache.image(for: key) {
             var out: CGImage?
             if let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
                                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
