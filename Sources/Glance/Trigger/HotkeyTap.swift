@@ -766,8 +766,9 @@ final class ThreeFingerTap {
     /// **漏查了一个键**:`TrackpadThreeFingerDrag = 1`(**三指拖移开着**,用户天天在用:拖窗、选字)。
     /// 于是"拖窗"的那种快速三指被我们判成了轻点 ⇒ 用户实报「三指滑动改坏了」。
     /// 教训:查"系统占用了什么手势"时,要把**拖移(Drag)**和**轻扫(Swipe)**两类键都过一遍。
-    static let maxMove: Float = 0.03
-    static let maxDuration: Double = 0.30
+    /// 阈值**只有一处**(`TapRound.Policy`)✓ —— App 侧不再抄第二份 ✗
+    static var maxMove: Float { TapRound.Policy.standard.maxMove }
+    static var maxDuration: Double { TapRound.Policy.standard.maxDuration }
 
     private var started = false
     /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
@@ -777,308 +778,65 @@ final class ThreeFingerTap {
     /// 用户连着试几次的时候,面板被反复拆建,读起来就是"闪"
     private var lastTapAt: CFAbsoluteTime = 0
 
-    /// **一次按压**从第一帧触点到全部抬起的完整账本。
+    /// **一次按压**的账本 —— 判卷本身已经搬到 `GlanceCore.TapRound` ✓。
     ///
-    /// 2026-09-18 用户实报「三指唤起了未启动, 四指失灵」—— 日志铁证:
-    /// ```text
-    /// [指点按] 5 指 154ms 位移 norm=0.0035 → 不动作     ← 干净的四指点按,被数成 5
-    /// [指点按] 四指 113ms 位移 norm=0.0060 → 进未启动环   ← 三指点按,被数成 4
-    /// ```
-    /// **每个触点都被多数了 +1**:掌缘/拇指根搭在板上也被 `state == 4` 计进手指数。
-    /// T91 把计数从"抬手瞬间的手指数"改成"整轮 maxTouches"(治四指慢落误判)之后,
-    /// 这类**搭着的杂触点**就再也躲不掉计数了 —— 三指→4(开错环)、四指→5(不动作)。
-    /// 解法用的是这份数据里早就躺着、只是没读的信号:`size` / `majorAxis`(触点面积/长轴)
-    /// —— 指尖小、掌大,这是系统手势识别同款的第一道掌缘豁免。
+    /// ## 为什么搬（2026-09-22）
     ///
-    /// 阈值纪律照旧:**先量后定**。真值会记进 [指点按] 日志(size=/major= 字段),
-    /// 第一版先放很宽(只挡明显是掌的),宁可漏挡也别把真手指挡掉 —— 漏挡 = 病复发,可再调;
-    /// 误挡 = 真四指永远唤不醒,更难查。
+    /// 同一个"**账本生命周期没写清楚**"的病犯了**四次**:11 指 · 幽灵触点 · 单指数成三指 · 拖拽误判。
+    /// 每次只能靠用户"用手指数"/事后翻日志来发现 ✗ —— 因为判卷是**纯逻辑**,
+    /// 却被埋在 `dlopen` 回调的 `mutating` 字段里,没有一处能断言 ✓。
+    /// ⇒ 照 ADR-0015 的三条判据(纯 + 常改 + 曾经错过,全占)抽成 `TapRound` + 单测 ✓
+    ///
+    /// 这里只留**基础设施**该干的事:
+    /// 把 `MultitouchSupport` 的原始 struct 解码成 `TapRound.Contact`、把"卡死自愈"翻译成一行日志。
+    /// **一行判断都不做** ✓
     struct Press {
-        /// 掌缘豁免线(第一版,待真值收紧):长轴 ≥22 或面积 ≥4.5 的触点不计入手指数
-        static let palmMajorAxis: Float = 22
-        static let palmSize: Float = 4.5
+        typealias Outcome = TapRound.Outcome
+        /// 阈值唯一来源(`TapRound.Policy`)✓
+        static var policy: TapRound.Policy { .standard }
+        static var maxMove: Float { policy.maxMove }
+        static var maxDuration: Double { policy.maxDuration }
 
-        // ★★ 2026-09-22 照 **LumaRing** 的 `TapRecognizer.c` 补三条纪律(用户指向了那个实现 ✓):
-        //   LumaRing 判 tap 的核心是 **只在"全部手指离开"那一帧 fire** ✓,外加三条窗口;
-        //   我们的病恰恰是"手指还在板上就开火"(pressFireIfDue ✗)⇒ 拖/滑全被误判 ✓
-        /// ① 帧间隔上限:超了就**直接拒**。LumaRing 原文注释:"A missing/reordered frame
-        ///    could hide a swipe" ✓ —— 用户机器日志里满是"账本未收口 ⇒ 强制重置" ⇒ 丢帧是常态 ✗,
-        ///    而丢帧会让**位移量不出来**(位移是"每根手指相对它落点的距离" ✓ 中间帧丢了就偏小 ✗)
-        static let maxFrameGap: Double = 0.12
-        /// ② 抬手窗口:第一根手指离开后,其余必须在这么久内抬完(LumaRing:4 指 0.10s / 3 指 0.16s ✓)
-        ///    —— 这正是用户那句话:"点按有一个**明确的手指离开过程**" ✓;拖拽是慢慢松开的 ✗
-        static let maxReleaseSpan: Double = 0.12
-        /// ③ "按住"的时长上限:四指按住(不移动)也算一次意图 ⇒ 抬手指时判它 ✓
-        ///    (0.45s 起算按住的资格;上限 1.2s —— 再长多半是手搭在板上 ✓)
-        static let pressHoldRange: ClosedRange<Double> = 0.45...1.2
+        private var tracker = TapRound.Tracker()
+        private var lastSnapshot = TapRound.Snapshot()
 
-        /// 上一帧的时间(判丢帧 ✓)
-        var lastFrameAt: Double = 0
-        /// 这一轮里出现过 > maxFrameGap 的帧间隔 ⇒ 直接拒(位移不可信 ✓)
-        var sawFrameGap = false
-        /// 第一根手指离开的时刻(判抬手窗口 ✓)
-        var firstLiftAt: Double = 0
-        /// 上一帧"在板上"的触点 id 集合(用来发现"有人抬手了" ✓)
-        var activeIDs: Set<Int32> = []
+        /// 量尺(进日志):本轮见过的 state 档
+        var statesSeen: [Int32] { lastSnapshot.statesSeen }
+        var pressFired: Bool { tracker.hasFired }
 
-        /// ★ 账本卡死自愈上限(2026-09-20「三指四指又失效了」的病根):
-        /// 账本只在"收口帧"判卷,而收口条件一旦满足不了,账本就**无限期撑开** ——
-        /// 之后所有触摸全被吸进同一条账本,手指数/时长/位移全爆表,判卷永远失败,
-        /// 而且**一条日志都不留**(判卷不跑 = 沉默失效)。实锤:
-        /// ```text
-        /// [5049394ms] [指点按] 5 指(豁免掌 1) 2941951ms … size=4.6 → 不动作
-        /// ```
-        /// 一条按压持续 **49 分钟**(size=4.6 = 掌缘):掌搭在板上打字,收口帧永远等不来。
-        /// 1.0s = 点按 ≤0.30s、按压触发 ≤0.25s 之后的三倍余量 —— 真手势到不了 1s 还不收口。
-        static let stuckLedgerAfter: Double = 1.0
-
-        private(set) var maxTouches = 0
-        /// **去重手指 id 数**(2026-09-18 补,治「不灵敏」):极快的轻点(实测 ~50ms)里,
-        /// 四根手指可能**从未同帧落齐** —— 按"同帧最大手指数"就数成 2/3,判成不动作。
-        /// 每个触点有稳定 fingerId,整轮去重计数兜住"先后落、没同帧"的竞态;
-        /// 掌缘豁免的 id 不进这个集合(豁免的本意就是它不算手指)。
-        private(set) var distinctIDs: Set<Int32> = []
-        private(set) var maxNormMove: Float = 0
-        private(set) var maxAbsMove: Float = 0
-        private(set) var palmCount = 0           // 被豁免的触点数(记账,不计数)
-        private(set) var maxSeenSize: Float = 0  // 量尺:本轮真实触点的最大面积/长轴
-        private(set) var maxSeenMajor: Float = 0
-        private(set) var statesSeen: Set<Int32> = []   // 本轮见过的 state 档(判"漏在哪档"的量尺)
-        private var beganAt: CFAbsoluteTime = 0
-        private var pressActive = false
-        /// 本轮**真手指**是否已经落板(掌不算)。掌先落时表不掐,真手指落的这帧才掐 ——
-        /// 掌缘搭着打字时,"搭着"的时长不该算进点按时长
-        private var sawRealTouch = false
-        /// ★ **手指数最近一次变多**的时刻(2026-09-22 修「过了一夜三指/四指又换不起来」)。
-        ///
-        /// 病例:日志里所有 3/4 指点按都被同一条判据否掉,而量到的时长是 **302 / 330 / 391 / 511 / 555 / 615ms** ✗
-        ///   —— 用户只是"轻点",但 `beganAt` 是"**第一根手指**落板"那一刻,而 3/4 指是**先后落齐**的
-        ///   (本文件自己的注释都写着"先落 3 根、第 4 根 40ms 后到是常态")。
-        ///   ⇒ "落得慢"的轻点被算成 300ms+ ⇒ 被 `maxDuration(0.30s)` 一刀切掉 ✗
-        /// 口径:**点按的"按住时长"应当从"手指落齐"那一刻起算** —— 手指还在往上加的时候,
-        ///   用户还没"按完"这个手势,那段时间不该计入。手指每变多一次,这里就重掐一次表。
-        private var countedSince: CFAbsoluteTime = 0
-        private var firstNorm: [Int32: MTPoint] = [:]
-        private var firstAbs: [Int32: MTPoint] = [:]
-
-        /// 判卷结果。
-        enum Outcome {
-            case fireThree(held: Double, norm: Float, abs: Float)
-            case fireFour(held: Double, norm: Float, abs: Float)
-            case slide(norm: Float)                  // 位移过大 = 滑动,让给系统
-            case rejected(String)                    // 不动作(带原因,进日志)
-        }
-
-        /// 喂一帧。返回"当前正在触摸的**真手指**数"(>0 = 这一轮还没结束)。
-        /// 线程纪律:只在 MultitouchSupport 的回调线程跑,只碰自己的标量;判卷在抬手帧同步出。
+        /// 喂一帧,返回"此刻在板上的真手指数"(0 = 全部离开 ⇒ 调用方去判卷 ✓)
         mutating func feed(nFingers: Int, data: UnsafeMutableRawPointer?) -> Int {
-            var touching = 0
-            var palmTouching = 0
-            // ★ 卡死自愈:账本超过 stuckLedgerAfter 还没收口 ⇒ 整本作废重来。
-            //   (丢收口帧/幽灵触点常驻都会把账本撑成毒账本 —— 见 stuckLedgerAfter 的病历)
-            if pressActive, CFAbsoluteTimeGetCurrent() - beganAt > Self.stuckLedgerAfter {
-                let stale = CFAbsoluteTimeGetCurrent() - beganAt
-                pressActive = false
-                pressFired = false
-                maxTouches = 0; distinctIDs.removeAll()
-                maxNormMove = 0; maxAbsMove = 0
-                palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
-                statesSeen.removeAll(); sawRealTouch = false
-                firstNorm.removeAll(); firstAbs.removeAll()
-                DispatchQueue.main.async {
-                    glog(String(format: "[指点按] 账本 %.1fs 未收口 ⇒ 强制重置(丢帧/幽灵触点自愈)", stale))
-                }
+            let now = CFAbsoluteTimeGetCurrent()
+            let stale = tracker.resetIfStuck(now: now)
+            if stale > 0 {
+                glog(String(format: "[指点按] 账本 %.1fs 未收口 ⇒ 强制重置(丢帧/幽灵触点自愈)", stale))
             }
-            // ★ 帧间隔(照 LumaRing:丢帧 ⇒ 位移不可信 ⇒ 这轮直接拒)
-            let frameNow = CFAbsoluteTimeGetCurrent()
-            if pressActive, lastFrameAt > 0, frameNow - lastFrameAt > Self.maxFrameGap {
-                sawFrameGap = true
-            }
-            lastFrameAt = frameNow
+            var contacts: [TapRound.Contact] = []
             if let data, nFingers > 0 {
                 for i in 0..<nFingers {
                     let f = data.assumingMemoryBound(to: Finger.self)[i]
-                    // 1–4 = 在板上(落板全过程),5–7 = 离板。
-                    // (state 记账保留:失败日志自答"漏在哪档")
-                    guard f.state >= 1 && f.state <= 4 else { continue }
-                    statesSeen.insert(f.state)
-                    // ★★ 跟踪键必须是 **identifier**(每触点唯一流水号),不是 fingerId!
-                    //   fingerId 是手内槽位号(拇指 0/食指 1/中指 2…),四指同点时槽位撞号,
-                    //   去重只剩 2–3 个 —— 这就是「四指十次唤不醒七次」的全部真相。
-                    //   口径对齐 LumaRing:LRContact.id = touches[j].identifier(MIT)。
-                    let id = f.identifier
-                    // 掌缘豁免:大触点不计入手指数(位移照记 —— 掌动了就是真滑,该让给系统)
-                    let isPalm = f.size >= Self.palmSize || f.majorAxis >= Self.palmMajorAxis
-                    if isPalm { palmTouching += 1 } else { touching += 1; distinctIDs.insert(id) }
-                    maxSeenSize = max(maxSeenSize, f.size)
-                    maxSeenMajor = max(maxSeenMajor, f.majorAxis)
-                    if let p0 = firstNorm[id] {
-                        let dx = Double(f.normalized.pos.x - p0.x), dy = Double(f.normalized.pos.y - p0.y)
-                        maxNormMove = max(maxNormMove, Float((dx * dx + dy * dy).squareRoot()))
-                    } else {
-                        firstNorm[id] = f.normalized.pos
-                    }
-                    if let p0 = firstAbs[id] {
-                        let dx = Double(f.absolute.pos.x - p0.x), dy = Double(f.absolute.pos.y - p0.y)
-                        maxAbsMove = max(maxAbsMove, Float((dx * dx + dy * dy).squareRoot()))
-                    } else {
-                        firstAbs[id] = f.absolute.pos
-                    }
+                    contacts.append(TapRound.Contact(
+                        id: f.identifier,
+                        normalized: TapRound.Point(Double(f.normalized.pos.x), Double(f.normalized.pos.y)),
+                        absolute: TapRound.Point(Double(f.absolute.pos.x), Double(f.absolute.pos.y)),
+                        size: f.size, majorAxis: f.majorAxis, state: f.state))
                 }
             }
-            // ★ 抬手时刻(照 LumaRing 的 release 窗口):本帧在板上的 id 比上帧少 ⇒ 有人抬手了
-            let nowIDs = distinctIDs
-            if pressActive, !activeIDs.isEmpty, nowIDs.count < activeIDs.count, firstLiftAt == 0 {
-                firstLiftAt = frameNow
-            }
-            activeIDs = nowIDs
-            if touching > 0 || palmTouching > 0 {
-                if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
-                    pressActive = true
-                    beganAt = CFAbsoluteTimeGetCurrent()
-                    firstNorm.removeAll(); firstAbs.removeAll()
-                    maxNormMove = 0; maxAbsMove = 0
-                    palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
-                    statesSeen.removeAll()
-                    sawRealTouch = false
-                    countedSince = 0
-                    sawFrameGap = false
-                    firstLiftAt = 0
-                    activeIDs = []
-                    // ★★ 2026-09-22 修:**本轮触点 id 集合必须在这一刻清零**(用户实报「单指单击
-                    //   怎么也唤起了」+ 日志 `三指 163ms[state 3/4] 位移 0.0021 → 唤起(钉住)`)。
-                    //   真因:`distinctIDs` 原来是**只有 `endRound()` 才清** ✗,而账本在下面两条路上
-                    //   **永远走不到 endRound**:
-                    //     ① 每帧只要还有触点就 `return touching`(不下落 ✓);
-                    //     ② 判卷前的任何 `return`(历史上那条"确认静默候选"就是如此 ✗)
-                    //   ⇒ 触点 id **跨轮累计** ⇒ 判卷的 `n = max(maxTouches, distinctIDs.count)`(:1026)
-                    //     把**一根手指**数成 3 指 ✗ ⇒ 一记普通单击就开面板 ✗
-                    //   口径:一轮 = "从第一根手指落板到全部离开";id 集合就该以这个窗口为准 ✓
-                    //   (同轮内多指先后落板仍在同一轮 ⇒ 三/四指照旧能数对 ✓)
-                    maxTouches = 0
-                    distinctIDs.removeAll()
-                }
-                if touching > 0, !sawRealTouch {
-                    // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
-                    //   2026-09-20 病例:掌搭着打字,掐表从掌落起,0.3s 上限必爆)
-                    sawRealTouch = true
-                    beganAt = CFAbsoluteTimeGetCurrent()
-                    firstNorm.removeAll(); firstAbs.removeAll()
-                    maxNormMove = 0; maxAbsMove = 0
-                    maxTouches = 0
-                }
-                if touching > maxTouches {
-                    // 手指数**变多** ⇒ 手势还没"落齐" ⇒ 重掐点按计时(见 countedSince 的病例)
-                    countedSince = CFAbsoluteTimeGetCurrent()
-                    maxTouches = touching
-                }
-                palmCount = max(palmCount, palmTouching)
-                // ★ 返回**真手指数**,不是 total:掌还搭着不该挡收口 ——
-                //   (2026-09-20 病例:收口条件曾是"total == 0",掌缘搭板 = 账本永不收口,
-                //   后续三/四指点按全部被无声吞掉,这正是「三指四指又失效了」的主病根)
-                return touching
-            }
-            pressActive = false
-            return 0
+            let n = tracker.feed(TapRound.Frame(contacts: contacts, time: now))
+            lastSnapshot = tracker.snapshot(now: now)
+            return n
         }
 
-        private(set) var pressFired = false   // 本轮已经"按压触发"过(抬手后不再按点按重复生效)
+        /// 判卷(**先判卷,再 `endRound()`** —— 顺序反了就是拿空账本判 ✗)
+        func judge() -> Outcome { tracker.judge(now: CFAbsoluteTimeGetCurrent()) }
 
-        /// **一轮结束:清账**(2026-09-22 病例)。
-        ///
-        /// 病例:掌搭在板上时,`feed` 走 `return touching` 那条(=`0`,于是**判卷照跑** ✓),
-        /// 但 `pressActive` **留着** ✗ ⇒ 账本不重置 ⇒ `distinctIDs` **跨好几次点按累计** ⇒
-        /// 手指数被算成 **11** ✗ ⇒ "只认 3/4 指"永不成立 ⇒ **手势完全失效** ✗
-        /// (以前靠"中途开火"那条不需要收口的路径撑着 ✓ —— 一删它就全露出来 ✓)
-        /// 口径:判完卷立刻清,好让**下一次真实落指**从零开始 ✓
         mutating func endRound() {
-            pressActive = false
-            pressFired = false
-            maxTouches = 0; distinctIDs.removeAll()
-            maxNormMove = 0; maxAbsMove = 0
-            palmCount = 0; maxSeenSize = 0; maxSeenMajor = 0
-            statesSeen.removeAll(); sawRealTouch = false
-            firstNorm.removeAll(); firstAbs.removeAll()
-            countedSince = 0
-            sawFrameGap = false; firstLiftAt = 0; activeIDs = []
+            tracker.endRound()
+            lastSnapshot = TapRound.Snapshot()
         }
 
-        /// **按压触发**(2026-09-18 用户提议:「给四指加上点按 + 按压」):四根手指齐压
-        /// ≥0.25s 且几乎没动 ⇒ **当场生效**,不必抬手。点按失手时的兜底 —— 按住的手指
-        /// 有几十帧把 identifier 记全,不存在"没同帧落齐"的竞态。
-        /// ★ **必须同帧 4 指**(2026-09-19 修「三指变成未启动环」):曾经只看
-        /// distinctIDs ≥ 4 —— 而 id 跨帧累计,手势落指帧相互沾边时(滚动→点按)按压
-        /// 被合并、id 累到 4,三指点按就被误当"四指按压"唤起了未启动环。
-        /// 同帧 4 指 = 真的"四根手指此刻都在板上",三指点按永远凑不齐这个条件。
-        /// 防误触其余双闸:位移 ≤ maxMove(四指滑动/捏合全被拒);0.35s 防抖在生效侧照常拦。
-        /// ⚠️ **已作废**(2026-09-22):中途开火是误触的病根 ✗ —— 保留只为留档,不要再调用 ✓
-        mutating func pressFireIfDue() -> Bool {
-            guard !pressFired, maxTouches >= 4, distinctIDs.count >= 4,
-                  // ★ 2026-09-22 由 0.25s 拉长到 0.45s(用户实报「四指下滑也会唤起」):
-                  //   这条是"四指按住"的兜底路径 ✓,而**四指下滑的前 0.25s 就是"四指按住"** ✗ ——
-                  //   下滑是**加速**的 ⇒ 0.25s 时位移还没到 maxMove 门槛 ⇒ 位移门形同虚设 ✗
-                  //   时长拉长后,下滑到 0.45s 早已越过门槛(位移门就能拦住它 ✓)
-                  CFAbsoluteTimeGetCurrent() - beganAt >= 0.45,
-                  maxNormMove <= ThreeFingerTap.maxMove else { return false }
-            pressFired = true
-            return true
-        }
-
-        /// 全部抬起 ⇒ 判卷。
-        /// T91:按 **maxTouches**(整轮最大值)而不是抬手瞬间的手指数 —— 四根手指不可能
-        /// 同一帧落齐(先落 3 根、第 4 根 40ms 后到是常态),只看当前帧会把"四指慢落"误判成三指。
-        func judge() -> Outcome {
-            if pressFired { return .rejected("") }   // 按压已生效,抬手不再按点按重复计
-            // ★ 时长从"**手指落齐**"起算,不是从"第一根手指落板"起算(见 countedSince 的病例)
-            let held = CFAbsoluteTimeGetCurrent() - (countedSince > 0 ? countedSince : beganAt)
-            let heldTotal = CFAbsoluteTimeGetCurrent() - beganAt   // 只进日志,便于对账
-            // 手指数 = max(同帧最大, 去重 id 数) —— 前者管"同帧落齐"的常态,后者兜"极快轻点
-            // 从未同帧"的竞态(实测 ~50ms 的四指点按曾被数成 2)
-            let n = max(maxTouches, distinctIDs.count)
-            // <30ms = 瞬时毛刺(LumaRing 同款下限):一次真实的四指轻点至少也要 30ms+
-            guard held >= 0.03 else { return .rejected("") }
-            guard (n == 3 || n == 4), held <= ThreeFingerTap.maxDuration else {
-                // 不匹配也要留账(要能分辨"0 是干净"还是"0 是没看见");带上豁免账与量尺。
-                // states 供"漏在哪一档"对账:真手指若整轮只报了 1/2,这里一眼可见
-                if n >= 2 || palmCount > 0 {
-                    let st = statesSeen.sorted().map(String.init).joined(separator: "/")
-                    return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且落齐后 ≤%.0fms;整轮 %.0fms)",
-                                            n, palmCount, st, held * 1000, maxNormMove, maxAbsMove,
-                                            maxSeenSize, maxSeenMajor, ThreeFingerTap.maxDuration * 1000, heldTotal * 1000))
-                }
-                return .rejected("")   // 一指的普通点按:不进账
-            }
-            // ★ LumaRing 的三条纪律(2026-09-22 补):
-            //   ① 丢帧 ⇒ 位移不可信 ⇒ 拒(LumaRing:"missing frame could hide a swipe" ✓)
-            if sawFrameGap {
-                return .rejected(String(format: "%d 指 帧间隔 >%.0fms(丢帧 ⇒ 位移不可信)⇒ 不动作",
-                                        n, Self.maxFrameGap * 1000))
-            }
-            //   ② 抬手窗口:第一根手指离开后,其余要在 %.0fms 内抬完 ——
-            //      "点按一定有明确的手指离开过程"(用户原话 ✓);慢慢松开的是拖拽 ✗
-            let releaseSpan = firstLiftAt > 0 ? CFAbsoluteTimeGetCurrent() - firstLiftAt : 0
-            if releaseSpan > Self.maxReleaseSpan {
-                return .rejected(String(format: "%d 指 抬手用了 %.0fms(>%.0fms)⇒ 不是点按",
-                                        n, releaseSpan * 1000, Self.maxReleaseSpan * 1000))
-            }
-            //   ③ 位移(照旧)
-            if maxNormMove > ThreeFingerTap.maxMove {
-                return .slide(norm: maxNormMove)
-            }
-            //   ④ "按住"的时长窗口:超过点按上限但落在 pressHoldRange 内,且几乎没动 ⇒ 算"按住"✓
-            //      (原来这条是**中途开火**的 ✗ ⇒ 现在也只在抬手帧认领 ✓)
-            if held > ThreeFingerTap.maxDuration {
-                guard n == 4, Self.pressHoldRange.contains(held) else {
-                    return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",
-                                            n, held * 1000, ThreeFingerTap.maxDuration * 1000,
-                                            Self.pressHoldRange.lowerBound, Self.pressHoldRange.upperBound))
-                }
-                return .fireFour(held: held * 1000, norm: maxNormMove, abs: maxAbsMove)
-            }
-            let heldMs = held * 1000
-            return n == 4 ? .fireFour(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
-                          : .fireThree(held: heldMs, norm: maxNormMove, abs: maxAbsMove)
-        }
+        /// 标记"本轮已生效"(按压触发那条路用;抬手不再按点按重复计)
+        mutating func markFired() { tracker.markFired() }
     }
 
     func start() {
