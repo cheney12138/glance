@@ -141,7 +141,6 @@ final class PanelController: ObservableObject {
         let p = NSEvent.mouseLocation
         guard glass.contains(p) else { return }
         let (rows, cols) = launchLayout(count: launchables.count)
-        let pitch = PanelMetrics.pitch
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
@@ -1299,9 +1298,13 @@ final class PanelController: ObservableObject {
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { note in
-                guard let w = note.object as? NSWindow, w is GlancePanel else { return }
-                let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
-                glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
+                // `queue: .main` 只保证"送到主队列";闭包本身是 @Sendable ⇒
+                // 读主线程隔离状态必须**显式**声明(否则两条 warning ✗)
+                MainActor.assumeIsolated {
+                    guard let w = note.object as? NSWindow, w is GlancePanel else { return }
+                    let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
+                    glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
+                }
             }
         }
     }

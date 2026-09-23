@@ -184,8 +184,8 @@ struct GlanceApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [panelController] in
             panelController.prewarmPanels()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [panelController] in
-            ThumbnailRefresher.shared.coldStartSweep()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            ThumbnailRefresher.shared.coldStartSweep()   // 这一支用不到 panelController ⇒ 别写 capture ✗
         }
         // 诊断钩子(自动化复现用,平时不生效):`open … --args -debug.autoOpenSettings 1`
         // 启动后自动开一次设置窗 —— 复现"设置窗关闭后 Glance 仍在环里"的病例
