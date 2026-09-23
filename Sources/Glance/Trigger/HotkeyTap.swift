@@ -934,7 +934,6 @@ final class ThreeFingerTap {
             activeIDs = nowIDs
             if touching > 0 || palmTouching > 0 {
                 if !pressActive {                    // 按压起点:清上一轮的运动账,掐表
-                    ThreeFingerTap.roundToken &+= 1   // ★ 又落指了 ⇒ 作废挂着的候选判卷 ✓
                     pressActive = true
                     beganAt = CFAbsoluteTimeGetCurrent()
                     firstNorm.removeAll(); firstAbs.removeAll()
@@ -951,7 +950,7 @@ final class ThreeFingerTap {
                     //   真因:`distinctIDs` 原来是**只有 `endRound()` 才清** ✗,而账本在下面两条路上
                     //   **永远走不到 endRound**:
                     //     ① 每帧只要还有触点就 `return touching`(不下落 ✓);
-                    //     ② 候选判卷被"确认静默"作废时直接 `return`(见 settleWindow 病例)✗
+                    //     ② 判卷前的任何 `return`(历史上那条"确认静默候选"就是如此 ✗)
                     //   ⇒ 触点 id **跨轮累计** ⇒ 判卷的 `n = max(maxTouches, distinctIDs.count)`(:1026)
                     //     把**一根手指**数成 3 指 ✗ ⇒ 一记普通单击就开面板 ✗
                     //   口径:一轮 = "从第一根手指落板到全部离开";id 集合就该以这个窗口为准 ✓
@@ -1113,21 +1112,6 @@ final class ThreeFingerTap {
              + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
     }
 
-    /// **全抬手之后先确认静默**(2026-09-22 用户实报「3 指还是误触了, 手没有离开触摸板」)。
-    ///
-    /// 病例(日志铁证):
-    /// ```
-    /// [指点按] 三指 105ms[state 4] 位移 norm=0.0014 → 唤起(钉住)   ← 判卷认为"全抬手"
-    /// [指点按] ⚠️ 生效后 250ms 指针又移动 33pt                      ← 手其实还在板上
-    /// ```
-    /// 真因:三指拖拽时手指是**滚动接触** ⇒ 框架会**瞬时报一次"全离板"** ✗;
-    ///   而且那一瞬间触点 id 已经换了 ⇒ 位移基线被重置 ⇒ 量出来只有 0.0014(像轻点 ✗)。
-    /// ⇒ 口径:全抬手后**不立刻判**,先等一个"确认静默"窗口;窗口内**又落指** ⇒ 这次候选作废 ✓
-    ///   (真轻点那下不会在 70ms 内再落指 ✓ ⇒ 代价只是判卷晚 70ms,人感觉不到 ✓)
-    static let settleWindow: TimeInterval = 0.07
-    /// 候选令牌:每次"落指"都 +1 ⇒ 延迟判卷发现令牌变了就作废 ✓
-    static var roundToken: Int = 0
-
     /// **起拖就撤销这次唤起**(2026-09-22 用户实报「我三指拖拽窗口边框, 也唤起了面板。
     /// 已经是拖拽了, 怎么还能唤起呢」)。
     ///
@@ -1230,23 +1214,18 @@ final class ThreeFingerTap {
         //   ⚠️ 恢复记录(2026-09-22):我删"中途开火"那一块时,**把这一段一起切掉了** ✗
         //      ⇒ `judge()` 一夜之间没有任何调用点 ⇒ 三指点按彻底不生效 ✗
         //      (只靠"构建通过"发现不了 —— 教训:**删块之后必须回读调用点** ✓)
-        // ★★ 全抬手 ≠ 真的松手(见 settleWindow 的病例):先记一个候选,等确认静默再判 ✓
-        ThreeFingerTap.roundToken &+= 1
-        let token = ThreeFingerTap.roundToken
+        // ⚠️ 2026-09-22 撤掉"确认静默 70ms 候选"✗(它建立在**错前提**上):
+        //   那版以为"抬手后会有 70ms 安静" ✓,实测这台触控板**几乎每帧都有触点**
+        //   (休息的手指/幽灵触点)⇒ 候选**永远**被作废 ⇒ 判卷一次都没跑 ⇒ 手势全灭 ✗
+        //   (用户实报「你治好什么了, 手势不生效了... 确实不会误触了」——
+        //    "不误触"是因为**什么都不触发** ✗,日志:开火 0 / 不动作 0 / 账本 1.0s 未收口)
+        //   ⇒ 恢复"抬手帧当场判" ✓;单指误触由**起点清 id**那条真修复挡着 ✓
         let states = tap.press.statesSeen.sorted().map(String.init).joined(separator: "/")
-        DispatchQueue.main.asyncAfter(deadline: .now() + ThreeFingerTap.settleWindow) {
-            // 这 70ms 内若又落指(roundToken 变了)⇒ 手还在板上 ⇒ 这次候选作废 ✓
-            guard token == ThreeFingerTap.roundToken else {
-                // 有证据才说话(不是每局都刷 ✓):说明"全抬手"是假的 ⇒ 这一发被判为拖拽/滚动接触 ✓
-                tap.press.endRound()   // ★ 顺手收干净,别把账留给下一次落指 ✓(见起点分支的病历)
-                glog("[指点按] 抬手候选作废(70ms 内又落指 ⇒ 手还在板上,不是轻点)")
-                return
-            }
+        let outcome = tap.press.judge()          // 先判卷(要用账本 ✓)
+        tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
+        DispatchQueue.main.async {
             let tap = ThreeFingerTap.shared
-            let outcome = tap.press.judge()          // 先判卷(要用账本 ✓)
-            tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
             let now = CFAbsoluteTimeGetCurrent()
-            _ = states
             switch outcome {
             case let .fireThree(held, norm, absMove):
                 guard now - tap.lastTapAt > 0.35 else {
