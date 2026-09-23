@@ -794,7 +794,8 @@ final class PanelController: ObservableObject {
         // 这也正是这个仓库最早的口径(见 PanelView 顶部注释:「⌘Tab 是效率动作, 面板要"已经在"」)——
         // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
         contentEntryRise = 0   // 不再是 entryFloatDistance
-        trace("[T6] 入场:上浮" + (willSlide
+        // 把**这一次用的弹簧档位**写进日志 ✓(不然试完分不清刚才那个是哪个 ✗)
+        trace("[T6] 入场:上浮(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 

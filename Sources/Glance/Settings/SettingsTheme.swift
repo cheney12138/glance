@@ -191,7 +191,9 @@ enum SettingsFont {
 /// SwiftUI 的过冲 `timingCurve` 不可靠,且每次打断都从零速度重起,弹簧才是"接力"。
 enum SettingsMotion {
     /// 玻璃舌头:demo 明说要复用切换器那套"滑动玻璃舌头"机制 → 直接用同一颗弹簧
-    static let puck = PanelMotion.slide
+    /// ⚠️ 用 computed 而不是 `static let`:后者会在**第一次读的时候**把当时的弹簧固定下来 ✗
+    /// (试档位时设置面板里的演示 puck 会不跟着变 ✓)
+    static var puck: Animation { PanelMotion.slide }
     /// 开关拨杆(demo .22s 的轻过冲)
     static let knob = Animation.spring(response: 0.22, dampingFraction: 0.72)
     /// 纯状态色过渡(demo 的 `.2s ease`)
