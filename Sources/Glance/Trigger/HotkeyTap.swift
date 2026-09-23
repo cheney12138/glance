@@ -946,6 +946,18 @@ final class ThreeFingerTap {
                     sawFrameGap = false
                     firstLiftAt = 0
                     activeIDs = []
+                    // ★★ 2026-09-22 修:**本轮触点 id 集合必须在这一刻清零**(用户实报「单指单击
+                    //   怎么也唤起了」+ 日志 `三指 163ms[state 3/4] 位移 0.0021 → 唤起(钉住)`)。
+                    //   真因:`distinctIDs` 原来是**只有 `endRound()` 才清** ✗,而账本在下面两条路上
+                    //   **永远走不到 endRound**:
+                    //     ① 每帧只要还有触点就 `return touching`(不下落 ✓);
+                    //     ② 候选判卷被"确认静默"作废时直接 `return`(见 settleWindow 病例)✗
+                    //   ⇒ 触点 id **跨轮累计** ⇒ 判卷的 `n = max(maxTouches, distinctIDs.count)`(:1026)
+                    //     把**一根手指**数成 3 指 ✗ ⇒ 一记普通单击就开面板 ✗
+                    //   口径:一轮 = "从第一根手指落板到全部离开";id 集合就该以这个窗口为准 ✓
+                    //   (同轮内多指先后落板仍在同一轮 ⇒ 三/四指照旧能数对 ✓)
+                    maxTouches = 0
+                    distinctIDs.removeAll()
                 }
                 if touching > 0, !sawRealTouch {
                     // ★ 真手指此刻才第一次落板:表从**这一帧**重掐(掌先落的不计时 ——
@@ -1226,6 +1238,7 @@ final class ThreeFingerTap {
             // 这 70ms 内若又落指(roundToken 变了)⇒ 手还在板上 ⇒ 这次候选作废 ✓
             guard token == ThreeFingerTap.roundToken else {
                 // 有证据才说话(不是每局都刷 ✓):说明"全抬手"是假的 ⇒ 这一发被判为拖拽/滚动接触 ✓
+                tap.press.endRound()   // ★ 顺手收干净,别把账留给下一次落指 ✓(见起点分支的病历)
                 glog("[指点按] 抬手候选作废(70ms 内又落指 ⇒ 手还在板上,不是轻点)")
                 return
             }
