@@ -42,6 +42,21 @@ final class TapRoundTests: XCTestCase {
          frame(t0 + 0.04, c(ids.0, p.0, p.1), c(ids.1, p.0 + 0.02, p.1), c(ids.2, p.0 + 0.04, p.1))]
     }
 
+    /// 按**真实节奏**按住三指到 `end`(约 40ms 一帧 —— 触控板的实际帧率 ✓)
+    /// ⚠️ 写测试时的坑:我第一版只喂"落下"和"抬起"两帧(隔 160ms)⇒ 被判`帧间隔 >120ms` ✗
+    ///    —— 那条规则是对的(丢帧时位移不可信 ✓),**不真实的测试才会被它挡** ✓
+    private func heldThree(t0: Double, until end: Double,
+                          ids: (Int32, Int32, Int32) = (11, 12, 13)) -> [TapRound.Frame] {
+        var out = threeFingers(t0: t0, ids: ids)
+        var t = t0 + 0.04
+        while t < end - 0.001 {
+            out.append(frame(t, c(ids.0, 0.5, 0.5), c(ids.1, 0.52, 0.5), c(ids.2, 0.54, 0.5)))
+            t += 0.04
+        }
+        out.append(frame(end))
+        return out
+    }
+
     // MARK: ① 三次翻车：单指不该被数成三指
 
     /// 病例（2026-09-22 用户实报「我刚才单指单击怎么也唤起了... 这肯定不对啊」）：
@@ -86,7 +101,7 @@ final class TapRoundTests: XCTestCase {
     func testThreeFingerTapFires() {
         var frames = threeFingers(t0: 1.0)
         frames.append(frame(1.10))                            // 全部离开那一帧
-        guard case .fireThree(let held, _, _) = run(frames) else { return XCTFail("三指轻点应当生效") }
+        guard case .fireThree(let held, _, _, _, _) = run(frames) else { return XCTFail("三指轻点应当生效") }
         XCTAssertGreaterThan(held, 30)                        // ≥ minDuration
         XCTAssertLessThanOrEqual(held, 300)
     }
@@ -189,7 +204,10 @@ final class TapRoundTests: XCTestCase {
                       frame(10.20, c(1, 0.4, 0.4, size: 5.2, major: 30)),
                       frame(10.25)]
         let out = run(frames)
-        XCTAssertEqual(out, .rejected(""), "只有掌缘时不该有任何动作")
+        // ⚠️ 不写具体理由 ✗:这条测的是"**不动作**",理由文案会随规则细化而变 ✓
+        // (2026-09-22 我给时长下限加了理由 ⇒ 原来断言 `rejected("")` 当场变红 ✓ ——
+        //  这正是它该有的样子:文案一变就该有人看一眼 ✓ 但不该把"理由"本身钉死 ✓)
+        guard case .rejected = out else { return XCTFail("只有掌缘时不该有任何动作, 实际:\(out)") }
     }
 
     func testStuckLedgerSelfHeals() {
@@ -208,5 +226,51 @@ final class TapRoundTests: XCTestCase {
         var tr = TapRound.Tracker()
         XCTAssertEqual(tr.feed(frames[0]), 0, "离板档不算在板上")
         XCTAssertEqual(tr.feed(frames[1]), 0)
+    }
+    // MARK: ⑥ 三指误触(2026-09-22 实报:回复消息时就弹出来了)
+
+    /// 现场(日志 `[404388ms]`):`三指 60ms[state 4] 位移 norm=0.0018 abs=0.3 → 唤起` ✓
+    /// 位移几乎为零、时长 60ms ⇒ 在**下限 30ms** 的口径里它**就是**一记标准点按 ✓
+    /// ⇒ 判卷没写错;错的是"这种形状也可能是无意的一搭" ✓ 所以下限要做成**可试档位** ✓
+    func testSixtyMillisecondStillTapFiresUnderDefaultFloor() {
+        let frames = heldThree(t0: 0, until: 0.10)               // 落齐(0.04)后 60ms 抬起
+        guard case .fireThree = run(frames) else { return XCTFail("默认下限下它应当生效 —— 这正是那天误触的形状") }
+    }
+
+    /// 抬下限必须能挡住那一记(档位的效果要可断言 ✓)
+    func testRaisingFloorRejectsTheSixtyMillisecondMisfire() {
+        var p = TapRound.Policy.standard
+        p.minDuration = 0.08
+        let frames = heldThree(t0: 0, until: 0.10)
+        guard case let .rejected(reason) = run(frames, policy: p) else { return XCTFail("抬下限后必须被挡") }
+        XCTAssertTrue(reason.contains("时长"), "理由要写明是时长挡的(原来空串 ⇒ 排查时看不见 ✗): \(reason)")
+    }
+
+    /// 但抬下限**不能**把有意的轻点一起挡掉 —— 这条是档位的取舍边界(真机上调的就是这里)✓
+    func testRaisingFloorStillAcceptsNormalTaps() {
+        var p = TapRound.Policy.standard
+        p.minDuration = 0.08
+        let frames = heldThree(t0: 0, until: 0.20)               // 落齐后 160ms:正常轻点
+        let out = run(frames, policy: p)
+        guard case .fireThree = out else { return XCTFail("正常轻点不该被挡, 实际:\(out)") }
+    }
+
+    /// 起火时要带上 size/major(日志要靠它分辨"是不是巴掌缘/指节" ✓ —— 那天缺的就是这两项)
+    func testFireOutcomeCarriesContactSizeForDiagnosis() {
+        // 真实节奏 + 带 size/major(那天日志缺的就是这两项 ✓)
+        let frames = [frame(0.0, c(11, 0.5, 0.5, size: 3.1, major: 12.0)),
+                      frame(0.04, c(11, 0.5, 0.5, size: 3.1, major: 12.0),
+                                   c(12, 0.52, 0.5, size: 2.2, major: 11.0)),
+                      frame(0.08, c(11, 0.5, 0.5, size: 3.1, major: 12.0),
+                                   c(12, 0.52, 0.5, size: 2.2, major: 11.0),
+                                   c(13, 0.54, 0.5, size: 1.9, major: 10.5)),
+                      frame(0.12, c(11, 0.5, 0.5, size: 3.1, major: 12.0),
+                                   c(12, 0.52, 0.5, size: 2.2, major: 11.0),
+                                   c(13, 0.54, 0.5, size: 1.9, major: 10.5)),
+                      frame(0.18)]
+        let out = run(frames)
+        guard case let .fireThree(_, _, _, maxSize, maxMajor) = out else { return XCTFail("应当生效, 实际:\(out)") }
+        XCTAssertEqual(maxSize, 3.1, accuracy: 0.01)
+        XCTAssertEqual(maxMajor, 12.0, accuracy: 0.01)
     }
 }

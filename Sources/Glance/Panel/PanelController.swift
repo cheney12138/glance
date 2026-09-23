@@ -2668,10 +2668,15 @@ final class PanelController: ObservableObject {
         for name in [NSWorkspace.didHideApplicationNotification,
                      NSWorkspace.didUnhideApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                guard let self else { return }
-                // 在台上就顺手重枚举一次:被藏起来的 App,它的窗**还在列表里**(枚举要到下一次
-                // 重枚举才把它们除掉)⇒ 光改角标会留下几张"已经看不见的卡" ✗
-                if self.isVisible { self.refreshAfterAction() } else { self.refreshHidingMarks() }
+                // `queue: .main` 是**我们的事实**,但编译器不认 ⇒ 显式说明它 ✓
+                // (不写它会有三条 warning:读 isVisible / 调 refreshAfterAction 都算跨隔离 ✗
+                //   —— 别用"消音"绕过:那会把真正的主线程假设藏起来 ✓)
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // 在台上就顺手重枚举一次:被藏起来的 App,它的窗**还在列表里**(枚举要到下一次
+                    // 重枚举才把它们除掉)⇒ 光改角标会留下几张"已经看不见的卡" ✗
+                    if self.isVisible { self.refreshAfterAction() } else { self.refreshHidingMarks() }
+                }
             }
         }
     }

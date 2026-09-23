@@ -352,7 +352,8 @@ final class Snapshotter: ObservableObject {
             //    ⇒ 我们按"单窗"拍图,系统却把它的**子窗口一起拍进来** ✗:
             //      画面按子窗撑大 ⇒ 与我们要的尺寸/比例不符 ⇒ 多出来的地方是透明像素 ⇒ 卡片上一块黑 ✗
             //    ⇒ 明确关掉:一张卡只画这扇窗自己的内容 ✓(要的是"切换器里那张缩略图",不是"窗口全家福")
-            if #available(macOS 14.2, *) { config.includeChildWindows = false }
+            // 这里**不用**再查 14.2:外层已经是 `#available(macOS 26.0, *)`(编译器会提示恒真 ✓)
+            config.includeChildWindows = false
             return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
                 // **超时兜底**(2026-09-14 实机病):SCK 的回调**可能永远不回来** ——
                 // 而 withCheckedContinuation 会一直等,于是整批拍图卡在第一个窗上:

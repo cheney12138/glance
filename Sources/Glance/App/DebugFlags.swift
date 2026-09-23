@@ -57,6 +57,18 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugSweepDelayMs) as? Int) ?? 500
     }
 
+    /// **三/四指点按的时长下限**(毫秒,默认 30 = 原行为)。
+    ///
+    /// 病例(2026-09-22 用户「就在回复的时候, 三指误触又出现了」):日志里那次是
+    /// `三指 60ms[state 4] 位移 norm=0.0018 abs=0.3 → 唤起` ✓ —— 位移几乎为零、时长 60ms,
+    /// 在 30ms 下限的口径里**它就是**一记标准点按 ⇒ 判卷没写错 ✗
+    /// 要治的是"这种形状也可能是无意的一搭"(手指掠过触控板 ✓)⇒ 只能由用户在真机上定
+    /// "还认得出有意轻点"的下限 ⇒ 做成可试档位 ✓
+    /// ⚠️ 代价说清楚:抬下限 ⇒ **更快的轻点也会被挡** ✓ 所以它不是默认值 ✓
+    static var tapMinDurationMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinDurationMs) as? Int) ?? 30
+    }
+
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
@@ -89,7 +101,12 @@ enum DebugFlags {
     /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
     /// 常态（全关）下**一行都不打** ⇒ 不影响日志预算。
     static func reportHeavySwitchesIfNeeded() {
-        // 这个不是布尔开关(是毫秒档位),但它**改变时序** ⇒ 与重型量具同一条纪律:不许静默偏离默认 ✓
+        // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
+        // 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if tapMinDurationMs != 30 {
+            print("[⚠️ 重型开关] debug.tapMinDurationMs = \(tapMinDurationMs)ms(默认 30)—— 三/四指点按时长下限")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinDurationMs)")
+        }
         if sweepDelayMs != 500 {
             print("[⚠️ 重型开关] debug.sweepDelayMs = \(sweepDelayMs)ms(默认 500)—— 关面板预拍的推迟量")
             print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugSweepDelayMs)")
