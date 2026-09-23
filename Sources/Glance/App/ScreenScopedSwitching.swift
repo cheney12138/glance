@@ -257,11 +257,19 @@ enum MoveFocusedWindowToNextScreen {
             return
         }
         let src = screens[srcIdx], dst = screens[dstIdx]
+        // ★ 用户口径(2026-09-22):「移动过去之后能**默认撑满整个屏幕**吗, 不是全屏」
+        //   ⇒ 目标 = **目标屏的可见区**（避开菜单栏与 Dock ✓）;`.fillScreen` 是默认档 ✓
+        //   ⚠️ 这不是 macOS 全屏：不进独立 Space、不播全屏动画、也不改窗口的全屏状态 ✓
+        //   想回到"保持原尺寸只挪位置" ⇒ `ScreenMovePolicy.defaultPlacement = .keepSize` 一行 ✓
+        // ⚠️ 用**可见区**(`quartzVisibleFrame`)而不是整块屏:整块屏会把窗口送到菜单栏底下,
+        //    连标题栏都抓不到 ✗(Quartz 坐标里 y 越小越靠上 ✓)
         let target = ScreenMovePolicy.targetFrame(current: win.bounds,
-                                                 source: WindowEnumerator.quartzFrame(of: src),
-                                                 target: WindowEnumerator.quartzFrame(of: dst))
-        glog("[T33] 送屏 \(src.localizedName) → \(dst.localizedName):\(name) — \(win.title)")
-        _ = WindowFocuser.move(window: win, to: target)
+                                                 source: WindowEnumerator.quartzVisibleFrame(of: src),
+                                                 target: WindowEnumerator.quartzVisibleFrame(of: dst))
+        let fill = ScreenMovePolicy.defaultPlacement == .fillScreen
+        glog("[T33] 送屏 \(src.localizedName) → \(dst.localizedName):\(name) — \(win.title)"
+             + " \(ScreenMovePolicy.defaultPlacement.displayName)")
+        _ = WindowFocuser.move(window: win, to: target, resize: fill)
     }
 }
 

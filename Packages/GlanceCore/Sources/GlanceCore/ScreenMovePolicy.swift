@@ -31,10 +31,34 @@ public enum ScreenMovePolicy {
         }
     }
 
-    public static let defaultLanding: Landing = .relative
+    /// **搬过去之后要不要改尺寸**（2026-09-22 用户口径:「移动过去之后能默认撑满整个屏幕吗, 不是全屏」）
+    public enum Placement: String, CaseIterable {
+        /// **撑满目标屏的可见区** —— 默认 ✓。注意它是"铺满",**不是 macOS 全屏**:
+        /// 不进独立 Space、不播全屏动画、也不改窗口的"全屏"状态 ✓
+        /// (全屏是系统概念,要走 `AXFullScreen`;用户明确说了「不是全屏」✗)
+        case fillScreen
+        /// 保留原来的 pt 尺寸,只挪位置 ✓（第一版的默认;留着,一行就能切回来）
+        case keepSize
 
+        public var displayName: String {
+            switch self {
+            case .fillScreen: return "撑满屏幕"
+            case .keepSize: return "保持原尺寸"
+            }
+        }
+    }
+
+    public static let defaultLanding: Landing = .relative
+    /// 默认**撑满** ✓（用户 2026-09-22 裁定）
+    public static let defaultPlacement: Placement = .fillScreen
+
+    /// 目标 frame：
+    ///  · `.fillScreen` ⇒ **就是目标矩形本身**（可见区 ⇒ 自动避开菜单栏与 Dock ✓；位置与源尺寸无关 ✓）
+    ///  · `.keepSize`   ⇒ 尺寸不变，位置按 `landing` 算，再夹紧 ✓
     public static func targetFrame(current: CGRect, source: CGRect, target: CGRect,
+                                   placement: Placement = defaultPlacement,
                                    landing: Landing = defaultLanding) -> CGRect {
+        if placement == .fillScreen { return target }
         let size = current.size
         var origin: CGPoint
         switch landing {

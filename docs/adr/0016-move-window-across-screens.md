@@ -13,8 +13,12 @@
 
 - 对象 = `AXFocusedWindow`(当前落焦的那扇窗)—— 与面板里选中哪一格**无关** ✓
 - 目的地 = 它**现在所在屏**的下一块;单屏 ⇒ 什么都不做(记一行日志,不假装成功 ✓)
-- 尺寸不变(pt 原样送 ✓);落点 = 源屏**相对位置**等比映射(`ScreenMovePolicy.Landing.relative`)
-  ⇒ 想改成"落在目标屏正中"只改那一个常量 ✓
+- **搬完撑满目标屏的可见区**(2026-09-22 用户口径:「移动过去之后能默认撑满整个屏幕吗, **不是全屏**」)✓
+  · "撑满" = 铺满**可见区**(避开菜单栏与 Dock ✓)—— 用整块屏会把窗口塞到菜单栏底下,
+    标题栏都抓不到 ✗(Quartz 里 y 越小越靠上 ✓)
+  · **不是 macOS 全屏**:不进独立 Space、不播全屏动画、也不改窗口的全屏状态 ✓
+  · 想回到"保持原尺寸只挪位置" ⇒ `ScreenMovePolicy.defaultPlacement = .keepSize` 一行 ✓
+- 另一个档 `keepSize` + `Landing`(相对位置 / 居中)仍在纯核里,单测覆盖 ✓
 - 走的是与触发键**同一套 Carbon 注册**(`RegisterEventHotKey`)⇒ 不吞键盘事件流,
   也不依赖面板开着 ✓;键位存 `moveWindow.keyCode` / `moveWindow.modifier`(与 `trigger.*` 同构 ✓),
   **出厂默认值只有一处**:`GlanceCore.TriggerConfig.moveWindowDefault` ✓

@@ -82,7 +82,9 @@ private func lastScreen(ofBundle bundleID: String?) -> String? {
 
 @MainActor
 enum WindowEnumerator {
-    private static let ownershipThreshold: CGFloat = 0.2
+    /// `nonisolated`:它被 `ownsByContextScreen`(nonisolated ✓)读 ⇒ 必须显式声明,
+    /// 否则 Swift 6 语言模式下是**错误** ✗(现在是警告 ✓)
+    nonisolated private static let ownershipThreshold: CGFloat = 0.2
 
     static func enumerate(owning screen: NSScreen?) -> [AppGroup] {
         guard let screen else { return [] }
@@ -109,7 +111,6 @@ enum WindowEnumerator {
                   // 应与其他 App 的窗一样进环。切换器自家的面板仍被排除 —— 它们是
                   // popUpMenu 图层(≠0),上面那道 layer 过滤天然挡住,不需要 pid 特判
                   true,
-                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),
                   bounds.width > 1, bounds.height > 1
@@ -387,6 +388,17 @@ enum WindowEnumerator {
     }
 
     /// NSScreen.frame(AppKit)→ Quartz 坐标。只需翻转 Y:qy = 主屏高 - y - 高
+    /// 屏的**可见区**在 Quartz 全局坐标里（= 避开菜单栏与 Dock 的那块 ✓）。
+    ///
+    /// 与 `quartzFrame(of:)` 同一套换算（差一个"主屏高度"的翻转 ✓）——
+    /// 用它的地方是"撑满屏幕"(ADR-0016):**必须**用可见区 ✗ 用整块屏会把窗口送到菜单栏底下,
+    /// 连标题栏都抓不到 ✓
+    nonisolated static func quartzVisibleFrame(of screen: NSScreen) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let f = screen.visibleFrame
+        return CGRect(x: f.origin.x, y: primaryHeight - f.origin.y - f.height, width: f.width, height: f.height)
+    }
+
     nonisolated static func quartzFrame(of screen: NSScreen) -> CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let f = screen.frame

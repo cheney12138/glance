@@ -161,24 +161,34 @@ enum WindowFocuser {
         return app.hide()
     }
 
-    /// **搬窗**:只设 `AXPosition`,尺寸一个字不动 ✓
+    /// **搬窗**。`resize = true` 时**连尺寸一起设**(撑满用 ✓),否则只挪位置 ✓
     ///
-    /// 不设 `AXSize`:目标屏更小时系统会自己把窗夹进屏内(我们不去改用户的窗口尺寸 ✗)
-    /// 证据口径:日志同时给"我请求的落点"和"AX 实得的 frame" —— 不一致多半是 App 自己夹了
-    /// (最小尺寸/贴边约束 ✓),这类差异只能靠这行看出来 ✓
+    /// ⚠️ 顺序有讲究:**先尺寸、后位置**。反过来的话,一扇 1600×1000 的窗先挪到小屏上,
+    /// 系统会先把它夹小 ✗、再设尺寸又变回大 —— 一来一回 App 会闪一下 ✓;
+    /// 先设尺寸再定位,只发生"一次改变" ✓
+    /// 设完**回读**一次:有些 App 有最小尺寸/贴边约束 ⇒ 实得与请求不一致是**它的属性**,不是 bug ✗
+    /// ⇒ 这一行日志就是为此存在的(`[T33] 搬窗: … 请求 … · 实得 …`)✓
     @discardableResult
-    static func move(window w: WindowRecord, to frame: CGRect) -> Bool {
+    static func move(window w: WindowRecord, to frame: CGRect, resize: Bool = false) -> Bool {
         guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
+        var ok = false
+        if resize {
+            var size = frame.size
+            if let value = AXValueCreate(.cgSize, &size) {
+                ok = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) == .success
+            }
+        }
         var origin = frame.origin
-        guard let value = AXValueCreate(.cgPoint, &origin) else { return false }
-        let err = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
+        if let value = AXValueCreate(.cgPoint, &origin) {
+            ok = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) == .success && ok
+        }
         var line = "[T33] 搬窗: \(w.title) → 请求 \(Int(frame.minX)),\(Int(frame.minY))"
+            + " \(Int(frame.width))x\(Int(frame.height))\(resize ? "(含尺寸)" : "(只挪位)")"
         if let now = readFrame(element) {
             line += " · 实得 \(Int(now.minX)),\(Int(now.minY)) \(Int(now.width))x\(Int(now.height))"
         }
-        line += " · err=\(err.rawValue)"
         glog(line)
-        return err == .success
+        return ok
     }
 
     /// 取某个 App 的**落焦窗**(`AXFocusedWindow` ⇒ `_AXUIElementGetWindow` 拿 wid ✓)
