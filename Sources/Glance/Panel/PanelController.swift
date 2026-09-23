@@ -2454,12 +2454,26 @@ final class PanelController: ObservableObject {
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
-            WindowFocuser.minimize(window: w)
-            purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
-            minimizedWIDs[w.wid] = g.pid    // 常驻:环上的"已收纳"记号 ✓
-        sessionMinimizedPIDs.insert(g.pid) // 本局:松开时不许唤醒它 ✓
-            glog("[记号] 记下已收纳:窗 \(w.wid) @ \(g.appName)")
-        marksRevision &+= 1
+            // ★★ **先记后做**(与 purgedWIDs/quitPIDs 同一套 ✓)——
+            //    用户 2026-09-22:「遗照灰的渲染有点延迟. 是在确认窗口真的缩小了吗」
+            //    ⇒ **是**,原来就是:我把"记下已收纳"写在 AX 调用**之后** ✗,而
+            //      `AXUIElementSetAttributeValue` 是**同步跨进程调用**(要等 App 真缩下去才返回 ✓)
+            //      ⇒ 图只能等 App 缩完才变灰 ✓(实测那点延迟就是目标 App 自己的最小化耗时 ✓)
+            //    ⇒ 改成乐观:图**当帧**就变灰 ✓;AX 被拒了再回滚 ✓(不许留假状态 ✓)
+            purgedWIDs.insert(w.wid)          // 先记后摘:复核之前不许它"诈尸"回来
+            minimizedWIDs[w.wid] = g.pid      // 常驻:环上的"已收纳"记号 ✓
+            sessionMinimizedPIDs.insert(g.pid) // 本局:松开时不许唤醒它 ✓
+            marksRevision &+= 1               // ⇒ 当帧重绘(不等 AX ✓)
+            glog("[记号] 记下已收纳(先记后做):窗 \(w.wid) @ \(g.appName)")
+            let accepted = WindowFocuser.minimize(window: w)
+            if !accepted {
+                // 系统没受理(取不到 AX 窗 / 被拒)⇒ **把乐观记的账全撤掉** ✓ 不许留假灰 ✗
+                minimizedWIDs.removeValue(forKey: w.wid)
+                sessionMinimizedPIDs.remove(g.pid)
+                purgedWIDs.remove(w.wid)   // 窗还在屏幕上 ⇒ 别让"复核期"把它按掉 ✗(0.18s 后它会自己回来 ✓)
+                marksRevision &+= 1
+                glog("[记号] 回滚已收纳:窗 \(w.wid) 最小化未被受理")
+            }
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()

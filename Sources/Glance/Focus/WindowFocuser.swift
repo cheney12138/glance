@@ -124,9 +124,16 @@ enum WindowFocuser {
     }
 
     /// M:最小化窗口(进 Dock;被收走的窗按 CONTEXT.md 归"不可见窗",下次枚举自动消失)
-    static func minimize(window w: WindowRecord) {
-        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
-        AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean)
+    /// 最小化一扇窗。**返回值 = 系统受理了没有** ✓
+    ///
+    /// ⚠️ 这是个**同步的跨进程调用**:它会等到目标 App 真的把窗缩下去才返回 ✓
+    /// (用户 2026-09-22 观察到的"遗照灰渲染有点延迟",问的正是「是在确认窗口真的缩小了吗」✓ ——
+    ///  **是**,原来就是它:调用方把"记下已收纳"写在它**后面** ✗ ⇒ 图只能等 App 缩完才变灰 ✗)
+    /// ⇒ 所以调用方要**先记后做**(与 `purgedWIDs`/`quitPIDs` 同一套 ✓),这里把结果交出去供回滚 ✓
+    @discardableResult
+    static func minimize(window w: WindowRecord) -> Bool {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean) == .success
     }
 
     /// 缩放(绿灯):按它的 zoom 按钮——绿灯是"缩放"不是"全屏",
