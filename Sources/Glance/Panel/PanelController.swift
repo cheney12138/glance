@@ -302,6 +302,14 @@ final class PanelController: ObservableObject {
         return nil
     }
 
+    /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓
+    ///
+    /// ⚠️ 它与上面那张**常驻**表是**两种寿命**,别混(2026-09-22 用户两条实报互相约束):
+    ///   · ① 「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗ ⇒ 本局不许唤醒 ✓(否则那次缩小等于白按)
+    ///   · ② 「关闭再唤起之后, 选中 app 拉不起窗口了」✗ ⇒ **另起一局**的确认必须能把它拉回来 ✓
+    /// ⇒ 记号(视觉)常驻 ✓;守卫只活一局 ✓ —— 用户的手离开键盘之后再确认,就是"我要它回来" ✓
+    private var sessionMinimizedPIDs: Set<pid_t> = []
+
     /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
     /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
     @Published private(set) var hidingPIDs: Set<pid_t> = []
@@ -448,7 +456,8 @@ final class PanelController: ObservableObject {
         quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
         purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
         // ★ "已收纳"的账**跨局保留**(用户 2026-09-22:「角标要常驻」✓)—— 只靠下面的自愈剪枝 ✓
-        hidingPIDs.removeAll()   // 隐藏标记是现读系统的 ✓ 这里只是清掉上一帧的缓存
+        hidingPIDs.removeAll()          // 隐藏标记是现读系统的 ✓ 这里只是清掉上一帧的缓存
+        sessionMinimizedPIDs.removeAll() // "不许唤醒"只活一局 ✓(记号常驻,守卫不常驻)
         // T91:换环意图只活一局。**只在它真的挂着时留账**(日志预算:常态两行,这里是例外才出声)
         if pendingLaunchRing { trace("[T91] 新一局:上一局的换环意图没兑现,丢掉") }
         pendingLaunchRing = false
@@ -2447,7 +2456,8 @@ final class PanelController: ObservableObject {
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
             WindowFocuser.minimize(window: w)
             purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
-            minimizedWIDs[w.wid] = g.pid // 是我们缩的 ⇒ ①松开时不许再唤醒它 ②环上常驻"已收纳"记号 ✓
+            minimizedWIDs[w.wid] = g.pid    // 常驻:环上的"已收纳"记号 ✓
+        sessionMinimizedPIDs.insert(g.pid) // 本局:松开时不许唤醒它 ✓
             glog("[记号] 记下已收纳:窗 \(w.wid) @ \(g.appName)")
         marksRevision &+= 1
             verifyPurged(wid: w.wid, name: g.appName, group: g)
@@ -2781,8 +2791,12 @@ final class PanelController: ObservableObject {
         // ★ 本局**被我们缩小过的** App:松开时**什么都不做**(照 H 的先例 ✓)
         //   病例(2026-09-22 用户实报):「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗
         //   ⇒ 它此刻是"无窗应用"(窗都收进 Dock 了 ✓),而下面那条会把 App 激活 ⇒ 系统把窗抬回来 ✗
-        //   判据:该 App 在本局被我们缩小过 ∧ 它在本屏已经没有可选的窗 ✓(还有别的窗就照常切 ✓)
-        if minimizedPIDs.contains(g.pid), g.windows.isEmpty {
+        //   判据:该 App **在本局**被我们缩小过 ∧ 它在本屏已经没有可选的窗 ✓(还有别的窗就照常切 ✓)
+        //   ⚠️ 必须用**会话账**(`sessionMinimizedPIDs`)而不是常驻的记号表 ✗ ——
+        //     2026-09-22 用户第二条实报:「关闭再唤起之后, 选中 app 拉不起窗口了」✗
+        //     就是拿常驻表当守卫的后果:另起一局再确认也什么都不做 ✗
+        //     ⇒ **本局不唤醒**(那次缩小不算白按 ✓)、**下一局能唤醒**(用户的手已离开键盘 ✓)
+        if sessionMinimizedPIDs.contains(g.pid), g.windows.isEmpty {
             dismiss(reason: "确认(刚被缩小收纳 ⇒ 不唤醒它)")
             return
         }
