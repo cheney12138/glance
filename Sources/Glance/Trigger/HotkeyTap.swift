@@ -267,6 +267,9 @@ final class HotkeyTapCenter {
         appliedTakeover = TriggerConfig.takeoverEnabled
         let take = NativeHotkeys.plan(for: config, takeover: appliedTakeover).disable.isEmpty ? "否" : "是"
         print("[T13] 触发键注册:\(config.display)(+ ⇧ 反向);接管原生 = \(take)")
+        // ★ 2026-09-22 加:这条原来只 print 到 stdout ⇒ trace.log 里**看不到** ✗
+        //   病例:「单指单击怎么也唤起了」—— 我先要能确认"到底注册的是哪个和弦" ✓
+        glog("[热键] 触发键注册 = \(config.display)(+⇧ 反向) · 接管原生 = \(take)")
     }
 
     private func registerHotKey(_ config: TriggerConfig, extras: CGEventFlags, id: HotKeyId) -> EventHotKeyRef? {
@@ -303,6 +306,9 @@ final class HotkeyTapCenter {
         // 释放不参与语义:确认由"修饰键释放"决定(hold 语义)
         guard pressed, let hotKey = HotKeyId(rawValue: id) else { return }
         trace("hotkey \(hotKey) pressed state=\(state)")
+        // ★ 热键开面板会**大声报一行**(手势那条另有日志);两条互斥出现 ⇒ 一眼知道是谁按的 ✓
+        //   (Carbon 回调只给 id,给不出"物理上是哪颗键"—— 但注册的和弦启动时已报 ✓)
+        glog("[热键] \(hotKey == .reverse ? "⌘⇧Tab(反向)" : "⌘Tab(接管)") 开面板 — 进之前的状态=\(state)")
         // **只在"开局"这一发用它**。实机病:同一个和弦按住期间,系统不会重复投递 `kEventHotKeyPressed`
         // (按住 ⌘ 连按 Tab,只来第一发)→ 于是"继续按 Tab 移动"在旧版里彻底不动(用户实机反馈)。
         // 循环移动改回 navTap 接(会话期它本来就在收 keyDown),这里会话已在跑就什么都不做,
@@ -423,6 +429,12 @@ final class HotkeyTapCenter {
         //   把 tap 看见的**每一颗会话期按键**都记下来(带状态与修饰键)⇒ 一眼能分清是
         //   ① 键根本没被看见(navTap 没开/会话已结束)还是 ② 看见了但下游没做事。
         let __kc = event.getIntegerValueField(.keyboardEventKeycode)
+        // ★ 2026-09-22:面板没开时若 tap 看见 ⌘Tab ⇒ 记一行。配合上面的 `[热键]` 日志可判定:
+        //   两行都有 = 真的有人按了 ⌘Tab ✓;只有 `[热键]` 那行 = **Carbon 幽灵事件**(要另查)✗
+        if __kc == 48, state != .navigating,
+           event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]) == [.maskCommand] {
+            glog("[热键] tap 看见 ⌘Tab(面板没开)")
+        }
         // ★★ 接管系统 ⌘`(2026-09-22 用户要求:「能拦截系统的 cmd+`(只在当前屏幕内容的同类型app跳转)」)
         //   口径:**只在面板没开**的时候接管 —— 面板开着时 ⌘` / ` 照旧走"会话内窗口循环" ✓
         //   修饰键**精确匹配** {⌘} 或 {⌘,⇧}:多一个(⌃/⌥)都是别人的快捷键 ⇒ 放行 ✗(见下面那把门禁的病例)
