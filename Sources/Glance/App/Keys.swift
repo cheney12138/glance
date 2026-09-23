@@ -51,6 +51,8 @@ enum Keys {
     /// `debug.tapMinDurationMs` —— 三/四指点按的**时长下限**(默认 30)
     /// 见 `DebugFlags.tapMinDurationMs` 的病例(2026-09-22 三指误触 ✓)
     static let debugTapMinDurationMs = "debug.tapMinDurationMs"
+    /// `debug.tapMinContactSize` —— 点按的**触点重量下限**(默认 0.6;设 0 = 关)
+    static let debugTapMinContactSize = "debug.tapMinContactSize"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 

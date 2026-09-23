@@ -134,6 +134,8 @@ final class ThreeFingerTap {
             // 判卷没写错 —— 那个形状**就是**一记标准点按;要治的是"这种形状也可能是无意的一搭" ✓
             // ⇒ 抬下限的代价是"更快的轻点会被挡" ⇒ 只能由用户在真机上定 ⇒ 做成档位 ✓
             t.policy.minDuration = Double(DebugFlags.tapMinDurationMs) / 1000
+            // 重量门(默认 0.6):"很轻地搭一下"不是点按(见 Policy.minContactSize 的病例 ✓)
+            t.policy.minContactSize = DebugFlags.tapMinContactSize
             return t
         }()
         private var lastSnapshot = TapRound.Snapshot()

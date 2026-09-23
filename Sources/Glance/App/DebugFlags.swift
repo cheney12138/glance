@@ -69,6 +69,17 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugTapMinDurationMs) as? Int) ?? 30
     }
 
+    /// **触点的重量下限**(默认 0.6;设 0 = 关掉这条门 ✓)。
+    ///
+    /// 病例(2026-09-22 用户「误触了, 我可以抬起的很轻很慢, 就会稳定出现」):很轻地搭上再慢慢抬,
+    /// 触控板报出的 size 一路变小(0.4–0.5,日志里最轻的一档),触点随后在系统层面消失
+    /// ⇒ 我们读到"全部离手"就判卷 ⇒ 误触 ✓
+    /// ⚠️ 0.6 是**初步值**:有意轻点的 size 分布还没有样本(日志里只有这两次误触 ✓)
+    ///    ⇒ 真机 A/B:`defaults write … -float 0.6` / `-float 0.4` / `-int 0` ✓
+    static var tapMinContactSize: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue ?? 0.6
+    }
+
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
@@ -103,6 +114,10 @@ enum DebugFlags {
     static func reportHeavySwitchesIfNeeded() {
         // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
         // 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if tapMinContactSize != 0.6 {
+            print("[⚠️ 重型开关] debug.tapMinContactSize = \(tapMinContactSize)(默认 0.6, 设 0 = 关)—— 点按触点重量下限")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinContactSize)")
+        }
         if tapMinDurationMs != 30 {
             print("[⚠️ 重型开关] debug.tapMinDurationMs = \(tapMinDurationMs)ms(默认 30)—— 三/四指点按时长下限")
             print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinDurationMs)")

@@ -273,4 +273,39 @@ final class TapRoundTests: XCTestCase {
         XCTAssertEqual(maxSize, 3.1, accuracy: 0.01)
         XCTAssertEqual(maxMajor, 12.0, accuracy: 0.01)
     }
+
+    // MARK: ⑦ "很轻地搭一下"不是点按(2026-09-22 用户复现方式)
+
+    /// 现场:用户「我可以抬起的很轻很慢, 就会稳定出现」⇒ 日志两次误触的 size 是 0.5 / 0.4 ✓
+    /// (整份日志里最轻的一档 ✓;同期的"不动作"轮次是 0.7–1.2 ✓)
+    /// ⇒ 一轮里最重的触点都不到下限 ⇒ 这是"搭着/掠着",不是轻点 ✗
+    func testUltraLightContactsAreNotATap() {
+        let frames = [frame(0.0, c(11, 0.5, 0.5, size: 0.5)),
+                      frame(0.04, c(11, 0.5, 0.5, size: 0.5), c(12, 0.52, 0.5, size: 0.4)),
+                      frame(0.08, c(11, 0.5, 0.5, size: 0.4), c(12, 0.52, 0.5, size: 0.4),
+                                   c(13, 0.54, 0.5, size: 0.4)),
+                      frame(0.12)]
+        let out = run(frames)
+        guard case let .rejected(reason) = out else { return XCTFail("这么轻的接触不该被判成点按, 实际:\(out)") }
+        XCTAssertTrue(reason.contains("过轻"), "理由要写明是重量挡的: \(reason)")
+    }
+
+    /// 正常力度(0.8)在同一套判据下照样生效 —— 门不能开得把有意轻点也挡掉 ✓
+    func testNormalPressureStillFires() {
+        let frames = heldThree(t0: 0, until: 0.12)      // 助手用 size 0.8 ✓
+        guard case .fireThree = run(frames) else { return XCTFail("正常力度的轻点必须生效") }
+    }
+
+    /// 档位设 0 = 关掉这条门(回到旧行为 ✓ —— 这是可试档位的"关"那一档 ✓)
+    func testWeightGateCanBeTurnedOff() {
+        var p = TapRound.Policy.standard
+        p.minContactSize = 0
+        let frames = [frame(0.0, c(11, 0.5, 0.5, size: 0.5)),
+                      frame(0.04, c(11, 0.5, 0.5, size: 0.5), c(12, 0.52, 0.5, size: 0.4)),
+                      frame(0.08, c(11, 0.5, 0.5, size: 0.4), c(12, 0.52, 0.5, size: 0.4),
+                                   c(13, 0.54, 0.5, size: 0.4)),
+                      frame(0.12)]
+        guard case .fireThree = run(frames, policy: p) else { return XCTFail("关掉重量门后应当回到旧行为(会生效)") }
+    }
+
 }
