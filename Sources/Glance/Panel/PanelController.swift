@@ -1078,6 +1078,11 @@ final class PanelController: ObservableObject {
         endActivity()
         FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
         PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
+        // ★ 取证:收窗**之前**两扇窗各是什么状态(下次再看到"残留"时,这一行能分清
+        //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
+        trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
+        // 环与托盘**并进同一次 flush**(见 ChromeWindow.teardown 的病例 ✓)
+        panel?.disableScreenUpdatesUntilFlush()
         panel?.orderOut(nil)
         // ★ 2026-09-21 修我自己引入的 bug:标记必须与 orderOut **成对**清掉。
         //   病例(用户实报「本次不显示预览窗了」):第一次收场把托盘 orderOut 了,而标记没清 ✗
@@ -2641,10 +2646,17 @@ final class PanelController: ObservableObject {
         guard launchables.indices.contains(i) else { return }
         let app = launchables[i]
         glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+        dismiss(reason: "确认(启动 \(app.name))")                  // ★ 先收面板 ✓
         DockAppsProvider.launch(at: app.path)
-        dismiss(reason: "确认(启动 \(app.name))")
     }
 
+    /// ## ⚡ 关闭顺序:**先收面板,再聚焦**(2026-09-22 用户实报「关闭不干脆, 慢一拍 / 像有残留」)
+    ///
+    /// 旧顺序是 `WindowFocuser.focus(...)` 然后 `dismiss(...)` ✗ —— 而聚焦要等一次**激活往返**
+    /// (实测 30–51ms:`→ emit confirm` 到 `[T7] 已聚焦`),这期间面板还挂在屏幕上 ✗
+    /// ⇒ 观感就是"松手了, 面板还赖着" ✓(而且目标 App 已经在往前台动画,面板浮在上面更像残留 ✓)
+    /// 新顺序:先 `orderOut`(啪一下就没 —— 与"取消淡出"那次的用户口径一致 ✓),**之后再聚焦** ✓
+    /// 代价:旧 App 会露出来几十毫秒 —— 那正是原生切换器的观感,也是用户要的"跟手" ✓
     func confirmSelection() {
         // 启动区(方案 E):入口槽选中 = 没有可生效之物(它在等用户进到某格),no-op;
         // 启动图标选中 = **启动并激活**,面板即关(与「确认」的"生效即散场"同款)。
@@ -2659,8 +2671,8 @@ final class PanelController: ObservableObject {
             }
             let app = launchables[j]
             glog("[T83] 启动未启动 App: \(app.name)(\(app.path))")
+            dismiss(reason: "确认(启动 \(app.name))")              // ★ 先收面板 ✓(启动要等几百 ms ✗)
             DockAppsProvider.launch(at: app.path)
-            dismiss(reason: "确认(启动 \(app.name))")
             return
         }
         guard listReady else {
@@ -2692,13 +2704,13 @@ final class PanelController: ObservableObject {
         }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)
         if !g.windows.indices.contains(winIndex) {
+            dismiss(reason: "确认(无窗应用)")                       // ★ 先收面板 ✓
             WindowFocuser.focusWindowlessApp(pid: g.pid, contextScreen: contextScreen)
-            dismiss(reason: "确认(无窗应用)")
             return
         }
         let w = g.windows[winIndex]
+        dismiss(reason: "确认")                                     // ★ 先收面板 ✓
         WindowFocuser.focus(window: w)
-        dismiss(reason: "确认")
     }
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
@@ -2876,6 +2888,11 @@ final class ChromeWindow {
         hidden = false
         panel.alphaValue = 1
         panel.ignoresMouseEvents = false
+        // ★ 2026-09-22 用户实报「预览容器会在环之后才消失, 看着跟有残留一样」:
+        //   环与托盘是**两扇窗**,两次 `orderOut` = **两次独立提交** ⇒ 合成器可能有一帧
+        //   只收走了环 ✗(16ms 的残留,肉眼刚好看得见)。
+        //   `disableScreenUpdatesUntilFlush()` 把这次改动**并进下一次 flush** ⇒ 与环同批消失 ✓
+        panel.disableScreenUpdatesUntilFlush()
         panel.orderOut(nil)
     }
 }
