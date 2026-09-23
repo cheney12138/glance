@@ -88,7 +88,7 @@ enum WindowFocuser {
         memcpy(&bytes[0x3C], &mutableWid, MemoryLayout<CGWindowID>.size)
         memcpy(&bytes[0x20], &point, MemoryLayout<CGPoint>.size)
         bytes[0x08] = 0x01 // kCGEventLeftMouseDown(只发 down)
-        _ = postEvent(&psn, &bytes)   // CGError 这里不用:补焦是"尽人事",失败也不该中断流程 ✓
+        postEvent(&psn, &bytes)
     }
 
     /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
@@ -161,38 +161,6 @@ enum WindowFocuser {
         return app.hide()
     }
 
-    /// T:**把选中的窗搬到另一块屏**(P2)。只设**位置**,尺寸一个字不动 ✓
-    ///
-    /// 证据口径:日志同时给"我请求的落点"和"AX 实得的 frame" —— 两者不一致时,
-    /// 多半是 App 自己夹了(有些窗有最小尺寸/贴边约束 ✓),这类差异只能靠这行看出来 ✓
-    /// 不设 `AXSize`:目标屏更小时,系统会自己把窗夹进屏内 ✓(我们不去改用户的窗口尺寸 ✗)
-    @discardableResult
-    static func move(window w: WindowRecord, to frame: CGRect) -> Bool {
-        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
-        var origin = frame.origin
-        guard let value = AXValueCreate(.cgPoint, &origin) else { return false }
-        let err = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
-        var line = "[T33] 搬窗: \(w.title) → 请求 \(Int(frame.minX)),\(Int(frame.minY))"
-        if let now = readFrame(element) {
-            line += " · 实得 \(Int(now.minX)),\(Int(now.minY)) \(Int(now.width))x\(Int(now.height))"
-        }
-        line += " · err=\(err.rawValue)"
-        glog(line)
-        return err == .success
-    }
-
-    /// 读一扇窗当前的 frame(AX 属性 → CGRect;读不到就 nil)
-    private static func readFrame(_ element: AXUIElement) -> CGRect? {
-        var posRef: CFTypeRef?, sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
-              let posRef, let sizeRef else { return nil }
-        var origin = CGPoint.zero, size = CGSize.zero
-        AXValueGetValue(posRef as! AXValue, .cgPoint, &origin)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-        return CGRect(origin: origin, size: size)
-    }
-
     static func zoom(window w: WindowRecord) {
         guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
         var button: AnyObject?
@@ -233,7 +201,7 @@ enum WindowFocuser {
     /// 再考虑指针引导之类的增强。trace 门控,语境屏缺省时不量
     private static func logLandingProbe(pid: pid_t, name: String, contextScreen: NSScreen?) {
         guard isTraceEnabled, let contextScreen else { return }
-        let contextName = contextScreen.localizedName   // macOS 26 上它已是 String(非可选)⇒ 别写 `?? "?"` ✗
+        let contextName = contextScreen.localizedName ?? "?"
         for delay in [0.8, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 Task.detached(priority: .utility) {

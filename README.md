@@ -37,7 +37,6 @@ Requires **macOS 14** or later · Apple Silicon and Intel.
 
 **Keys** — `←` `→` first/last app · `Tab` next app · `1`–`9` pick a window ·
 `` ` `` cycle windows · `Q` `W` `M` `F` `H` act on the selected window ·
-  `T` move the selected window to the next display ·
 release `⌥` to switch, `Esc` to cancel.
 
 ## Updating
