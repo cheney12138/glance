@@ -223,6 +223,8 @@ struct PanelView: View {
                 ForEach(Array(controller.groups.enumerated()), id: \.element.pid) { i, group in
                     IconCell(
                         group: group,
+                        // 本局被我们缩小收纳过的 App ⇒ 图标上给个标记(用户第 2 条诉求 ✓)
+                        mark: controller.mark(for: group.pid),
                         // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
                         // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
                         selected: i == controller.appIndex && !controller.entrySelected,
@@ -354,8 +356,32 @@ struct PanelView: View {
 
 // MARK: - 图标格(选中 = 上浮 14 + 放大 1.14 + 提亮;未选 = 压暗去饱和)
 
+/// 环上图标的**状态记号**(用户 2026-09-22 要求:常驻 + 贴切)
+extension PanelMark {
+    /// 记号怎么画 —— **视图细节,留在 App 层** ✓(领域层只有 `PanelMark` 这个两态枚举 ✓)
+    ///
+    /// ⚠️ 语义与表现分开看(2026-09-22 定版):
+    ///   · `.tucked`(有窗被我们收进 Dock)⇒ **整枚图标变灰 + 压暗** ✓ —— 不画角标 ✓(见 IconCell)
+    ///   · `.hidden`(⌘H)⇒ `eye.slash` 角标 ✓
+    ///   `symbol` 因此只为 `.hidden` 而设 ✓
+    /// 旧案留档(`.tucked` 走过的路):`arrow.down.to.line` = 下载图标 ✗ /
+    /// `rectangle.compress.vertical` = 只有"被压缩" ✗ / 手画窗身+标题栏+小点 ⇒
+    /// 用户评「有点丑, 复杂了, 一缩小就看着很脏」✗ / `rectangle.inset.bottomleft.filled` = 画中画 ✓
+    /// ⇒ 最后**整枚变灰**顶替了角标 ✓ 教训:15pt 里"一个块面读懂" > 画得"准" ✓
+    var symbol: String {
+        switch self {
+        case .tucked: return "rectangle.inset.bottomleft.filled"   // 已收纳不画角标:这里只为穷尽枚举 ✓
+        case .hidden: return "eye.slash"
+        }
+    }
+}
+
 private struct IconCell: View {
     let group: AppGroup
+    /// 图标右下角的状态记号(nil = 无记号)。
+    /// ⚠️ `.tucked` **不画这个角标**(用户 2026-09-22 定版,见下面 `tuckedStyle`)——
+    /// 它的表现是"整枚图标变灰",`mark` 只是携带那条信息 ✓
+    let mark: PanelMark?
     let selected: Bool
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
     let motion: Animation?
@@ -373,8 +399,25 @@ private struct IconCell: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
-            .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
+            // ★ **"已收纳"= 整枚图标变灰**(2026-09-22 用户提案,我附议 ⇒ 定版)
+            //   用户原话:「这个角标不够明显, 要不大胆一点, 不用角标表示了. 直接给 app 颜色改成
+            //   遗照灰 哈哈哈」✓
+            //   为什么同意:角标 15pt 这一路已经试过四种画法(箭头/压缩/手画窗/画中画),
+            //   用户两次评"不够明白/有点丑/复杂了" ⇒ **"够明显"这条上,角标这条路已被证伪** ✓
+            //   为什么不算乱来:macOS 自己对**隐藏的 App** 就是这个画法(Dock 里那枚淡淡的)⇒
+            //   "变灰 = 不在台上"是系统已有的语言,不是我们新造的符号 ✓
+            //   ⚠️ 与"选中"不冲突:选中是**形**(放大 + 上浮 + 托底 ✓),灰掉的是**光** ✓
+            //      —— 仓库里早就定过这条口径(见 IconCell 顶部关于"光效总闸"的注释 ✓)
+            //   ⚠️ 与"已隐藏"分得开:隐藏仍走 `eye.slash` 角标 ✓ 两套语言,一眼分辨 ✓
+            .saturation(mark == .tucked ? 0 : (glow ? (selected ? 1.15 : 0.92) : 1))
+            // ⚠️⚠️ **别用 opacity 表达"退后"** ✗ —— 用户 2026-09-22 实报:
+            //   「坏了, 给后面的"骨头"显示出来了」:图标一透明,它**后面那一层**就露出来了
+            //   (面板玻璃、相邻图标、托底那一块的轮廓全透出来 ⇒ 读成"碎图/见骨头" ✓)
+            //   我上一版的对照图是画在**纯色底**上的 ⇒ 根本测不出这个 ✗
+            //   ★ 纪律:量具必须包含**真实现场**(这里是"图标后面还有别的东西" ✓),否则等于没测 ✓
+            // ⇒ 正确手法:**灰 + 压暗,全程不透明** ✓("退后"靠亮度差交代,不靠透明度 ✓)
+            //   深色面板下图标本身就暗 ⇒ 压暗要更狠一点才读得出 ✓
+            .brightness(mark == .tucked ? -0.10 : (glow ? (selected ? 0.05 : -0.04) : 0))
             // 倍率 = 选中放大 × 图标透明边距补偿。**补偿是必须的**:macOS 图标的画面只占画布
             // 87.5%(Finder/Safari/Xcode/Terminal 实测 .875,Chrome .867,Obsidian .83),
             // 直接铺进 78pt 格子,画面就只有 68pt —— 比 demo 里铺满格子的色块小一圈,
@@ -385,6 +428,11 @@ private struct IconCell: View {
             // 不变量:阴影跟图片 alpha 走,不裁圆角、不套矩形 box-shadow
             .elevation(.icon, active: selected)   // 帧率优先:只有选中那颗有投影
             .overlay(alignment: .bottom) { windowDots }
+            // ★ "已收纳"角标(2026-09-22 用户第 2 条诉求:标记被缩小收纳的 app ✓)
+            //   位置选右下角:那里平时空着(收纳之后窗数是 0 ⇒ 窗数记号也空着 ✓),不挤任何既有元素 ✓
+            //   ⚠️ 形状/颜色是一行的事:想换别的记号(比如小箭头、或整个图标压暗)改这里就够 ✓
+            // 角标只为"已隐藏"服务;"已收纳"走整枚变灰(见上面的 saturation/opacity ✓)
+            .overlay(alignment: .bottomTrailing) { markBadge }
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
             .contentShape(Rectangle())
             // 真实弹簧:response 越小越"脆",dampingFraction 越小回弹越明显。
@@ -392,7 +440,30 @@ private struct IconCell: View {
             .animation(motion, value: selected)
     }
 
-    /// 窗数记号:圆点 = 1 扇、**短横 = 5 扇**(记账法 / 罗马数字 I-V 那一套,见 `WindowTally`)。
+        /// **状态记号**(右下角一枚)
+    ///
+    /// 用户 2026-09-22:「怎么是个下载的 download 样式…设计的贴切一点, 高级一点」
+    /// ⇒ 语汇换成**窗本身的形态**,不借"箭头"那个外来符号 ✓:
+    ///   · **已收纳**(⌘M 收进 Dock)= `rectangle.compress.vertical` —— 一扇**被压扁的窗** ✓
+    ///     (最小化真身就是"窗被压扁收进 Dock" ✓;而箭头一定会被读成"下载/导出" ✗)
+    ///   · **已隐藏**(⌘H)= `eye.slash` —— 「看不见了」✓(与"收纳"必须能一眼分清 ✓)
+    /// 底衬沿用芯片那套材料(chipBg + hairline + 极淡投影 ✓)—— 深浅底都读得清,且不是贴纸 ✓
+    @ViewBuilder private var markBadge: some View {
+        if let mark, mark == .hidden {   // ★ 只有"已隐藏"画角标("已收纳"= 整枚变灰 ✓)
+            Image(systemName: mark.symbol)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(PanelColors.thumbTitle)
+                .frame(width: 15, height: 15)
+                .background(Circle().fill(PanelColors.chipBg))
+                .overlay(Circle().strokeBorder(PanelColors.chipBorder,
+                                               lineWidth: PanelMetrics.hairline))
+                .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+                .offset(x: -1, y: -1)
+                .allowsHitTesting(false)
+        }
+    }
+
+/// 窗数记号:圆点 = 1 扇、**短横 = 5 扇**(记账法 / 罗马数字 I-V 那一套,见 `WindowTally`)。
     ///
     /// 2026-09-15 定稿:原来是"每扇窗一粒点" —— 13 扇正好铺满格子、20 扇溢出 1.56 倍
     /// (相邻两格的点连成一片),而且同色点只能逐个默数。现在:① 5 进制记号把 20 扇从 164pt

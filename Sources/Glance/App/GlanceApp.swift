@@ -8,6 +8,8 @@ import GlanceCore
 struct GlanceApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
+        // 预拍要知道"面板在不在台上"(2026-09-22 掉帧病例:15 窗预拍与入场抢 GPU ⇒ 652ms 长帧 ✗)
+        PanelStageProbe.isVisible = { [weak panelController] in panelController?.isVisible ?? false }
         _ = stdoutIsLineBuffered
         mirrorStdoutToLogFileIfTracing()   // trace 时把 stdout 落到 ~/Library/Logs/Glance/trace.log
         // ★ 重型开关**开机自报**(2026-09-21 第二次"量具改变被测物"后加的)：

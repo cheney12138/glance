@@ -280,6 +280,42 @@ final class PanelController: ObservableObject {
     /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
     /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
     private var purgedWIDs: Set<CGWindowID> = []
+    /// **本局被我们缩小(Cmd+M)过的窗与 App**(2026-09-22 用户实报)。
+    ///
+    /// 病例:「唤起面板的时候, cmd m 会缩小, 这时候面板上的 app 是没变化的, 松开之后会立马把缩小的窗口
+    ///   又换起来」✗ —— 最小化窗本来就不在列表里(`optimisticRemoval(.minimize)` ✓),但**组还在环里** ✓
+    ///   ⇒ 松开时走 `confirmSelection` 的"无窗应用 ⇒ 激活它"那条路 ✗ ⇒ 刚缩下去的窗又被抬起来 ✓
+    /// 这与当初 `H` 那个 bug **是同一个病**(「松开 ⌥ 又把刚隐藏的 App 唤起来了」✓)⇒ 照它的先例办:
+    ///   **本局不许再唤醒它** ✓;顺带把 App 标记上(用户第 2 条诉求:标记被缩小收纳的 app ✓)
+    /// ⚠️ **跨局常驻**(2026-09-22 用户第 2 条修正:「角标要常驻」✗ 只活一局是错的):
+    /// 一扇窗被收进 Dock 之后,**只要它还在 Dock 里就该有记号** ✓ —— 与"这一局"无关 ✓
+    /// ⇒ 记 `wid → pid`(pid 用来在 App 退出后剪掉 ✓,wid 用来认"还是那一扇窗" ✓)
+    private var minimizedWIDs: [CGWindowID: pid_t] = [:]
+    /// 环上要打"已收纳"记号的 App(由上面那张表推出来 ✓ —— 单一源 ✓)
+    var minimizedPIDs: Set<pid_t> { Set(minimizedWIDs.values) }
+    /// 让 `minimizedWIDs` 的变化**一定会**触发重绘(它是普通字典,不会自己 publish ✗)
+    @Published private var marksRevision = 0
+    /// 环上这枚图标该打什么记号 —— 判据在领域层(`PanelMarkPolicy` ✓),这里只喂两个事实 ✓
+    ///
+    /// ⚠️ 优先级 2026-09-22 反转过(用户:「又退回不可见的角标了, 不是遗照灰」✗):
+    ///   原来"隐藏优先" ⇒ 一个 App 同时满足"有窗收在 Dock 里"与"系统说它 hidden"时,显示角标 ✗
+    ///   而用户刚按的是 ⌘M,要看见的是"那扇窗收起来了" ⇒ **有收纳就显示灰** ✓
+    func mark(for pid: pid_t) -> PanelMark? {
+        PanelMarkPolicy.mark(hidden: hidingPIDs.contains(pid), tucked: minimizedPIDs.contains(pid))
+    }
+
+    /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓
+    ///
+    /// ⚠️ 它与上面那张**常驻**表是**两种寿命**,别混(2026-09-22 用户两条实报互相约束):
+    ///   · ① 「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗ ⇒ 本局不许唤醒 ✓(否则那次缩小等于白按)
+    ///   · ② 「关闭再唤起之后, 选中 app 拉不起窗口了」✗ ⇒ **另起一局**的确认必须能把它拉回来 ✓
+    /// ⇒ 记号(视觉)常驻 ✓;守卫只活一局 ✓ —— 用户的手离开键盘之后再确认,就是"我要它回来" ✓
+    private var sessionMinimizedPIDs: Set<pid_t> = []
+    private var didObserveHiding = false
+
+    /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
+    /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
+    @Published private(set) var hidingPIDs: Set<pid_t> = []
 
     // MARK: - 触发层入口
 
@@ -421,7 +457,11 @@ final class PanelController: ObservableObject {
         contextScreen = screen
         hiddenPIDs.removeAll() // 新一局:以系统现在的真实状态为准,清掉上一局的隐藏记忆
         quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
+        observeHidingChanges()  // 装一次即可(全局通知 ✓)—— 让"藏着"的角标当场跟上 ✓
         purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
+        // ★ "已收纳"的账**跨局保留**(用户 2026-09-22:「角标要常驻」✓)—— 只靠下面的自愈剪枝 ✓
+        hidingPIDs.removeAll()          // 隐藏标记是现读系统的 ✓ 这里只是清掉上一帧的缓存
+        sessionMinimizedPIDs.removeAll() // "不许唤醒"只活一局 ✓(记号常驻,守卫不常驻)
         // T91:换环意图只活一局。**只在它真的挂着时留账**(日志预算:常态两行,这里是例外才出声)
         if pendingLaunchRing { trace("[T91] 新一局:上一局的换环意图没兑现,丢掉") }
         pendingLaunchRing = false
@@ -454,6 +494,11 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        // ★ 唤起**也要**剪一次记号(2026-09-22 用户实报「已经从缩率态回来了, 图标没有消失」的真因 ✓):
+        //   剪枝原本只挂在 `applyRefreshed` 上 —— 而它只在我们**自己的动作后**才跑(⌘M/W/H ✓)。
+        //   "从 Dock 把窗点回来"**不产生我们的任何动作** ✗ ⇒ 那条路根本没人剪 ✗
+        //   ⇒ 局面重设的这一刻就是最好的机会(而且这里最便宜:一局一次 ✓)
+        reconcileMinimizedMarks(raw)
         listReady = true
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
@@ -2413,8 +2458,26 @@ final class PanelController: ObservableObject {
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
-            WindowFocuser.minimize(window: w)
-            purgedWIDs.insert(w.wid) // 先记后摘:复核之前不许它"诈尸"回来
+            // ★★ **先记后做**(与 purgedWIDs/quitPIDs 同一套 ✓)——
+            //    用户 2026-09-22:「遗照灰的渲染有点延迟. 是在确认窗口真的缩小了吗」
+            //    ⇒ **是**,原来就是:我把"记下已收纳"写在 AX 调用**之后** ✗,而
+            //      `AXUIElementSetAttributeValue` 是**同步跨进程调用**(要等 App 真缩下去才返回 ✓)
+            //      ⇒ 图只能等 App 缩完才变灰 ✓(实测那点延迟就是目标 App 自己的最小化耗时 ✓)
+            //    ⇒ 改成乐观:图**当帧**就变灰 ✓;AX 被拒了再回滚 ✓(不许留假状态 ✓)
+            purgedWIDs.insert(w.wid)          // 先记后摘:复核之前不许它"诈尸"回来
+            minimizedWIDs[w.wid] = g.pid      // 常驻:环上的"已收纳"记号 ✓
+            sessionMinimizedPIDs.insert(g.pid) // 本局:松开时不许唤醒它 ✓
+            marksRevision &+= 1               // ⇒ 当帧重绘(不等 AX ✓)
+            glog("[记号] 记下已收纳(先记后做):窗 \(w.wid) @ \(g.appName)")
+            let accepted = WindowFocuser.minimize(window: w)
+            if !accepted {
+                // 系统没受理(取不到 AX 窗 / 被拒)⇒ **把乐观记的账全撤掉** ✓ 不许留假灰 ✗
+                minimizedWIDs.removeValue(forKey: w.wid)
+                sessionMinimizedPIDs.remove(g.pid)
+                purgedWIDs.remove(w.wid)   // 窗还在屏幕上 ⇒ 别让"复核期"把它按掉 ✗(0.18s 后它会自己回来 ✓)
+                marksRevision &+= 1
+                glog("[记号] 回滚已收纳:窗 \(w.wid) 最小化未被受理")
+            }
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
@@ -2546,7 +2609,111 @@ final class PanelController: ObservableObject {
         }
     }
 
+    /// "已收纳"记号的自愈(每次重枚举后跑一遍,很便宜 ✓):
+    ///   · 那扇窗**回到屏幕上了**(从 Dock 点回来 / 别的路还原了)⇒ 它不再"在 Dock 里" ⇒ 剪掉 ✓
+    ///   · 它的 App 已经不在了 ⇒ 剪掉 ✓(wid 会被系统复用,必须靠 pid 判断,不能只认 wid ✓)
+    /// 隐藏标记同理:现读 `isHidden` ⇒ 只有"还藏着"的才留 ✓
+    private func reconcileMinimizedMarks(_ raw: [AppGroup]) {
+        let before = minimizedWIDs.count
+        var onScreen = Set<CGWindowID>()
+        for g in raw { for w in g.windows { onScreen.insert(w.wid) } }
+        // 每个被标记的 App 问一次 AX 真相(只有 1–2 个 App ✓;问不到就 nil ⇒ 不据此下结论 ✓)
+        var axTucked: [pid_t: Bool?] = [:]
+        for pid in Set(minimizedWIDs.values) where axTucked[pid] == nil {
+            axTucked[pid] = WindowFocuser.hasMinimizedWindow(ofPID: pid)
+        }
+        minimizedWIDs = minimizedWIDs.filter { wid, pid in
+            // ⚠️ **不许拿 purgedWIDs 里的窗当"回来了"** ✗
+            //    病例(2026-09-22 用户实报:「没有常驻, 只出现了一下就消失了」):
+            //    缩下去之后 0.18s 那次重枚举**还会把它报回来**(本仓早就记过这个"诈尸" ✓
+            //    见 purgedWIDs 的注释 ✓),我这里却当场把记号剪掉了 ✗ ⇒ 记号一闪就没 ✓
+            //    ⇒ 按 purgedWIDs 的老规矩:复核期(0.9s)内**不算数** ✓
+            guard !purgedWIDs.contains(wid) else { return true }              // 复核期内:不动它 ✓
+            if onScreen.contains(wid) {                                       // ① 真的回到屏上了 ✓
+                glog("[记号] 摘掉已收纳:窗 \(wid) 回到屏上了")
+                return false
+            }
+            // ② AX 说这个 App 已经一扇缩着的窗都没有了 ⇒ 记号失效 ✓
+            //    ★ 这条才治得住"还原之后 window id 变了"的 App(见 hasMinimizedWindow 的注释 ✓)
+            if let stillTucked = axTucked[pid], stillTucked == false {
+                glog("[记号] 摘掉已收纳:App \(pid) 已经没有缩着的窗了")
+                return false
+            }
+            return NSRunningApplication(processIdentifier: pid)?.isTerminated == false
+        }
+        refreshHidingMarks()
+        if minimizedWIDs.count != before { marksRevision &+= 1 }   // 表变了 ⇒ 保证重绘一次 ✓
+    }
+
+    /// 重算"哪些 App 现在藏着" —— 角标 `eye.slash` 的唯一数据源 ✓
+    ///
+    /// ⚠️ 2026-09-22 用户问:「刚才怎么还偶然看到了一个闭眼不可见的角标…是写在哪了, 什么状态下会出现」
+    ///   —— 他之所以是"偶然看到",就是因为这里**原来只在**重枚举时才算(唤起 / 我们自己动作之后)
+    ///   ⇒ 面板**开着**的时候,别处把 App 藏了/放出来了,角标都要等到下一次刷才跟上 ✗
+    /// ⇒ 现在多两个触发源:`NSWorkspace` 的 hide / unhide 通知(见 `observeHidingChanges`)✓
+    private func refreshHidingMarks() {
+        // ★★ 2026-09-22 修正:`isHidden == true` **不等于**"用户按过 ⌘H" ✗
+        //   用户实报:「还是有啊, 是不是之前的状态还在, 所以有残留」⇒ 当场量了系统(只读):
+        //   ```
+        //   常规 App 共 14 个;其中 isHidden=true 的只有: 文枢(com.meituan.EncryptionBox)
+        //   ```
+        //   ⇒ 他的截图里那枚角标**不是残留** ✓ —— 是那个 App**自己**报的 hidden ✓
+        //      (窗口关掉的工具类 App / 常驻辅助型,没有可见窗口时就会这样 ✗)
+        //   ⇒ 上一轮我写的"口径是系统事实"是**错的** ✗ ⇒ 现在:只认**我们按过 ⌘H 的** App ✓
+        //      再与系统对一次账 ⇒ "只要还是 hide 就一直有"仍然成立 ✓,但不再给局外 App 乱打 ✓
+        //   代价(说清楚):用别的工具隐藏的 App(⌥⌘H"隐藏其他"等)不会有角标 ✓
+        let stillHidden = hiddenPIDs.filter {
+            NSRunningApplication(processIdentifier: $0)?.isHidden == true
+        }
+        // 自己从 Dock / 别处放回来了 ⇒ 记号的依据没了 ⇒ 顺手把这笔账也清了 ✓(自愈 ✓)
+        if Set(stillHidden) != hiddenPIDs { hiddenPIDs = Set(stillHidden) }
+        var hiding = Set<pid_t>()
+        for g in groups where hiddenPIDs.contains(g.pid) {
+            hiding.insert(g.pid)
+        }
+        if hiding != hidingPIDs {
+            if isTraceEnabled {
+                // 谁被判定成 hidden —— 2026-09-22 病例(⌘M 之后冒出"隐藏"角标 ✗)需要这行才能定案:
+                // 到底是系统把"窗都收走的 App"报成了 hidden,还是别处动了它 ✓
+                let names = hiding.subtracting(hidingPIDs).map {
+                    NSRunningApplication(processIdentifier: $0)?.localizedName ?? "\($0)"
+                }
+                let gone = hidingPIDs.subtracting(hiding).map {
+                    NSRunningApplication(processIdentifier: $0)?.localizedName ?? "\($0)"
+                }
+                if !names.isEmpty { glog("[记号] 系统报告这些 App 变成隐藏: \(names.joined(separator: " · "))") }
+                if !gone.isEmpty { glog("[记号] 这些 App 不再隐藏: \(gone.joined(separator: " · "))") }
+            }
+            hidingPIDs = hiding
+        }
+    }
+
+    /// 系统的"某个 App 被藏了 / 被放出来了"通知 ⇒ 立刻跟上(全局只装一次 ✓)
+    ///
+    /// 注意口径:这里认的是**系统事实**(`isHidden`),不是"我们按过 ⌘H" ✓
+    /// ⇒ 别的工具 / "隐藏其他(⌥⌘H)" / App 自己藏的,都会让这枚角标出现 ✓ 这是有意的 ✓
+    private func observeHidingChanges() {
+        guard !didObserveHiding else { return }
+        didObserveHiding = true
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didHideApplicationNotification,
+                     NSWorkspace.didUnhideApplicationNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                // `queue: .main` 是**我们的事实**,但编译器不认 ⇒ 显式说明它 ✓
+                // (不写它会有三条 warning:读 isVisible / 调 refreshAfterAction 都算跨隔离 ✗
+                //   —— 别用"消音"绕过:那会把真正的主线程假设藏起来 ✓)
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // 在台上就顺手重枚举一次:被藏起来的 App,它的窗**还在列表里**(枚举要到下一次
+                    // 重枚举才把它们除掉)⇒ 光改角标会留下几张"已经看不见的卡" ✗
+                    if self.isVisible { self.refreshAfterAction() } else { self.refreshHidingMarks() }
+                }
+            }
+        }
+    }
+
     private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {
+        reconcileMinimizedMarks(raw)
         applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin)
     }
 
@@ -2700,6 +2867,18 @@ final class PanelController: ObservableObject {
         if hiddenPIDs.contains(g.pid) {
             glog("[T29] 选中的组已被隐藏:本轮结束,不唤起它")
             dismiss(reason: "确认(已隐藏)")
+            return
+        }
+        // ★ 本局**被我们缩小过的** App:松开时**什么都不做**(照 H 的先例 ✓)
+        //   病例(2026-09-22 用户实报):「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗
+        //   ⇒ 它此刻是"无窗应用"(窗都收进 Dock 了 ✓),而下面那条会把 App 激活 ⇒ 系统把窗抬回来 ✗
+        //   判据:该 App **在本局**被我们缩小过 ∧ 它在本屏已经没有可选的窗 ✓(还有别的窗就照常切 ✓)
+        //   ⚠️ 必须用**会话账**(`sessionMinimizedPIDs`)而不是常驻的记号表 ✗ ——
+        //     2026-09-22 用户第二条实报:「关闭再唤起之后, 选中 app 拉不起窗口了」✗
+        //     就是拿常驻表当守卫的后果:另起一局再确认也什么都不做 ✗
+        //     ⇒ **本局不唤醒**(那次缩小不算白按 ✓)、**下一局能唤醒**(用户的手已离开键盘 ✓)
+        if sessionMinimizedPIDs.contains(g.pid), g.windows.isEmpty {
+            dismiss(reason: "确认(刚被缩小收纳 ⇒ 不唤醒它)")
             return
         }
         // 无窗应用(T15)不是"空列表"——确认 = 激活(App 自己处理开窗与还原)

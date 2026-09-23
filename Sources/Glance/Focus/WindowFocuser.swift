@@ -124,9 +124,16 @@ enum WindowFocuser {
     }
 
     /// M:最小化窗口(进 Dock;被收走的窗按 CONTEXT.md 归"不可见窗",下次枚举自动消失)
-    static func minimize(window w: WindowRecord) {
-        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
-        AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean)
+    /// 最小化一扇窗。**返回值 = 系统受理了没有** ✓
+    ///
+    /// ⚠️ 这是个**同步的跨进程调用**:它会等到目标 App 真的把窗缩下去才返回 ✓
+    /// (用户 2026-09-22 观察到的"遗照灰渲染有点延迟",问的正是「是在确认窗口真的缩小了吗」✓ ——
+    ///  **是**,原来就是它:调用方把"记下已收纳"写在它**后面** ✗ ⇒ 图只能等 App 缩完才变灰 ✗)
+    /// ⇒ 所以调用方要**先记后做**(与 `purgedWIDs`/`quitPIDs` 同一套 ✓),这里把结果交出去供回滚 ✓
+    @discardableResult
+    static func minimize(window w: WindowRecord) -> Bool {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean) == .success
     }
 
     /// 缩放(绿灯):按它的 zoom 按钮——绿灯是"缩放"不是"全屏",
@@ -237,6 +244,32 @@ enum WindowFocuser {
         let owner = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
         return WindowRecord(wid: wid, pid: pid, ownerName: owner,
                             title: (titleRef as? String) ?? "", bounds: readFrame(element) ?? .zero)
+    }
+
+    /// **这个 App 现在还有缩在 Dock 里的窗吗**(nil = 问不到 ⇒ 调用方**不要**据此下结论 ✓)
+    ///
+    /// 为什么要问 AX 而不是记窗 id(2026-09-22 用户实报「已经从缩率态回来了, 图标没有消失」):
+    ///   · 我原先只认"那扇窗的 id 又出现在屏上了" ⇒ 可**有些 App 还原时会换一个 window id** ✗
+    ///     ⇒ 我记的那个 id 永远不会再出现 ⇒ 记号永远摘不掉 ✗
+    ///   · 也踩过"唤起面板那条路根本不跑剪枝"(见 `finishBegin` ✓)
+    /// AX 这条是**真相**:窗还在不在 Dock 里,系统自己知道 ✓(代价:每个被标记的 App 一次 IPC ✓
+    /// 只有 1–2 个 App 有标记 ⇒ 可以忽略 ✓);问不到就返回 nil,宁可留着记号也不乱摘 ✓
+    static func hasMinimizedWindow(ofPID pid: pid_t) -> Bool? {
+        let app = AXUIElementCreateApplication(pid)
+        // ⚠️ 这条查询会跑在**主线程**(唤起面板那一拍)⇒ 不能让它等全局的 0.5s 超时 ✗
+        //    (全仓默认 0.5s 见 installGlobalMessagingTimeout ✓;一个卡死的 App 会把面板拖住 ✗)
+        //    ⇒ 单独收紧到 0.2s:问不到就返回 nil,宁可留着记号也不卡界面 ✓
+        AXUIElementSetMessagingTimeout(app, 0.2)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
+              let list = ref as? [AXUIElement] else { return nil }
+        for element in list {
+            var m: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &m) == .success,
+                  let b = m as? Bool else { continue }
+            if b { return true }
+        }
+        return false   // 读到了窗表,但一个缩着的都没有 ⇐ 那就是回来了(或被关了)✓
     }
 
     /// 读一扇窗当前的 frame(AX 属性 → CGRect;读不到就 nil)

@@ -96,9 +96,23 @@ public enum TapRound {
         /// 点按时长上限（从"手指落齐"起算）
         public var maxDuration: Double = 0.30
         /// 最短时长：< 30ms 算瞬时毛刺（LumaRing 同款下限）
+        /// 点按的**时长下限**。2026-09-22 病例:一次"三指静置 60ms 后抬起"被判成点按 ⇒ 面板弹出来 ✗
+        /// (用户:「就在回复的时候, 三指误触又出现了」✓ 日志 `[404388ms] 三指 60ms[state 4] 位移 abs=0.3 → 唤起` ✓)
+        /// ⇒ 做成**可试档位**(`debug.tapMinDurationMs`),在真机上找"还认得出有意轻点"的下限 ✓
         public var minDuration: Double = 0.03
         /// 位移上限（归一化）：超过就算滑动，让给系统
         public var maxMove: Float = 0.03
+
+        /// **触点的"重量"下限** —— 太轻的接触不算有意点按 ✓
+        ///
+        /// 病例(2026-09-22 用户复现)「误触了, 我可以抬起的很轻很慢, 就会稳定出现. 看日志, 是检测到离手了?」
+        /// ⇒ **是**:很轻很慢地抬起手指时,触控板报出的触点 size 一路变小(实测那次 = 0.4–0.5 ✓,
+        ///   是整份日志里最轻的一档 ✓),随后触点**在系统层面就"没了"** ✗ ⇒ 我们读到"全部离手"那一帧 ⇒
+        ///   照 LumaRing 的规矩当场判卷 ⇒ 一记 47ms/60ms 的"点按" ✓
+        /// ⇒ 判据补一条**重量门**:一轮里最重的那个触点都不到 0.6 ⇒ 这不是"轻点",是"搭着/掠着" ✗
+        /// ⚠️ 这个 0.6 是**初步值**,要靠真机 A/B 定(有意轻点的 size 分布我们还缺样本 ✗)
+        ///    ⇒ `debug.tapMinContactSize`(设 0 = 关掉这条门,回到旧行为 ✓)
+        public var minContactSize: Float = 0.6
         /// 续接窗口：旧轨迹失联多久之内，新 id 可以认领它
         public var carryWindow: Double = 0.06
         /// 续接半径（归一化距离）：新 id 离旧轨迹多近才算同一根手指（≈ 屏宽的 5%）
@@ -129,8 +143,10 @@ public enum TapRound {
     }
 
     public enum Outcome: Equatable {
-        case fireThree(held: Double, norm: Float, abs: Float)
-        case fireFour(held: Double, norm: Float, abs: Float)
+        // size/major 一路带出来:排查"误触"时要能分辨"是不是巴掌缘/指节"(size 大 ✓)
+        // (2026-09-22 那次误触的起火行里没有这两项 ⇒ 抓到了日志也判不出 ✗)
+        case fireThree(held: Double, norm: Float, abs: Float, maxSize: Float, maxMajor: Float)
+        case fireFour(held: Double, norm: Float, abs: Float, maxSize: Float, maxMajor: Float)
         case slide(norm: Float)
         case rejected(String)
     }
@@ -152,7 +168,9 @@ public enum TapRound {
     // MARK: - 账本
 
     public struct Tracker {
-        public let policy: Policy
+        /// ⚠️ `var`:App 会用 `debug.tapMinDurationMs` 覆写**时长下限**做真机 A/B ✓
+        /// (其余字段仍当常量用 ✓ —— 只有下限这一条需要"在真机上找" ✓)
+        public var policy: Policy
 
         // 一轮的账（见文件头的生命周期表）
         private var live: [Track] = []
@@ -318,7 +336,17 @@ public enum TapRound {
         public func judge(now: Double) -> Outcome {
             if fired { return .rejected("") }
             let snap = snapshot(now: now)
-            guard snap.held >= policy.minDuration else { return .rejected("") }
+            // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
+            guard snap.maxSize >= policy.minContactSize else {
+                return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f ⇒ 搭着/掠着,不是轻点)",
+                                        snap.maxSize, policy.minContactSize))
+            }
+            // ⚠️ 时长下限被挡时**给个理由**(原来是空串 ⇒ 静默丢掉,排查时看不见 ✗)——
+            // 它走的是下面那条统一的"不动作"日志 ⇒ 不新增日志行 ✓
+            guard snap.held >= policy.minDuration else {
+                return .rejected(String(format: "时长 %.0fms < 下限 %.0fms",
+                                        snap.held * 1000, policy.minDuration * 1000))
+            }
             guard (snap.fingerCount == 3 || snap.fingerCount == 4), snap.held <= policy.maxDuration else {
                 // 一指的普通点按：不进账（只在可能相关的局里留账，便于对账"漏在哪一档"）
                 guard snap.fingerCount >= 2 || snap.palmCount > 0 else { return .rejected("") }
@@ -343,11 +371,14 @@ public enum TapRound {
                                             snap.fingerCount, snap.held * 1000, policy.maxDuration * 1000,
                                             policy.pressHoldRange.lowerBound, policy.pressHoldRange.upperBound))
                 }
-                return .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove)
+                return .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove,
+                                 maxSize: snap.maxSize, maxMajor: snap.maxMajorAxis)
             }
             return snap.fingerCount == 4
-                ? .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove)
-                : .fireThree(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove)
+                ? .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove,
+                            maxSize: snap.maxSize, maxMajor: snap.maxMajorAxis)
+                : .fireThree(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove,
+                             maxSize: snap.maxSize, maxMajor: snap.maxMajorAxis)
         }
 
         /// 标记"本轮已生效"（按压触发那条路用；抬手不再按点按重复计）

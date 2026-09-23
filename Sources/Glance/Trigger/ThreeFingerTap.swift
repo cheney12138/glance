@@ -126,7 +126,18 @@ final class ThreeFingerTap {
         static var maxMove: Float { policy.maxMove }
         static var maxDuration: Double { policy.maxDuration }
 
-        private var tracker = TapRound.Tracker()
+        private var tracker: TapRound.Tracker = {
+            var t = TapRound.Tracker()
+            // 点按时长下限的**真机档位**(默认 30ms = 原行为 ✓)
+            // 病例(2026-09-22):一次"三指静置 60ms 后抬起"被判成点按 ⇒ 面板自己弹出来 ✗
+            // (用户:「就在回复的时候, 三指误触又出现了」✓ 日志 `三指 60ms 位移 abs=0.3 → 唤起`)
+            // 判卷没写错 —— 那个形状**就是**一记标准点按;要治的是"这种形状也可能是无意的一搭" ✓
+            // ⇒ 抬下限的代价是"更快的轻点会被挡" ⇒ 只能由用户在真机上定 ⇒ 做成档位 ✓
+            t.policy.minDuration = Double(DebugFlags.tapMinDurationMs) / 1000
+            // 重量门(默认 0.6):"很轻地搭一下"不是点按(见 Policy.minContactSize 的病例 ✓)
+            t.policy.minContactSize = DebugFlags.tapMinContactSize
+            return t
+        }()
         private var lastSnapshot = TapRound.Snapshot()
 
         /// 量尺(进日志):本轮见过的 state 档
@@ -314,28 +325,28 @@ final class ThreeFingerTap {
             let tap = ThreeFingerTap.shared
             let now = CFAbsoluteTimeGetCurrent()
             switch outcome {
-            case let .fireThree(held, norm, absMove):
+            case let .fireThree(held, norm, absMove, maxSize, maxMajor):
                 guard now - tap.lastTapAt > 0.35 else {
                     glog(String(format: "[指点按] 三指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
                     return
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起(钉住)",
-                            held, states, norm, absMove))
+                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起(钉住)",
+                            held, states, norm, absMove, maxSize, maxMajor))
                 if tap.enabled { tap.onFire?() }
                 Haptics.fire(.summonThreeFinger)
                 ThreeFingerTap.logPostFirePointerDrift("三指点按")
                 ThreeFingerTap.cancelIfDragStarted(reason: "三指点按")
-            case let .fireFour(held, norm, absMove):
+            case let .fireFour(held, norm, absMove, maxSize, maxMajor):
                 guard now - tap.lastTapAt > 0.35 else {
                     glog(String(format: "[指点按] 四指 %.0fms → 防抖(距上次 %.2fs),不重复动作", held, now - tap.lastTapAt))
                     return
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, states, norm, absMove))
+                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起并直接进未启动环(钉住)",
+                            held, states, norm, absMove, maxSize, maxMajor))
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")

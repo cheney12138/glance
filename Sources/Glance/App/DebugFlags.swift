@@ -45,6 +45,41 @@ enum DebugFlags {
     /// 无论是否隐藏托盘（排查"托盘没被收走"这类收场问题时用）。
     static var hideTray: Bool { UserDefaults.standard.bool(forKey: Keys.debugHideTray) }
 
+    /// **关面板预拍推迟多少毫秒**(默认 500)。
+    ///
+    /// 病例(2026-09-22 用户「体感上有掉帧, 抓下日志」):那次 `max 652ms` 的长帧,与
+    /// 「关面板预拍:15 窗」和 0.13s 后紧接着的**唤起入场**完全同段 ✓
+    /// ⇒ 一次拍 15 扇窗(实打实 GPU 活)与入场抢资源 ✗ —— 仓库自己早写过这句
+    /// (见 `invalidateAll` 的注释 ✓),只是这条路一直没让开 ✓
+    /// 做成**可试档位**:推迟多少才够要在真机上找 ⇒ `defaults write` 一个数就能 A/B ✓
+    /// (设 0 = 恢复旧行为 ✓;能区分"没写过"与"写成 0" ✓)
+    static var sweepDelayMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugSweepDelayMs) as? Int) ?? 500
+    }
+
+    /// **三/四指点按的时长下限**(毫秒,默认 30 = 原行为)。
+    ///
+    /// 病例(2026-09-22 用户「就在回复的时候, 三指误触又出现了」):日志里那次是
+    /// `三指 60ms[state 4] 位移 norm=0.0018 abs=0.3 → 唤起` ✓ —— 位移几乎为零、时长 60ms,
+    /// 在 30ms 下限的口径里**它就是**一记标准点按 ⇒ 判卷没写错 ✗
+    /// 要治的是"这种形状也可能是无意的一搭"(手指掠过触控板 ✓)⇒ 只能由用户在真机上定
+    /// "还认得出有意轻点"的下限 ⇒ 做成可试档位 ✓
+    /// ⚠️ 代价说清楚:抬下限 ⇒ **更快的轻点也会被挡** ✓ 所以它不是默认值 ✓
+    static var tapMinDurationMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinDurationMs) as? Int) ?? 30
+    }
+
+    /// **触点的重量下限**(默认 0.6;设 0 = 关掉这条门 ✓)。
+    ///
+    /// 病例(2026-09-22 用户「误触了, 我可以抬起的很轻很慢, 就会稳定出现」):很轻地搭上再慢慢抬,
+    /// 触控板报出的 size 一路变小(0.4–0.5,日志里最轻的一档),触点随后在系统层面消失
+    /// ⇒ 我们读到"全部离手"就判卷 ⇒ 误触 ✓
+    /// ⚠️ 0.6 是**初步值**:有意轻点的 size 分布还没有样本(日志里只有这两次误触 ✓)
+    ///    ⇒ 真机 A/B:`defaults write … -float 0.6` / `-float 0.4` / `-int 0` ✓
+    static var tapMinContactSize: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue ?? 0.6
+    }
+
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
@@ -77,6 +112,20 @@ enum DebugFlags {
     /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
     /// 常态（全关）下**一行都不打** ⇒ 不影响日志预算。
     static func reportHeavySwitchesIfNeeded() {
+        // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
+        // 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if tapMinContactSize != 0.6 {
+            print("[⚠️ 重型开关] debug.tapMinContactSize = \(tapMinContactSize)(默认 0.6, 设 0 = 关)—— 点按触点重量下限")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinContactSize)")
+        }
+        if tapMinDurationMs != 30 {
+            print("[⚠️ 重型开关] debug.tapMinDurationMs = \(tapMinDurationMs)ms(默认 30)—— 三/四指点按时长下限")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinDurationMs)")
+        }
+        if sweepDelayMs != 500 {
+            print("[⚠️ 重型开关] debug.sweepDelayMs = \(sweepDelayMs)ms(默认 500)—— 关面板预拍的推迟量")
+            print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugSweepDelayMs)")
+        }
         for s in heavySwitches where s.isOn {
             print("[⚠️ 重型开关] \(s.name) 已打开 —— \(s.cost)")
             print("[⚠️ 重型开关]   排查完请关掉：defaults write com.cheney12138.macswitcher \(s.name) -bool false")

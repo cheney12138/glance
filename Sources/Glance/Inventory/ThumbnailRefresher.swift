@@ -1,5 +1,14 @@
 import AppKit
 
+/// "面板现在在台上吗" —— 只为一个用途存在:**别让预拍与入场抢资源** ✓
+/// (2026-09-22 掉帧病例,见 `DebugFlags.sweepDelayMs` 的注释 ✓)
+/// 做成 MainActor 上的一个小探针:既不让 Inventory 反向依赖面板层 ✓,
+/// 也避开"从后台任务里读 @Published"这类数据竞争 ✗
+@MainActor
+enum PanelStageProbe {
+    static var isVisible: () -> Bool = { false }
+}
+
 /// 缩略图的后台"保温" —— 照 AltTab 的取法:**窗口/应用事件驱动刷新**,而不是只在开局那一刻拍。
 ///
 /// 为什么需要:我们已经有了"跨会话保活 + 按显示优先抓图 + 回填重试",所以面板第一帧**总有图**;
@@ -127,6 +136,16 @@ final class ThumbnailRefresher {
     ///     刚看到的内容,此刻拍的图对下一次唤起 100% 新鲜,下次唤起的 0.45s 补拍基本空转。
     func sweepAllScreens(reason: String) {
         Task.detached(priority: .utility) {
+            // ★ 先让开:关面板那一刻正在收场(托盘/环/图标都在动),紧接着往往就是下一次唤起
+            //   ⇒ 15 窗的预拍与入场抢 GPU ⇒ 实测 652ms 长帧 + 下一张缩略图 +546ms 迟到 ✗
+            let waitMs = DebugFlags.sweepDelayMs
+            if waitMs > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(waitMs) * 1_000_000)
+            }
+            if await MainActor.run(body: { PanelStageProbe.isVisible() }) {
+                glog("[保温] \(reason) 跳过:面板已在台上(不与入场抢资源 ✓)")
+                return
+            }
             let beganAt = CFAbsoluteTimeGetCurrent()
             // rawGroups 的归属判定保证一扇窗只属于一块屏:按屏枚举天然不重不漏
             var windows: [WindowRecord] = []
@@ -139,6 +158,11 @@ final class ThumbnailRefresher {
                 glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
             }
             await Snapshotter.shared.precapture(windows)
+            // 只在"这次确实很贵"时说话(常态静默 ✓ —— 本仓日志预算:一次唤起 ≤2 行 ✓)
+            let total = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
+            if total > 150 {
+                glog("[保温] \(reason) 共 \(windows.count) 窗 · 用时 \(total)ms(>150ms ⇒ 可能压住入场)")
+            }
         }
     }
 
