@@ -749,6 +749,9 @@ struct ShortcutPane: View {
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
     @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = KeyDefaults.doubleOptionJumps
+    /// ⇧+双击 ⌥ 把**落焦窗**送到另一块屏(脱面板的全局动作 ✓)
+    @AppStorage(Keys.pointerShiftDoubleOptionMovesWindow)
+    private var shiftDoubleOptionMovesWindow = KeyDefaults.shiftDoubleOptionMovesWindow
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
     @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = KeyDefaults.scrollMovesSelection
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
@@ -761,6 +764,10 @@ struct ShortcutPane: View {
             SettingsRow(title: "双击 ⌥ 指针跳到另一块屏",
                         desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
                 BeamSwitch(isOn: $doubleOptionJumps)
+            }
+            SettingsRow(title: "⇧ + 双击 ⌥ 把窗口送到另一块屏",
+                        desc: "不管面板开没开，直接把当前 App 正在用的那扇窗送到另一块屏。") {
+                BeamSwitch(isOn: $shiftDoubleOptionMovesWindow)
             }
             SettingsRow(title: "滚动切换应用") {
                 BeamSwitch(isOn: $scrollMovesSelection)

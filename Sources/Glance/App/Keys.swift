@@ -87,6 +87,10 @@ enum Keys {
 
     /// `pointer.doubleOptionJumps`
     static let pointerDoubleOptionJumps = "pointer.doubleOptionJumps"
+    /// `pointer.shiftDoubleOptionMovesWindow`
+    /// ⇧+双击 ⌥:把**当前落焦 App 的落焦窗**送到下一块屏(脱面板的全局动作 ✓)。
+    /// 与 `doubleOptionJumps` 同一个手势家族(**双击 ⌥**),只多一个 ⇧ 作限定 ✓
+    static let pointerShiftDoubleOptionMovesWindow = "pointer.shiftDoubleOptionMovesWindow"
     /// `pointer.fourFingerTapLaunchRing`
     static let pointerFourFingerTapLaunchRing = "pointer.fourFingerTapLaunchRing"
     /// `pointer.threeFingerTapPanel`
@@ -159,6 +163,8 @@ enum KeyDefaults {
     static let graveCyclesWindows = true
     /// 双击 ⌥ 把指针(和键盘焦点)送到另一块屏。**开**:多屏用户的高频痛点 ✓(双击误触概率低)
     static let doubleOptionJumps = true
+    /// ⇧+双击 ⌥ 把落焦窗送到另一块屏。**开**:与上面那条同款多屏痛点 ✓(⇧ 限定后误触概率更低)
+    static let shiftDoubleOptionMovesWindow = true
     /// 悬浮触感。**开**:唯一保留的触感,回答"我到底换到下一格了吗" ✓(强度另有一档设置)
     static let haptic = true
     /// 强制完整动效。**关**(2026-09-22 改):它真正的含义是"**无视**系统的『减弱动态效果』" ⇒

@@ -34,6 +34,8 @@ Requires **macOS 14** or later · Apple Silicon and Intel.
   there when the panel appears.
 - **`⌃⌃` carries your working context to the other display** — the pointer to the
   centre of that screen, the keyboard to the window in front there. Keep typing.
+- **`⇧` and tap `⌥` twice sends the window you are using to the other display** —
+  no panel, works straight from whatever app you are in.
 
 **Keys** — `←` `→` first/last app · `Tab` next app · `1`–`9` pick a window ·
 `` ` `` cycle windows · `Q` `W` `M` `F` `H` act on the selected window ·

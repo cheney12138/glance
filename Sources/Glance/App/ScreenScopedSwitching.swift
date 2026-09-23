@@ -217,6 +217,55 @@ enum DoubleOptionJump {
     }
 }
 
+// MARK: - ⇧+双击 ⌥:把落焦窗送到下一块屏(脱面板的全局动作)
+
+/// 用户口径(2026-09-22):「cmd t 是很多 app 的新建快捷键, 我期望做成**脱离面板**的 ——
+/// 跟 double option 一样。在**当前落焦的 app** 上使用快捷键之后, 直接移动到另一块屏幕」。
+///
+/// 为什么住在 App 层:要同时看 Inventory(窗/屏归属)与 Focus(AX 搬窗)——
+/// 放 Trigger 里就是**双向越界** ✗(架构脚本会报 ✓;与 `DoubleOptionJump` 同一条理由 ✓)
+///
+/// 口径:
+///   · 对象 = **当前落焦 App 的落焦窗**(AXFocusedWindow ✓)—— 与面板里选中哪一格**无关** ✓
+///   · 目的地 = 它**现在所在屏**的下一块(多屏循环 ✓;单屏 ⇒ 什么都不做,只记一行 ✓)
+///   · 落点/尺寸 = `GlanceCore.ScreenMovePolicy`(尺寸不变 ✓ 相对位置 ✓)✓
+enum MoveFocusedWindowToNextScreen {
+    /// `@MainActor`:它要动 AX 与窗口 —— 与 `DoubleOptionJump` 同款隔离 ✓
+    @MainActor
+    static func run() {
+        let screens = NSScreen.screens
+        guard screens.count > 1 else {
+            glog("[T33] 只有一块屏 ⇒ 没有可搬的目的地")
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+            glog("[T33] 前台就是本 App ⇒ 不搬自己")
+            return
+        }
+        let pid = app.processIdentifier
+        let name = app.localizedName ?? "?"
+        guard let win = WindowFocuser.focusedWindow(ofPID: pid), win.bounds.width > 1 else {
+            glog("[T33] 取不到 \(name) 的落焦窗 ⇒ 什么都不做")
+            return
+        }
+        // 它现在归哪块屏(ADR-0008 的归属判据 ✓ —— 与面板同一套,别另立口径 ✗)
+        guard let srcIdx = screens.firstIndex(where: {
+            WindowEnumerator.ownsByContextScreen(win.bounds, contextScreen: $0)
+        }), let dstIdx = ScreenMovePolicy.nextScreenIndex(current: srcIdx, count: screens.count) else {
+            glog("[T33] 认不出这扇窗归哪块屏 ⇒ 什么都不做")
+            return
+        }
+        let src = screens[srcIdx], dst = screens[dstIdx]
+        let target = ScreenMovePolicy.targetFrame(current: win.bounds,
+                                                 source: WindowEnumerator.quartzFrame(of: src),
+                                                 target: WindowEnumerator.quartzFrame(of: dst))
+        glog("[T33] 送屏 \(src.localizedName) → \(dst.localizedName):\(name) — \(win.title)")
+        _ = WindowFocuser.move(window: win, to: target)
+    }
+}
+
+
 // MARK: - (已放弃)轻点 ⌘Tab 不弹面板
 
 // 2026-09-22 试过:轻点(短按快松)不弹面板、直接切 App;按住才弹。
