@@ -269,8 +269,23 @@ enum DisplayOrder {
 ///   · 落点/尺寸 = `GlanceCore.ScreenMovePolicy`(尺寸不变 ✓ 相对位置 ✓)✓
 enum MoveFocusedWindowToNextScreen {
     /// `@MainActor`:它要动 AX 与窗口 —— 与 `DoubleOptionJump` 同款隔离 ✓
+    /// ## 性能(2026-09-22 用户问「这个功能不会有缓存吧, 不要影响性能哈」)
+    ///
+    /// **没有缓存,也没有常驻开销** ✓:
+    ///   · 触发 = `RegisterEventHotKey`(系统注册 ✓)**不是**事件监听 ⇒ 不按快捷键时**开销为零** ✓
+    ///     (没有 tap、没有 monitor、没有定时器 ✓ —— 本文件这段代码里一个都没有 ✓)
+    ///   · 每次按下**现算**:2 次 `CGGetActiveDisplayList` + `NSScreen.screens` + 一次 AX 读落焦窗
+    ///     + 纯函数算落点 + 几次 AX 写(位置/尺寸)✓ 全程没有能过期的中间状态 ✓
+    ///   · 所以也**不需要**缓存:按下是"人手一次"的频率,缓存只会引入"过期值"这类新 bug ✗
+    /// ⚠️ 唯一的真实代价:**AX 是跨进程调用** —— 若前台 App 卡死,这一下会等它
+    ///   (本仓全局 AX 超时 0.5s,见 T29 ✓)⇒ 所以这里把**耗时打出来**,别靠感觉 ✓
     @MainActor
     static func run() {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer {
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            glog(String(format: "[T33] 送窗耗时 %.1fms", ms))
+        }
         let screens = DisplayOrder.screens()      // ★ 与"双击 ⌥ 跳指针"同一套顺序 ✓
         guard screens.count > 1 else {
             glog("[T33] 只有一块屏 ⇒ 没有可搬的目的地")
