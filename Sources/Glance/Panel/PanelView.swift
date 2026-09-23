@@ -224,7 +224,7 @@ struct PanelView: View {
                     IconCell(
                         group: group,
                         // 本局被我们缩小收纳过的 App ⇒ 图标上给个标记(用户第 2 条诉求 ✓)
-                        minimized: controller.minimizedPIDs.contains(group.pid),
+                        mark: controller.mark(for: group.pid),
                         // **选中互斥**(v8 用户裁定):槽被占住时,主环的选中退场 ——
                         // 指针与 Tab 不能同时各选一个,一局只有一个"选中"
                         selected: i == controller.appIndex && !controller.entrySelected,
@@ -356,10 +356,26 @@ struct PanelView: View {
 
 // MARK: - 图标格(选中 = 上浮 14 + 放大 1.14 + 提亮;未选 = 压暗去饱和)
 
+/// 环上图标的**状态记号**(用户 2026-09-22 要求:常驻 + 贴切)
+enum PanelMark {
+    case tucked    // 有窗被我们收起在 Dock 里(⌘M)
+    case hidden    // App 被隐藏了(⌘H),只要还藏着就一直有 ✓
+
+    var symbol: String {
+        switch self {
+        case .tucked: return "rectangle.compress.vertical"   // 一扇被压扁的窗 ✓
+        // ⚠️ 选它的**不是隐喻、是尺寸**:名字最贴切的 `dock.rectangle`(窗 + Dock 那条线)在真实的
+        //    9pt 角标里**糊成一团** ✗(对照图 docs/assets/mark-candidates.png 是我离屏渲染实测的 ✓)
+        //    ⇒ 角标只有 15pt,符号必须"一个块面就看懂" ✓ 要换别的记号改这一行即可 ✓
+        case .hidden: return "eye.slash"
+        }
+    }
+}
+
 private struct IconCell: View {
     let group: AppGroup
-    /// 本局的窗被我们缩小收纳过(Cmd+M)⇒ 画一枚"已收纳"角标 ✓
-    let minimized: Bool
+    /// 图标右下角的状态记号(nil = 无记号)
+    let mark: PanelMark?
     let selected: Bool
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
     let motion: Animation?
@@ -392,19 +408,7 @@ private struct IconCell: View {
             // ★ "已收纳"角标(2026-09-22 用户第 2 条诉求:标记被缩小收纳的 app ✓)
             //   位置选右下角:那里平时空着(收纳之后窗数是 0 ⇒ 窗数记号也空着 ✓),不挤任何既有元素 ✓
             //   ⚠️ 形状/颜色是一行的事:想换别的记号(比如小箭头、或整个图标压暗)改这里就够 ✓
-            .overlay(alignment: .bottomTrailing) {
-                if minimized {
-                    Image(systemName: "arrow.down.to.line")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(PanelColors.thumbTitle)   // 与卡片标题同一套墨色 ✓
-                        .padding(2)
-                        .background(Circle().fill(PanelColors.chipBg))     // 底衬:图标深色时也读得清 ✓
-                        .overlay(Circle().strokeBorder(PanelColors.chipBorder,
-                                                       lineWidth: PanelMetrics.hairline))
-                        .offset(x: -2, y: -1)
-                        .allowsHitTesting(false)
-                }
-            }
+            .overlay(alignment: .bottomTrailing) { markBadge }
             .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
             .contentShape(Rectangle())
             // 真实弹簧:response 越小越"脆",dampingFraction 越小回弹越明显。
@@ -412,7 +416,30 @@ private struct IconCell: View {
             .animation(motion, value: selected)
     }
 
-    /// 窗数记号:圆点 = 1 扇、**短横 = 5 扇**(记账法 / 罗马数字 I-V 那一套,见 `WindowTally`)。
+        /// **状态记号**(右下角一枚)
+    ///
+    /// 用户 2026-09-22:「怎么是个下载的 download 样式…设计的贴切一点, 高级一点」
+    /// ⇒ 语汇换成**窗本身的形态**,不借"箭头"那个外来符号 ✓:
+    ///   · **已收纳**(⌘M 收进 Dock)= `rectangle.compress.vertical` —— 一扇**被压扁的窗** ✓
+    ///     (最小化真身就是"窗被压扁收进 Dock" ✓;而箭头一定会被读成"下载/导出" ✗)
+    ///   · **已隐藏**(⌘H)= `eye.slash` —— 「看不见了」✓(与"收纳"必须能一眼分清 ✓)
+    /// 底衬沿用芯片那套材料(chipBg + hairline + 极淡投影 ✓)—— 深浅底都读得清,且不是贴纸 ✓
+    @ViewBuilder private var markBadge: some View {
+        if let mark {
+            Image(systemName: mark.symbol)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(PanelColors.thumbTitle)
+                .frame(width: 15, height: 15)
+                .background(Circle().fill(PanelColors.chipBg))
+                .overlay(Circle().strokeBorder(PanelColors.chipBorder,
+                                               lineWidth: PanelMetrics.hairline))
+                .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+                .offset(x: -1, y: -1)
+                .allowsHitTesting(false)
+        }
+    }
+
+/// 窗数记号:圆点 = 1 扇、**短横 = 5 扇**(记账法 / 罗马数字 I-V 那一套,见 `WindowTally`)。
     ///
     /// 2026-09-15 定稿:原来是"每扇窗一粒点" —— 13 扇正好铺满格子、20 扇溢出 1.56 倍
     /// (相邻两格的点连成一片),而且同色点只能逐个默数。现在:① 5 进制记号把 20 扇从 164pt
