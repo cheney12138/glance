@@ -2652,8 +2652,23 @@ final class PanelController: ObservableObject {
     ///   ⇒ 面板**开着**的时候,别处把 App 藏了/放出来了,角标都要等到下一次刷才跟上 ✗
     /// ⇒ 现在多两个触发源:`NSWorkspace` 的 hide / unhide 通知(见 `observeHidingChanges`)✓
     private func refreshHidingMarks() {
+        // ★★ 2026-09-22 修正:`isHidden == true` **不等于**"用户按过 ⌘H" ✗
+        //   用户实报:「还是有啊, 是不是之前的状态还在, 所以有残留」⇒ 当场量了系统(只读):
+        //   ```
+        //   常规 App 共 14 个;其中 isHidden=true 的只有: 文枢(com.meituan.EncryptionBox)
+        //   ```
+        //   ⇒ 他的截图里那枚角标**不是残留** ✓ —— 是那个 App**自己**报的 hidden ✓
+        //      (窗口关掉的工具类 App / 常驻辅助型,没有可见窗口时就会这样 ✗)
+        //   ⇒ 上一轮我写的"口径是系统事实"是**错的** ✗ ⇒ 现在:只认**我们按过 ⌘H 的** App ✓
+        //      再与系统对一次账 ⇒ "只要还是 hide 就一直有"仍然成立 ✓,但不再给局外 App 乱打 ✓
+        //   代价(说清楚):用别的工具隐藏的 App(⌥⌘H"隐藏其他"等)不会有角标 ✓
+        let stillHidden = hiddenPIDs.filter {
+            NSRunningApplication(processIdentifier: $0)?.isHidden == true
+        }
+        // 自己从 Dock / 别处放回来了 ⇒ 记号的依据没了 ⇒ 顺手把这笔账也清了 ✓(自愈 ✓)
+        if Set(stillHidden) != hiddenPIDs { hiddenPIDs = Set(stillHidden) }
         var hiding = Set<pid_t>()
-        for g in groups where NSRunningApplication(processIdentifier: g.pid)?.isHidden == true {
+        for g in groups where hiddenPIDs.contains(g.pid) {
             hiding.insert(g.pid)
         }
         if hiding != hidingPIDs {
