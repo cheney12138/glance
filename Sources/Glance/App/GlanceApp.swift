@@ -94,8 +94,9 @@ struct GlanceApp: App {
                     DoubleOptionTap.shared.start()
                     // ★ 双击 ⌥ 的"跳屏 + 落焦"整件事在 App 层(Trigger 只报"发生了" ✓)
                     DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
-                    // ⇧+双击 ⌥ = 把**落焦窗**送到下一块屏(脱面板 ✓)
-                    DoubleOptionTap.shared.onMoveWindowToNextScreen = { MoveFocusedWindowToNextScreen.run() }
+                    // 跨屏送窗(ADR-0016):走**独立注册的快捷键**(默认 ⌘⇧M,可在设置里录 ✓)
+                    // —— 脱面板:和面板开没开、选中哪一格都无关 ✓
+                    hotkeys.onMoveWindowToNextScreen = { MoveFocusedWindowToNextScreen.run() }
                     // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
                     // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
                     ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }

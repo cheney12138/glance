@@ -740,6 +740,10 @@ struct ShortcutPane: View {
     @State private var config = TriggerConfig.load()
     @State private var recording = false
     @State private var monitor: Any?
+    /// **跨屏送窗**的快捷键(脱面板 ✓ ADR-0016):默认 ⌘⇧M,可在这里重录 ✓
+    @State private var moveConfig = TriggerConfig.loadMoveWindow()
+    @State private var recordingMove = false
+    @State private var moveMonitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
     @AppStorage(Keys.switchAdvanceOnOpen) private var advanceOnOpen = KeyDefaults.advanceOnOpen
     /// 颜色外观:auto / light / dark(见 AppearancePreference)
@@ -749,9 +753,6 @@ struct ShortcutPane: View {
     /// 触发键曾是 ⌃,2026-09-17 因与 IDEA 快捷键打架改 ⌥;key 随之换名,不做旧值迁移。
     /// 落焦(键盘跟过去)是跳屏的固定语义,不再有子开关(T87 v2 用户裁定)
     @AppStorage(Keys.pointerDoubleOptionJumps) private var doubleOptionJumps = KeyDefaults.doubleOptionJumps
-    /// ⇧+双击 ⌥ 把**落焦窗**送到另一块屏(脱面板的全局动作 ✓)
-    @AppStorage(Keys.pointerShiftDoubleOptionMovesWindow)
-    private var shiftDoubleOptionMovesWindow = KeyDefaults.shiftDoubleOptionMovesWindow
     /// 面板出现期间,滚轮/双指滑动是否换组(默认开:与 Tab 同义)
     @AppStorage(Keys.switchScrollMovesSelection) private var scrollMovesSelection = KeyDefaults.scrollMovesSelection
     /// 换组速度(次/秒)。存**速度**而不是节流间隔:间隔与手感是倒数关系,
@@ -764,10 +765,6 @@ struct ShortcutPane: View {
             SettingsRow(title: "双击 ⌥ 指针跳到另一块屏",
                         desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
                 BeamSwitch(isOn: $doubleOptionJumps)
-            }
-            SettingsRow(title: "⇧ + 双击 ⌥ 把窗口送到另一块屏",
-                        desc: "不管面板开没开，直接把当前 App 正在用的那扇窗送到另一块屏。") {
-                BeamSwitch(isOn: $shiftDoubleOptionMovesWindow)
             }
             SettingsRow(title: "滚动切换应用") {
                 BeamSwitch(isOn: $scrollMovesSelection)
@@ -817,8 +814,23 @@ struct ShortcutPane: View {
                             desc: "关闭后选中标记不再滑动,仅上浮。") {
                     BeamSwitch(isOn: $slideFromLastApp)
                 }
+                // ★ 2026-09-22 用户裁定:这条做成**快捷键**(不是手势),并放在设置面板里 ✓
+                //   默认 **⌘⇧M**("M = move")—— 出厂默认值住在 `TriggerConfig.moveWindowDefault` 一处 ✓
+                SettingsRow(title: "把窗口送到另一块屏",
+                            desc: "不用打开面板：直接把当前 App 正在用的那扇窗送到另一块屏。"
+                                + "点击右侧可重新录制。") {
+                    Button {
+                        recordingMove ? stopRecordingMove() : startRecordingMove()
+                    } label: {
+                        KeyChip(text: recordingMove ? "按下新组合…" : chip(moveConfig),
+                                editable: true, highlighted: recordingMove)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                    .help(recordingMove ? "按 Esc 取消录制" : "点一下开始录制新的快捷键")
+                }
                 SettingsRow(title: "触发键",
-                            desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃。",
+                            desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃、⌘⇧。",
                             hairline: false) {
                     Button {
                         recording ? stopRecording() : startRecording()
@@ -853,7 +865,7 @@ struct ShortcutPane: View {
                 }
             }
         }
-        .onDisappear { stopRecording() }
+        .onDisappear { stopRecording(); stopRecordingMove() }
     }
 
     /// 触发键胶囊文案:demo 的键位块是"修饰键 + 空格 + 键名",`TriggerConfig.display` 是紧贴写法
@@ -908,7 +920,31 @@ struct ShortcutPane: View {
         recording = false
     }
 
+    /// 录制**送窗快捷键**(与触发键同一套交互 ✓,只是写到 `moveWindow.*` 两个键上)
+    private func startRecordingMove() {
+        recordingMove = true
+        moveMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 0x35 { stopRecordingMove(); return nil }   // Esc 取消
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard let mod = allowedModifier(in: flags) else { return event }  // 没有合法修饰键 ⇒ 继续等
+            UserDefaults.standard.set(Int(event.keyCode), forKey: Keys.moveWindowKeyCode)
+            UserDefaults.standard.set(mod, forKey: Keys.moveWindowModifier)
+            moveConfig = TriggerConfig.loadMoveWindow()
+            print("[T33] 送窗快捷键改为: \(moveConfig.display)")
+            stopRecordingMove()
+            return nil
+        }
+    }
+
+    private func stopRecordingMove() {
+        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
+        moveMonitor = nil
+        recordingMove = false
+    }
+
     private func allowedModifier(in flags: NSEvent.ModifierFlags) -> String? {
+        // ★ 组合修饰键:⌘⇧(送窗的默认档 ✓)—— 必须在单键判断**之前**(否则会被当成 "command" ✗)
+        if flags.contains(.command), flags.contains(.shift) { return "commandShift" }
         if flags.contains(.option) { return "option" }
         if flags.contains(.command) { return "command" }
         if flags.contains(.control) { return "control" }

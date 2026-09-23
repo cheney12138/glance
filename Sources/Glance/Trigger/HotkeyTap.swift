@@ -68,12 +68,17 @@ final class HotkeyTapCenter {
     var onElsewhereInput: (() -> Void)?
     /// T7.5:⌘+左键点击(Quartz 全局坐标)。导航态里挂起(Q9-④)
     var onCmdClick: ((CGPoint) -> Void)?
+    /// **跨屏送窗**的快捷键(默认 ⌘⇧M,可在设置里录 ✓)—— 脱面板的全局动作(ADR-0016 ✓)。
+    /// 与触发键同一套 Carbon 注册(不吞键盘事件流,也不依赖面板 ✓)
+    var onMoveWindowToNextScreen: (() -> Void)?
 
     private var flagsTap: CFMachPort?
     private var mouseTap: CFMachPort?
     private var navTap: CFMachPort?
     private var hotKeyRef: EventHotKeyRef?
     private var reverseHotKeyRef: EventHotKeyRef?
+    /// 跨屏送窗(ADR-0016)的注册句柄
+    private var moveWindowHotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var appliedTrigger: TriggerConfig?
     private var appliedTakeover = false
@@ -81,7 +86,7 @@ final class HotkeyTapCenter {
 
     /// 自家 Carbon 热键的签名与 id(签名用来挡住别人的热键事件串门)
     private static let hotKeySignature = OSType(0x676C6E63) // 'glnc'
-    private enum HotKeyId: UInt32 { case forward = 1, reverse = 2 }
+    private enum HotKeyId: UInt32 { case forward = 1, reverse = 2, moveWindow = 3 }
 
     /// 1…9:直接跳到**当前 App 的第 N 扇窗**(数字 = 跳,与 ` 的"走"并存,CONTEXT.md「走 / 跳」)。
     /// **主键盘与小键盘都收**:用户原话"有时候不想用小数字键盘选窗口"——
@@ -263,6 +268,10 @@ final class HotkeyTapCenter {
         unregisterHotKeys()
         hotKeyRef = registerHotKey(config, extras: [], id: .forward)
         reverseHotKeyRef = registerHotKey(config, extras: [.maskShift], id: .reverse)
+        // ★ 跨屏送窗(ADR-0016):**独立**的和弦(默认 ⌘⇧M ✓),与触发键各注册各的 ✓
+        let moveCfg = TriggerConfig.loadMoveWindow()
+        moveWindowHotKeyRef = registerHotKey(moveCfg, extras: [], id: .moveWindow)
+        glog("[热键] 送窗键注册 = \(moveCfg.display)")
         appliedTrigger = config
         appliedTakeover = TriggerConfig.takeoverEnabled
         let take = NativeHotkeys.plan(for: config, takeover: appliedTakeover).disable.isEmpty ? "否" : "是"
@@ -288,8 +297,10 @@ final class HotkeyTapCenter {
     private func unregisterHotKeys() {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let reverseHotKeyRef { UnregisterEventHotKey(reverseHotKeyRef) }
+        if let moveWindowHotKeyRef { UnregisterEventHotKey(moveWindowHotKeyRef) }
         hotKeyRef = nil
         reverseHotKeyRef = nil
+        moveWindowHotKeyRef = nil
     }
 
     private static func carbonModifiers(_ flags: CGEventFlags) -> UInt32 {
@@ -306,9 +317,16 @@ final class HotkeyTapCenter {
         // 释放不参与语义:确认由"修饰键释放"决定(hold 语义)
         guard pressed, let hotKey = HotKeyId(rawValue: id) else { return }
         trace("hotkey \(hotKey) pressed state=\(state)")
+        // ★ 送窗键(ADR-0016)与面板/会话状态**完全无关** ⇒ 在动状态机之前分派掉 ✓
+        //   (它不该把 state 设成 navigating,也不该因为"正在导航"而被丢掉 ✗)
+        if hotKey == .moveWindow {
+            glog("[热键] \(TriggerConfig.loadMoveWindow().display) → 送窗")
+            onMoveWindowToNextScreen?()
+            return
+        }
         // ★ 热键开面板会**大声报一行**(手势那条另有日志);两条互斥出现 ⇒ 一眼知道是谁按的 ✓
         //   (Carbon 回调只给 id,给不出"物理上是哪颗键"—— 但注册的和弦启动时已报 ✓)
-        glog("[热键] \(hotKey == .reverse ? "⌘⇧Tab(反向)" : "⌘Tab(接管)") 开面板 — 进之前的状态=\(state)")
+        glog("[热键] \(hotKey == .reverse ? "反向" : "正向") 触发键开面板 — 进之前的状态=\(state)")
         // **只在"开局"这一发用它**。实机病:同一个和弦按住期间,系统不会重复投递 `kEventHotKeyPressed`
         // (按住 ⌘ 连按 Tab,只来第一发)→ 于是"继续按 Tab 移动"在旧版里彻底不动(用户实机反馈)。
         // 循环移动改回 navTap 接(会话期它本来就在收 keyDown),这里会话已在跑就什么都不做,

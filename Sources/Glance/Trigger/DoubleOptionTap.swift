@@ -25,11 +25,7 @@ import GlanceCore
 final class DoubleOptionTap {
     /// 双击 ⌥:把"跳到下一块屏"整件事交给 **App 层**(见 `App/ScreenScopedSwitching.swift` ✓)
     var onJumpToNextDisplay: (() -> Void)?
-    /// **⇧ + 双击 ⌥**:把**当前落焦 App 的落焦窗**送到下一块屏(2026-09-22 用户口径:
-    /// 「跟 double option 一样 … 在当前落焦的 app 上使用快捷键之后, 直接移动到另一块屏幕」)。
-    /// 为什么不做在面板里:`⌘T`/`T` 是很多 App 的"新建"键 ✗,放进会话期会改掉它们 ✓
-    /// ⇒ 同一个手势家族(双击 ⌥),多一个 **⇧** 作限定 ✓
-    var onMoveWindowToNextScreen: (() -> Void)?
+
     static let shared = DoubleOptionTap()
     private init() {}
 
@@ -44,14 +40,6 @@ final class DoubleOptionTap {
         UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? KeyDefaults.doubleOptionJumps
     }
 
-    /// ⇧ 那一路的开关(同一个手势家族,各自一个键 ✓)
-    static let moveDefaultsKey = Keys.pointerShiftDoubleOptionMovesWindow
-    private var moveEnabled: Bool {
-        UserDefaults.standard.object(forKey: Self.moveDefaultsKey) as? Bool
-            ?? KeyDefaults.shiftDoubleOptionMovesWindow
-    }
-    /// 上一下带没带 ⇧(两次 ⌥ 的 ⇧ 状态必须**一致** ⇒ ⇧⌥⌥ 与 ⌥⌥ 是两个手势 ✓)
-    private var lastShiftState = false
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -80,28 +68,19 @@ final class DoubleOptionTap {
         case .keyDown:
             dirty = true                       // 夹了别的按键 ⇒ 这一轮作废
         case .flagsChanged:
-            // ⌘/⌃ 动过算"夹了别的键";**⇧ 不算** —— 它现在是本手势的一部分(⇧+双击⌥ = 搬窗 ✓)
-            // (fn / capsLock 常驻,也不算;⌥ 自己是触发键,更不算 ✓)
-            if !e.modifierFlags.intersection([.command, .control]).isEmpty { dirty = true }
+            // ⌘/⌃/⇧ 动过也算"夹了别的键"（fn / capsLock 常驻，不算；⌥ 自己是触发键，不算）
+            if !e.modifierFlags.intersection([.command, .control, .shift]).isEmpty { dirty = true }
             let optionDown = e.modifierFlags.contains(.option)
-            let shift = e.modifierFlags.contains(.shift)
             guard optionDown != optionWasDown else { return }   // 只认状态翻转
             optionWasDown = optionDown
             guard optionDown else { return }                     // 抬起：什么都不做
             let now = CFAbsoluteTimeGetCurrent()
-            // 两次 ⌥ 的 ⇧ 状态必须一致(第一下带 ⇧、第二下没带 ⇒ 不是同一个手势 ✗)
-            if let prev = lastCleanDown, now - prev >= Self.minGap, now - prev <= Self.maxGap,
-               !dirty, shift == lastShiftState {
+            if let prev = lastCleanDown, now - prev >= Self.minGap, now - prev <= Self.maxGap, !dirty {
                 lastCleanDown = nil
                 dirty = false
-                if shift {
-                    if moveEnabled { moveWindowToNextScreen() }
-                } else if enabled {
-                    jumpToNextDisplay()
-                }
+                if enabled { jumpToNextDisplay() }
             } else {
                 lastCleanDown = now
-                lastShiftState = shift
                 dirty = false
             }
         default:
@@ -120,10 +99,5 @@ final class DoubleOptionTap {
         onJumpToNextDisplay?()
     }
 
-    /// ⇧ 那一路:同样是"把话交给 App 层" ✓(它要看清点又要 AX 搬窗 ⇒ Trigger 不许双向越界 ✗)
-    private func moveWindowToNextScreen() {
-        guard NSEvent.pressedMouseButtons == 0 else { return }   // 正拖着东西 ⇒ 别动
-        onMoveWindowToNextScreen?()
-    }
 
 }
