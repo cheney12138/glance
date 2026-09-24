@@ -49,6 +49,9 @@ enum IconTint {
                                  b: Double(buf[i + 2]) / 255, a: a))
         }
         guard let t = VibrantColor.pick(samples: samples) else { return nil }
-        return NSColor(srgbRed: t.r, green: t.g, blue: t.b, alpha: 1)
+        // ★ 再过一道"发光提纯":图标本身的颜色常常又暗又灰(JetBrains 那族 ✗),
+        //   直接拿去画 0.17~0.20 的光读不出来 ⇒ 保留色相、把饱和/亮度抬到能发光的那一档 ✓
+        let g = VibrantColor.glow(from: t)
+        return NSColor(srgbRed: g.r, green: g.g, blue: g.b, alpha: 1)
     }
 }
