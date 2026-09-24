@@ -829,14 +829,16 @@ final class PanelController: ObservableObject {
         // **只在档位变化时打**:同一台机器上它几乎每局一样,重印就是噪音;变了一定要看
         if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
         Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)
-        print(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
+        // ⚠️ 这里原来用 `print`(走 stdout)⇒ **块缓冲** ⇒ 落盘能延迟几分钟 ✗
+        //   (2026-09-24 查"面板比屏还宽"时被它坑了一次:明明打了,日志里半天看不见 ✓)
+        trace(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
                      s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
                      cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : ""))
         // (托盘窗口尺寸那行撤了:它是"整局只 setFrame 一次"的验证账,已验证完;
         //  要复核时看 `[工] 托盘改尺寸` 是否只在开局出现即可)
         if cap < 0.6 {
-            print("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
+            trace("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
         }
     }
 
