@@ -72,7 +72,12 @@ struct PanelView: View {
             // 指针光晕(跟手柔光)—— 2026-09-15 做成**配置项**(用户口径:"有人不一定喜欢这个光效")。
             // 用 `if` 而不是"传 active:false":关掉时这层视图连同它的 TimelineView 一起不存在,
             // 不是"画一个看不见的东西",是真的没有开销。@AppStorage ⇒ 设置里一改立刻生效(不用重开面板)。
-            if sheen {
+            // ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
+            //   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
+            //   原因:两个环是**同一条 strip** 加开关(`entrySelected` ✓),而这团光的位置
+            //   是按**主环几何**算的(`pointerInContent` / 热区 ✓)⇒ 换到未启动环就落错格 ✓
+            //   ⇒ 只在此处加一条判断;视图不挂载时连它的 TimelineView 都不存在(零开销 ✓)
+            if sheen && !controller.entrySelected {
                 SheenOverlay(
                     active: controller.isVisible,
                     pointer: { [weak controller] in controller?.pointerInContent() },
