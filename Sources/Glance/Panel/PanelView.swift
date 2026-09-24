@@ -62,24 +62,17 @@ struct PanelView: View {
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
             glassTopEdge
-            // demo .panel-sheen:玻璃之上、图标之下。
-            //
-            // v0.3 回退(2026-09-14 实拍):曾经试过给高光**挖掉图标格**(even-odd 遮罩),
-            // 想让光斑只落在玻璃上 —— 结果是遮罩的**硬边界**在手电筒扫过时把每个格子
-            // 读成了一个圆角"槽"(用户原话:"把后面 app 的浮起容器的槽给照出来了"),
-            // 比原来的毛病重。结论:光斑落在 App 上也行(很浅,.14/.20 不影响观感),
-            // 不准为了躲它去切硬边 —— 渐变上任何硬边界都是新的形状,不是遮罩。
-            // 指针光晕(跟手柔光)—— 2026-09-15 做成**配置项**(用户口径:"有人不一定喜欢这个光效")。
-            // 用 `if` 而不是"传 active:false":关掉时这层视图连同它的 TimelineView 一起不存在,
-            // 不是"画一个看不见的东西",是真的没有开销。@AppStorage ⇒ 设置里一改立刻生效(不用重开面板)。
-            // ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
-            //   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
-            //   原因:两个环是**同一条 strip** 加开关(`entrySelected` ✓),而这团光的位置
-            //   是按**主环几何**算的(`pointerInContent` / 热区 ✓)⇒ 换到未启动环就落错格 ✓
-            //   ⇒ 只在此处加一条判断;视图不挂载时连它的 TimelineView 都不存在(零开销 ✓)
-            if sheen && !controller.entrySelected {
+// ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
+//   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
+//   原因:两个环是**同一条 strip** 加开关(`entrySelected` ✓),而这团光的位置按**主环几何**算 ✓
+// ⚠️⚠️ 第二版(踩过):我先写成 `if sheen && !entrySelected` —— 换环那一刻**视图树变了** ⇒ 触发一次重排 ✗
+//   ⇒ 正是 v1 抖动那一族(见本文件 182/204 行那两条诊断 ✓),而且刚好发生在"切环"那一下 ✗
+//   ⇒ 改成"**视图一直在,只是不画**":布局零变化 ✓ 未启动环里也不出现 ✓
+//   (设置里那个总开关仍用 `if`:会话级、极低频 ✓;换环是高频 ✓ 两者不能混为一谈)
+if sheen {
                 SheenOverlay(
                     active: controller.isVisible,
+                    enabled: !controller.entrySelected,
                     pointer: { [weak controller] in controller?.pointerInContent() },
                     tint: { [weak controller] in controller?.sheenTint },
                     owner: { [weak controller] in controller?.sheenTintOwner ?? "?" }
@@ -533,6 +526,9 @@ private struct IconCell: View {
 struct SheenOverlay: View {
     /// 面板在台上吗(不在台上就让时间轴停摆,省掉每秒 60 次空转)
     let active: Bool
+    /// 这一帧该不该画光(未启动环 = 不画 ✓)
+    /// ⚠️ 它**不能**用 `if` 在调用处摘视图 —— 换环那一刻视图树一变就会触发重排 ⇒ 抖 ✗(踩过)
+    let enabled: Bool
     /// 指针在面板内容坐标里的位置(nil = 不在面板上)
     let pointer: () -> CGPoint?
     /// ★ 光晕的**颜色** = 选中 App 图标的主色（nil ⇒ 白：图标基本是灰的 / 还没选中 ✓）
@@ -547,8 +543,9 @@ struct SheenOverlay: View {
         // ⚠️ 30Hz 而不是每帧(2026-09-24):这里是**纯绘制**(Canvas 画一团径向渐变),
         //   指针采样不在这儿(那在控制器的 60Hz 定时器里)⇒ 降频只影响这团光的刷新率,
         //   手感一个字不变;而它是"面板在台上 = 8.2% 一个核"里的一份
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active)) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !(active && enabled))) { _ in
             Canvas { ctx, _ in
+                guard enabled else { tracker.reset(); return }   // 不画(未启动环 ✓)
                 guard let (p, alpha) = tracker.step(target: pointer()) else { return }
                 tracker.note(tint: tint(), owner: owner())
                 let peak = (scheme == .dark ? PanelColors.sheenAlphaDark : PanelColors.sheenAlphaLight)
@@ -597,6 +594,9 @@ final class SheenTracker {
         lastTintHex = hex
         glog("[光晕] 颜色 = \(hex) · 跟的是 \(owner)")
     }
+
+    /// 归零(被禁用时调用 ✓):免得再回来时那一帧闪在**旧位置** ✗
+    func reset() { point = nil; intensity = 0 }
 
     func step(target: CGPoint?) -> (CGPoint, CGFloat)? {
         if let t = target {
