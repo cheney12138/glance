@@ -122,6 +122,16 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugTapUndoDriftPt) as? NSNumber)?.doubleValue ?? 40
     }
 
+    /// **陈旧名单先上屏**(默认 true):唤起不等枚举,先用上一局的名单把面板画出来,
+    /// 枚举回来走现成的刷新路径(`applyRefreshed`)✓ —— 门槛在 `GlanceCore.StaleListPolicy` ✓
+    ///
+    /// 账(2026-09-24):`[打卡] 唤起 共 85.9ms | 枚举 44.8 · …` ⇒ 枚举占一多半,
+    /// 而且它**挡在面板出现之前** ⇒ 入口那两根弹簧的头 3 帧被等掉 ✗
+    /// 关掉它(`-bool false`)就是旧行为,用来 A/B ✓
+    static var staleListFirst: Bool {
+        (UserDefaults.standard.object(forKey: Keys.debugStaleListFirst) as? Bool) ?? true
+    }
+
     /// 把档位拼成领域层判据(**唯一一处拼装**)
     static var tapUndoPolicy: TapUndoPolicy {
         var p = TapUndoPolicy.standard

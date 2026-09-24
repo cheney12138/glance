@@ -55,6 +55,8 @@ enum Keys {
     static let debugTapMinContactSize = "debug.tapMinContactSize"
     /// `debug.tapUndoDriftPt` —— 生效后"指针位移多少 pt 就撤销"(默认 40;设 0 = 关)
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
+    /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)
+    static let debugStaleListFirst = "debug.staleListFirst"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 
