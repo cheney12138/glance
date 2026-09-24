@@ -113,6 +113,20 @@ public enum TapRound {
         ///   (`TapRoundCorpusTests` 里那条"已挡住"的样本 ✗)⇒ 放宽 = 把老 bug 请回来 ✗
         ///   ⇒ 于是只动**漂移门**(0.03→0.05 ✓);重量门交给档位 `debug.tapMinContactSize` 现场 A/B ✓
         public var minContactSize: Float = 0.6
+        /// **触点"主轴"上限** —— 太大就不是手指,是**掌心/掌缘**压到了 ✓
+        ///
+        /// 病例(2026-09-24 用户实报):「只用单个笔记本、不接外接屏的时候,两只手放在键盘上打字,
+        /// 有时候**手心位置会碰到触摸板**,导致误触唤起三指」—— 日志里两种形状泾渭分明:
+        /// ```
+        /// 真·三指点按:size 0.6–0.9 · major **8.1–10.4**(指尖)
+        /// 误触(掌心) :size 0.9 / **5.3** / **5.4** / 2.6 · major **17.1 / 20.6 / 29.1 / 24.7** ✗
+        /// ```
+        /// ⇒ 面积差 5–9 倍、主轴差 2–3 倍 ✓ 而现有的"重量门"挡的是**太小**的(搭着/掠着),
+        ///   对掌心这种**又大又实**的接触**完全无效** ✗(门开在了反方向 ✓)
+        /// ⇒ 补一道上限:主轴 > 14 判为掌心/掌缘 ⇒ 不动作 ✓
+        ///   (实测手指上限 10.4 ✓ 掌心下限 17.1 ✓ ⇒ 14 落在两簇正中间,两侧各留 ~3pt 余量 ✓)
+        ///   档位:`debug.tapMaxMajor`(设 0 = 关掉这条门 ✓)
+        public var maxMajor: Float = 14
         /// 续接窗口：旧轨迹失联多久之内，新 id 可以认领它
         public var carryWindow: Double = 0.06
         /// 续接半径（归一化距离）：新 id 离旧轨迹多近才算同一根手指（≈ 屏宽的 5%）
@@ -344,6 +358,13 @@ public enum TapRound {
             guard snap.maxSize >= policy.minContactSize else {
                 return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
                                         snap.maxSize, policy.minContactSize, snap.fingerCount))
+            }
+
+            // ★ 太大 = 掌心/掌缘压到触摸板(2026-09-24 用户实报「打字时手心碰到触摸板误触」✓)
+            //   与"重量门"是**两个方向**的门:那个挡"太小"(搭着/掠着),这个挡"太大"(不是手指 ✓)
+            guard policy.maxMajor <= 0 || snap.maxMajorAxis <= policy.maxMajor else {
+                return .rejected(String(format: "触点太大(主轴 %.1f > 上限 %.0f · %d 指 ⇒ 掌心/掌缘,不是手指)",
+                                        snap.maxMajorAxis, policy.maxMajor, snap.fingerCount))
             }
             // ⚠️ 时长下限被挡时**给个理由**(原来是空串 ⇒ 静默丢掉,排查时看不见 ✗)——
             // 它走的是下面那条统一的"不动作"日志 ⇒ 不新增日志行 ✓

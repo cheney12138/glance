@@ -118,6 +118,20 @@ final class TapRoundCorpusTests: XCTestCase {
             Sample(name: "误触 · 三指 77ms/1.0/11.1", kind: .fires, verdict: .misfire,
                    frames: frames(fingers: 3, holdMs: 77, size: 1.0, major: 11.1, moveTo: 0.0111),
                    log: "三指   77ms norm=0.0111 abs=1.6 size=1.0 major=11.1"),
+            // ★ 2026-09-24 用户实报「只用笔记本打字时**手心位置碰到触摸板** ⇒ 误触唤起三指」——
+            //   日志里那四发的形状(尺寸/主轴,与真点按差一个数量级):
+            // ```
+            // 真·三指点按:size 0.6–0.9 · major  8.1–10.4
+            // 误触(掌心):size 0.9 / 5.3 / 5.4 / 2.6 · major 17.1 / 20.6 / 29.1 / 24.7 ✗
+            // ```
+            //   ⚠️ 造语料时当场发现一件事:那四发里有**三发**(size ≥4.5 或 major ≥22)本来就被仓里
+            //     既有的「**豁免掌**」规则(`palmSize`/`palmMajorAxis`)排除在手指计数之外 ✓
+            //     ⇒ 真正**漏网**的是 `size 0.9 / major 17.1` 这**一类**:大、但没大到豁免线 ✓
+            //     ⇒ 新增的 `maxMajor = 14` 门正是为它加的(手指上限 10.4 ⇒ 两侧各留 ~3pt ✓)
+            Sample(name: "掌心误触 · 三指 49ms/major 17.1", kind: .rejected("太大"), verdict: .misfire,
+                   frames: frames(fingers: 3, holdMs: 49, size: 0.9, major: 17.1, moveTo: 0.0187),
+                   log: "三指   49ms norm=0.0187 abs=1.8 size=0.9 major=17.1  ← 掌心压到触摸板(漏网的那一类)"),
+
             // 这两条**已经被重量门挡住** ✓(2026-09-23 加语料时当场发现的 ✓):
             // 它们的触点只有 0.4/0.5,是日志里最轻的一档 ⇒ `minContactSize = 0.6` 生效 ✓
             // ⇒ 它们是"已覆盖的误触" ✓ —— `verdict` 仍记 `.misfire`(用户当时确实报过 ✓)
@@ -180,6 +194,10 @@ final class TapRoundCorpusTests: XCTestCase {
                 snap = tracker.snapshot(now: f.time)
                 if tracker.feed(f) == 0 { break }
             }
+            // ⚠️ `snap.held == 0` = 这一轮在造帧层面就被重置了(典型:触点大到触发了既有的
+            //   "豁免掌"规则 ⇒ 真手指数为 0 ⇒ 整轮作废)⇒ 这种样本本来就量不出时长,跳过 ✓
+            //   (2026-09-24 加掌心样本时踩到;它说明"够大的掌心早有别的规则挡着" ✓)
+            guard snap.held > 0 else { continue }
             let msTokens = s.log.split(separator: " ").filter { $0.hasSuffix("ms") }
             guard let token = msTokens.first,
                   let logged = Int(token.dropLast(2)) else { continue }

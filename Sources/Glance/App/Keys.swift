@@ -55,6 +55,8 @@ enum Keys {
     static let debugTapMinContactSize = "debug.tapMinContactSize"
     /// `debug.tapMaxMoveNorm` —— 三指判卷的位移上限(归一化;默认取领域层,越大越宽容)
     static let debugTapMaxMoveNorm = "debug.tapMaxMoveNorm"
+    /// `debug.tapMaxMajor` —— 三指判卷的触点主轴上界(默认取领域层 14;掌心误触多就调小)
+    static let debugTapMaxMajor = "debug.tapMaxMajor"
     /// `debug.tapUndoDriftPt` —— 生效后"指针位移多少 pt 就撤销"(默认 40;设 0 = 关)
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)

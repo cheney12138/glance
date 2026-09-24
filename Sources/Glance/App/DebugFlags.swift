@@ -148,9 +148,19 @@ enum DebugFlags {
     static var tapPolicy: TapRound.Policy {
         var p = TapRound.Policy.standard
         p.minDuration = Double(tapMinDurationMs) / 1000   // 时长下限(默认 30ms)
-        p.minContactSize = tapMinContactSize              // 重量门(默认 0.6)
+        p.minContactSize = tapMinContactSize              // 重量门:太小 = 搭着/掠着(默认 0.6)
         p.maxMove = tapMaxMoveNorm                        // 位移上限(默认 0.05)
+        p.maxMajor = tapMaxMajor                          // 主轴上限:太大 = 掌心/掌缘(默认 14)
         return p
+    }
+
+    /// **触点"主轴"上限**(默认取领域层 = 14)。
+    /// 2026-09-24 用户实报:笔记本打字时**掌心**压到触摸板 ⇒ 误触三指 ✓
+    /// 实测掌心主轴 17–29 ✗、手指 8–10 ✓ ⇒ 14 在中间;掌心误触还多就调小
+    ///     defaults write com.cheney12138.macswitcher debug.tapMaxMajor -float 12
+    static var tapMaxMajor: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMaxMajor) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.maxMajor
     }
 
     static var tapUndoPolicy: TapUndoPolicy {

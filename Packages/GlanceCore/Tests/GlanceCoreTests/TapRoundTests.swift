@@ -341,4 +341,58 @@ final class TapRoundTests: XCTestCase {
         let out = run(frames, dragEvidence: true)
         guard case .slide = out else { return XCTFail("大位移照旧是滑动(让给系统), 实际:\(out)") }
     }
+
+    // MARK: - 掌心/掌缘(2026-09-24 用户实报:笔记本打字时手心碰到触摸板)
+
+    /// 主轴超上限 ⇒ 拒(掌心/掌缘,不是手指 ✓)
+    func testPalmSizedContactIsRejected() {
+        var p = TapRound.Policy.standard
+        XCTAssertEqual(p.maxMajor, 14, "默认上限是拿真机样本定的:手指 ≤10.4 / 掌心 ≥17.1 ✓")
+        var t = TapRound.Tracker()
+        t.policy = p
+        // 三根"掌心大小"的接触(主轴 17.1 ⇒ 大,但**没到**既有豁免掌的 22 ✓ —— 这正是漏网那一类)
+        var out = TapRound.Outcome.rejected("")
+        for f in palmFrames(major: 17.1) { t.feed(f); out = t.judge(now: f.time) }
+        if case .fireThree = out { XCTFail("掌心形状不该被判成点按,实际 \(out)") }
+        if case .fireFour = out { XCTFail("掌心形状不该被判成点按,实际 \(out)") }
+    }
+
+    /// 手指大小(主轴 10.4)照旧能过 ✓ —— 别把真点按一起挡掉 ✗
+    func testFingerSizedContactStillFires() {
+        var t = TapRound.Tracker()
+        var out = TapRound.Outcome.rejected("")
+        for f in palmFrames(major: 10.4) { t.feed(f); out = t.judge(now: f.time) }
+        guard case .fireThree = out else { return XCTFail("手指形状应当照旧生效,实际 \(out)") }
+    }
+
+    /// 三指 + 一记掌心(主轴 17.1):只要这一轮里出现过掌形 ⇒ 整轮不算(用户实报的那一发 ✓)
+    func testRoundWithAnyPalmContactIsRejected() {
+        var t = TapRound.Tracker()
+        var out = TapRound.Outcome.rejected("")
+        for f in palmFrames(major: 10.0, extraPalm: 17.1) { t.feed(f); out = t.judge(now: f.time) }
+        if case .fireThree = out { XCTFail("这一轮里出现过掌形,不该判成有意点按") }
+        if case .fireFour = out { XCTFail("这一轮里出现过掌形,不该判成有意点按") }
+    }
+
+    /// 造一圈"三指"帧(可选再叠一记掌心接触);节奏照真机 ~40ms ✓
+    private func palmFrames(major: Float, extraPalm: Float? = nil) -> [TapRound.Frame] {
+        let ids: [Int32] = [21, 22, 23, extraPalm == nil ? 0 : 24]
+        var out: [TapRound.Frame] = []
+        for (i, dt) in [0.0, 0.04, 0.08, 0.12].enumerated() {
+            var cs = (0..<3).map { k in
+                TapRound.Contact(id: ids[k],
+                                 normalized: .init(0.40 + Double(k) * 0.04, 0.40),
+                                 absolute: .init((0.40 + Double(k) * 0.04) * 144, 0.40 * 144),
+                                 size: 0.8, majorAxis: major, state: 4)
+            }
+            if let pm = extraPalm, i >= 1 {
+                cs.append(TapRound.Contact(id: ids[3], normalized: .init(0.30, 0.60),
+                                          absolute: .init(0.30 * 144, 0.60 * 144),
+                                          size: 0.9, majorAxis: pm, state: 4))
+            }
+            out.append(TapRound.Frame(contacts: cs, time: dt))
+        }
+        out.append(TapRound.Frame(contacts: [], time: 0.16))   // 全部离开那一帧 = 判卷
+        return out
+    }
 }
