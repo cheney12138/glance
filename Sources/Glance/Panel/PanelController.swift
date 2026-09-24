@@ -232,6 +232,9 @@ final class PanelController: ObservableObject {
             self.updateStripClickGate()   // Bug2:指针在托盘玻璃里就让长条对合成器隐身
             self.pollRingHover()
             self.resyncSelectionUnderPointer()
+            // ★ 2026-09-24:未启动段那一行原本靠它自己视图里的 TimelineView 每帧轮询
+            //   (而且那个 TimelineView **没有 paused**)現在三处 hover 轮询共用这一个定时器 ✓
+            self.pollLaunchHover()
         }
         t.resume()
         hoverPollTimer = t
@@ -1849,10 +1852,6 @@ final class PanelController: ObservableObject {
     /// **不许在这里直接写 @Published**,否则 Runtime 警告 + `-layoutSubtreeIfNeeded`
     /// 布局递归(2026-09-16 实机两连的病例,见 pollLaunchHover 头上的注释)。
     /// 落账在 `resyncSelectionUnderPointer`,它自己带全部门卫(在台上 / 指针挪过窝 / 等值守卫)。
-    func pollWindowHover() {
-        Task { @MainActor in self.resyncSelectionUnderPointer() }
-    }
-
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
 
     /// 滚轮 / 双指滑动 = 面板里的「Tab」。事件由 **navTap** 转来(会话期才存在的那个 tap,

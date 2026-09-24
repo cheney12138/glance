@@ -532,7 +532,10 @@ struct SheenOverlay: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        TimelineView(.animation(paused: !active)) { _ in
+        // ⚠️ 30Hz 而不是每帧(2026-09-24):这里是**纯绘制**(Canvas 画一团径向渐变),
+        //   指针采样不在这儿(那在控制器的 60Hz 定时器里)⇒ 降频只影响这团光的刷新率,
+        //   手感一个字不变;而它是"面板在台上 = 8.2% 一个核"里的一份
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active)) { _ in
             Canvas { ctx, _ in
                 guard let (p, alpha) = tracker.step(target: pointer()) else { return }
                 let peak = (scheme == .dark ? PanelColors.sheenAlphaDark : PanelColors.sheenAlphaLight) * alpha

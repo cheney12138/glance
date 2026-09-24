@@ -117,16 +117,14 @@ struct PreviewPanelView: View {
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
         // 卡片在指针脚下重排 —— tracking area 在"视图于指针底下重排之后就哑了,不补发 hover"
         // (本仓库实咬两次的病)。表现就是用户实报的「键盘选完组、鼠标去接管,慢半拍」。
-        // 每帧问一次全局指针位置、自己算格子,事件丢了也有帧拍;
-        // 落账走 pollWindowHover 的异步一跳(不许在视图更新中直接写 @Published,见那边病例)。
-        // paused 跟着面板在不在台上走(与 SheenOverlay 同一省电纪律:不台上就一帧都不跑)。
-        .background(alignment: .topLeading) {
-            TimelineView(.animation(paused: !controller.isVisible)) { _ in
-                Canvas { _, _ in controller.pollWindowHover() }
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-            }
-        }
+        // ★ 2026-09-24 **删掉这里的帧拍 TimelineView** —— 它是**重复劳动**:
+        //   它每帧调的 `pollWindowHover()` 所做的全部事情就是
+        //   `Task { @MainActor in resyncSelectionUnderPointer() }`,
+        //   而**同一个函数**已经由 `PanelController` 那个 60Hz 定时器每 16ms 直接调一次
+        //   (`startHoverPolling` → `resyncSelectionUnderPointer` ✓)。
+        //   ⇒ 面板在台上时每帧白做一遍(还多一次 `Task{}` 跳 + 一次视图更新)✗
+        //   实测:面板在台上、指针不动 = **8.2% 一个核**(关着 0.6%)—— 这一处是其中一份 ✓
+        //   删掉之后 hover 行为一个字不变(定时器照旧每 16ms 做同一件事),少一层视图刷新 ✓
     }
 
     private func thumb(at i: Int) -> some View {
@@ -207,17 +205,12 @@ struct PreviewPanelView: View {
         // 与主环 iconStrip 同一手法:spacing 归零、格子自带间隙、两端负 padding 收回
         .padding(.horizontal, -PanelMetrics.iconGap / 2)
         .frame(maxWidth: .infinity)
-        // **帧拍兜底**(与 SheenOverlay 同一哲学):非 key 窗口的 hover 事件投递已经被实咬两次
-        // (先「哑」后「迟钝」),这里每帧问一次全局指针位置、自己算格子 —— 事件丢了也有帧拍。
-        // 只在启动行活着时存在(TimelineView 随本视图挂载/卸载);与逐格 onHover 并存,
-        // 两边写同一个 launchIndex,等值守卫保证不抖
-        .background(alignment: .topLeading) {
-            TimelineView(.animation) { _ in
-                Canvas { _, _ in controller.pollLaunchHover() }
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-            }
-        }
+        // ★ 2026-09-24 **帧拍从视图挪进定时器**(与托盘同一刀):
+        //   原来这里挂着一个**没有 paused 的** `TimelineView(.animation)`(面板不在台上也照跑 ✗),
+        //   每帧只为调一次 `pollLaunchHover()`。现在它与主环、托盘**共用那一个 60Hz 定时器**
+        //   (`startHoverPolling` ✓)—— 一份账、一处节拍,视图这边一拍都不刷 ✓
+        //   `pollLaunchHover()` 自带全部守卫(entrySelected / 托盘在台上 / 指针落在玻璃里 ✓),
+        //   每拍调用很便宜 ✓
     }
 
     private func launchCell(_ i: Int) -> some View {
