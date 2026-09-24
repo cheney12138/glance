@@ -57,6 +57,8 @@ enum Keys {
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)
     static let debugStaleListFirst = "debug.staleListFirst"
+    /// `debug.moveOverflowRule` —— 送窗"塞不下"时切哪边(keepLeft 默认/center/keepRight)
+    static let debugMoveOverflowRule = "debug.moveOverflowRule"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 

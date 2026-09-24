@@ -139,9 +139,23 @@ enum DebugFlags {
         return p
     }
 
+    /// **送窗"塞不下"时切哪边**(2026-09-24 用户实报 DataGrip 右沿跑出去后加)。
+    ///
+    /// 病例:请求内建屏可见区 1728 宽,而 DataGrip 最小宽度 1752 ⇒ 多出的 24pt 必然被切 ✗
+    /// ⇒ 默认 `keepLeft`(**现状,一个字都不变** ✓);想换边就改这个键(改完即生效,不用重启 ✓)
+    ///    按本仓"锚定只能用固定边 / 或居中"的口径,只有这三档 ✓
+    static var moveOverflowRule: ScreenMovePolicy.OverflowRule {
+        let raw = UserDefaults.standard.string(forKey: Keys.debugMoveOverflowRule) ?? ""
+        return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
+    }
+
     static func reportHeavySwitchesIfNeeded() {
         // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
         // 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if moveOverflowRule != .keepLeft {
+            print("[重型开关] debug.moveOverflowRule = \(moveOverflowRule.rawValue)(默认 keepLeft)—— 送窗塞不下时切哪边")
+            print("[重型开关]   复位:defaults delete com.cheney12138.macswitcher \(Keys.debugMoveOverflowRule)")
+        }
         if tapUndoDriftPt != 40 {
             print("[重型开关] debug.tapUndoDriftPt = \(tapUndoDriftPt)pt(默认 40, 设 0 = 关)—— 生效后撤销的位移下限")
             print("[重型开关]   排查完请复位:defaults delete com.cheney12138.macswitcher \(Keys.debugTapUndoDriftPt)")
