@@ -800,9 +800,17 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 size = f
             } else {
                 let scale = PanelScreen.scale
-                let h = (PanelMetrics.shotH * scale).rounded()
-                let a = win.frame.height > 0 ? win.frame.width / win.frame.height : aspect
-                size = CGSize(width: (h * max(0.3, min(4.0, a))).rounded(), height: h)
+                // ★★ 2026-09-24:「与快照**同一把尺子**」以前只是**意图**,现在真同源:
+                //   这里原来是自己算一遍 —— `round(shotH × scale)` × `round(该高 × 窗口比例)` ✗
+                //   而快照那条走 `PanelMetrics.thumbSize(real:aspect:)` → 卡片图缓存(target: imageBox) ✓
+                //   两条路的**取整方式不同** ⇒ 同一扇窗的两个源差 ~1%(实测 图 1.59 vs 快照 1.61 ✓)
+                //   ⇒ 图是"拉伸到 imageBox"铺的 ⇒ 换源那一下整幅画轻微重排 ✓
+                //   用户实报(2026-09-24):「是预览窗那个图片的错位,导致会有一个轻微的位移」
+                //   —— 与他 2026-09-21 那条「换 app 时卡里的画面移了一下」是同一族 ✓
+                //   ⇒ 直接调**同一个函数**得到 pt 尺寸,再乘本屏 scale ⇒ 两个源像素规格完全一致 ✓
+                let box = PanelMetrics.thumbSize(real: win.frame.size, aspect: aspect)
+                size = CGSize(width: (box.width * scale).rounded(),
+                              height: (box.height * scale).rounded())
                 self.frozenSize[wid] = size
             }
             cfg.width = max(2, Int(size.width)); cfg.height = max(2, Int(size.height))
