@@ -342,8 +342,8 @@ public enum TapRound {
             let snap = snapshot(now: now)
             // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
             guard snap.maxSize >= policy.minContactSize else {
-                return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f ⇒ 搭着/掠着,不是轻点)",
-                                        snap.maxSize, policy.minContactSize))
+                return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
+                                        snap.maxSize, policy.minContactSize, snap.fingerCount))
             }
             // ⚠️ 时长下限被挡时**给个理由**(原来是空串 ⇒ 静默丢掉,排查时看不见 ✗)——
             // 它走的是下面那条统一的"不动作"日志 ⇒ 不新增日志行 ✓

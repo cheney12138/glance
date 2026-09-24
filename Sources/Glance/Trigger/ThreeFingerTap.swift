@@ -283,6 +283,26 @@ final class ThreeFingerTap {
         monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
             DispatchQueue.main.async { cancelOnce(how: "收到拖拽事件") }
         }
+        // ★ 提前到 **250ms 这一拍**(2026-09-23 用户「又复现误触了」):
+        //   拖移在接触期间就开始了,但系统合成的拖拽事件要 1s 后才交出来 ✗
+        //   那段"面板已经弹出来"的空窗,正是用户看到的东西 ✓
+        //   判据在 `GlanceCore.TapUndoPolicy`(纯函数 + 单测 ✓):位移够大 **且 手指还在板上** ✓
+        //   ⇒ hover 选 App(手已离板)不会被误撤 —— 那正是这条逻辑以前被否掉的原因 ✓
+        let p0 = NSEvent.mouseLocation
+        let policy = DebugFlags.tapUndoPolicy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let p1 = NSEvent.mouseLocation
+            let drift = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
+            let fingers = ThreeFingerTap.shared.press.lastTouching
+            switch policy.verdict(drift: drift, sinceFire: 0.25, fingersDown: fingers) {
+            case .undo(let why):
+                cancelOnce(how: why)
+            case .keep(let why):
+                if isTraceEnabled, drift >= 8 {
+                    glog("[指点按] 生效后 250ms 指针动了 \(Int(drift))pt,但**不撤**:\(why)")
+                }
+            }
+        }
         // ⚠️ 2026-09-22 **删掉两条"指针位移"兜底** ✗ —— 它们误伤了**钉住的一局**:
         //   病例(用户实报):「三指唤起之后, 怎么 hover 选择 app 面板就会消失啊。不是说此局维持吗」✓
         //   hover 选 App 就是**挪指针**(动辄几百 pt ✗),与拖拽在"指针"这个量上完全分不出来 ✗

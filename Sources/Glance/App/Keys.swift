@@ -53,6 +53,8 @@ enum Keys {
     static let debugTapMinDurationMs = "debug.tapMinDurationMs"
     /// `debug.tapMinContactSize` —— 点按的**触点重量下限**(默认 0.6;设 0 = 关)
     static let debugTapMinContactSize = "debug.tapMinContactSize"
+    /// `debug.tapUndoDriftPt` —— 生效后"指针位移多少 pt 就撤销"(默认 40;设 0 = 关)
+    static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 
