@@ -1,4 +1,5 @@
 import AppKit
+import GlanceCore   // `ScreenMovePolicy.anchorOversized`(塞不下时切哪边 ⇒ 判据在领域层 ✓)
 import ApplicationServices
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,13 +218,34 @@ enum WindowFocuser {
         } else {
             ok = setPosition(frame.origin)
         }
+        // ★ 2026-09-24:「塞不下」要按**实测尺寸**重新对位(用户实报 DataGrip 右沿跑出去 ✓)
+        //   病例:请求内建屏可见区 1728 宽,这扇窗只肯给 1752(它自己的最小宽度 > 屏宽 ✗)
+        //   ⇒ 原来两轮都"未达预期"就收工,左缘钉着 ⇒ 多出来的 24pt 从**右沿**跑出去 ✗
+        //   ⇒ 现在:量到实测尺寸后,按 `moveOverflowRule` 档位重新钉一次位置
+        //     (默认 keepLeft = **现状,一个字都不变** ✓;换边只是试档位 ✓)
+        //   ⚠️ 顺序放在两轮**之后**:先让它把尺寸定下来(第二轮可能还在变),再对位 ✓
+        var overflowNote = ""
+        if resize, let now = readFrame(element),
+           now.width > frame.width + 2 || now.height > frame.height + 2 {
+            let rule = DebugFlags.moveOverflowRule
+            let anchored = ScreenMovePolicy.anchorOversized(achieved: now.size, in: frame, rule: rule)
+            let over = now.width - frame.width
+            if abs(anchored.x - now.minX) > 2 {
+                _ = setPosition(anchored)
+                overflowNote = String(format: " · ⚠️ 塞不下(比屏宽 %.0fpt)⇒ 按「%@」重新对位",
+                                      over, rule.displayName)
+            } else {
+                overflowNote = String(format: " · ⚠️ 塞不下(比屏宽 %.0fpt,按「%@」保持不动 ✓)",
+                                      over, rule.displayName)
+            }
+        }
         var line = "[T33] 搬窗: \(w.title) → 请求 \(Int(frame.minX)),\(Int(frame.minY))"
             + " \(Int(frame.width))x\(Int(frame.height))\(resize ? "(含尺寸)" : "(只挪位)")"
         if let now = readFrame(element) {
             line += " · 实得 \(Int(now.minX)),\(Int(now.minY)) \(Int(now.width))x\(Int(now.height))"
             if resize, !reached() { line += " ⚠️ 未达预期(多半是这扇窗有自己的尺寸约束)" }
         }
-        glog(line)
+        glog(line + overflowNote)
         return ok
     }
 

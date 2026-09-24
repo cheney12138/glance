@@ -48,6 +48,34 @@ final class ThreeFingerTap {
     /// 四指的落点:唤起 + 直接切到未启动环。接线在 GlanceApp,与 onFire 并排
     var onFireFour: (() -> Void)?
 
+    // MARK: 拖移证据(2026-09-23 实锤后加,规格文档表二"一票否决"✓)
+    //
+    // 三指拖移被系统消费时会**合成 leftMouseDown**("按住左键移动" —— 这正是文字能被
+    // 选中的机制),而真轻点不合成任何鼠标事件。误触实锤(日志 `[27900ms] 三指 237ms
+    // 位移 norm=0.0251 size=0.6 → 唤起`):快速选词在**接触期间**就完成了拖移,抬手后
+    // 没有 dragged 事件 ⇒ 事后撤销(`cancelIfDragStarted`)抓不到 ✗
+    // ⇒ 判卷这一刻必须问:**这轮按压期间系统按下过鼠标没有**。
+    // 采集口 = HotkeyTapCenter **已有的** `mouseTap`(`.listenOnly` + leftMouseDown,
+    // 全天候在线)⇒ 零新框架 ✓。窗口 1.5s 的取舍记账见规格文档表二 ✓。
+    private let dragEvidenceLock = NSLock()
+    private var lastDragEvidenceAt: CFAbsoluteTime = 0
+    static let dragEvidenceWindow: CFAbsoluteTime = 1.5
+
+    /// HotkeyTapCenter 的 mouseTap(主线程)调:**≥2 指在板时**看到鼠标按下 ⇒ 记一笔证据。
+    /// 物理点按(拇指按键)时若 ≥2 指搭在板上也会记 —— 那种时刻本就不该唤起面板,方向一致 ✓
+    func noteMouseDownWhileTouching() {
+        guard press.lastTouching >= 2 else { return }
+        dragEvidenceLock.lock(); defer { dragEvidenceLock.unlock() }
+        lastDragEvidenceAt = CFAbsoluteTimeGetCurrent()
+    }
+
+    /// contactFrame(MT 回调线程)判卷前取证据。写在主线程、读在回调线程 ⇒ 锁保护 ✓
+    private func dragEvidencePending() -> Bool {
+        dragEvidenceLock.lock(); defer { dragEvidenceLock.unlock() }
+        guard lastDragEvidenceAt > 0 else { return false }
+        return CFAbsoluteTimeGetCurrent() - lastDragEvidenceAt < Self.dragEvidenceWindow
+    }
+
     // MARK: 私有框架的接口(反推布局,只读 state 一个字段)
 
     private struct MTPoint { var x: Float = 0; var y: Float = 0 }
@@ -139,6 +167,10 @@ final class ThreeFingerTap {
             return t
         }()
         private var lastSnapshot = TapRound.Snapshot()
+        /// 此刻在板上的真手指数(最近一帧的 feed 结果)。给**拖移证据**的采集口用:
+        /// mouseTap(主线程)问"现在板上有没有 ≥2 指" ⇒ 有才记证据 ✓
+        /// (MT 回调线程写、主线程读 —— 与本结构其它标量同一条纪律:单字读写,不拆不绕 ✓)
+        private(set) var lastTouching = 0
 
         /// 量尺(进日志):本轮见过的 state 档
         var statesSeen: [Int32] { lastSnapshot.statesSeen }
@@ -163,12 +195,16 @@ final class ThreeFingerTap {
                 }
             }
             let n = tracker.feed(TapRound.Frame(contacts: contacts, time: now))
+            lastTouching = n
             lastSnapshot = tracker.snapshot(now: now)
             return n
         }
 
-        /// 判卷(**先判卷,再 `endRound()`** —— 顺序反了就是拿空账本判 ✗)
-        func judge() -> Outcome { tracker.judge(now: CFAbsoluteTimeGetCurrent()) }
+        /// 判卷(**先判卷,再 `endRound()`** —— 顺序反了就是拿空账本判 ✗)。
+        /// `dragEvidence` = 这轮按压期间系统按下过鼠标(见 ThreeFingerTap 拖移证据那段 ✓)
+        func judge(dragEvidence: Bool = false) -> Outcome {
+            tracker.judge(now: CFAbsoluteTimeGetCurrent(), dragEvidence: dragEvidence)
+        }
 
         mutating func endRound() {
             tracker.endRound()
@@ -247,6 +283,26 @@ final class ThreeFingerTap {
         monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
             DispatchQueue.main.async { cancelOnce(how: "收到拖拽事件") }
         }
+        // ★ 提前到 **250ms 这一拍**(2026-09-23 用户「又复现误触了」):
+        //   拖移在接触期间就开始了,但系统合成的拖拽事件要 1s 后才交出来 ✗
+        //   那段"面板已经弹出来"的空窗,正是用户看到的东西 ✓
+        //   判据在 `GlanceCore.TapUndoPolicy`(纯函数 + 单测 ✓):位移够大 **且 手指还在板上** ✓
+        //   ⇒ hover 选 App(手已离板)不会被误撤 —— 那正是这条逻辑以前被否掉的原因 ✓
+        let p0 = NSEvent.mouseLocation
+        let policy = DebugFlags.tapUndoPolicy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let p1 = NSEvent.mouseLocation
+            let drift = ((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y)).squareRoot()
+            let fingers = ThreeFingerTap.shared.press.lastTouching
+            switch policy.verdict(drift: drift, sinceFire: 0.25, fingersDown: fingers) {
+            case .undo(let why):
+                cancelOnce(how: why)
+            case .keep(let why):
+                if isTraceEnabled, drift >= 8 {
+                    glog("[指点按] 生效后 250ms 指针动了 \(Int(drift))pt,但**不撤**:\(why)")
+                }
+            }
+        }
         // ⚠️ 2026-09-22 **删掉两条"指针位移"兜底** ✗ —— 它们误伤了**钉住的一局**:
         //   病例(用户实报):「三指唤起之后, 怎么 hover 选择 app 面板就会消失啊。不是说此局维持吗」✓
         //   hover 选 App 就是**挪指针**(动辄几百 pt ✗),与拖拽在"指针"这个量上完全分不出来 ✗
@@ -319,7 +375,7 @@ final class ThreeFingerTap {
         //    "不误触"是因为**什么都不触发** ✗,日志:开火 0 / 不动作 0 / 账本 1.0s 未收口)
         //   ⇒ 恢复"抬手帧当场判" ✓;单指误触由**起点清 id**那条真修复挡着 ✓
         let states = tap.press.statesSeen.sorted().map(String.init).joined(separator: "/")
-        let outcome = tap.press.judge()          // 先判卷(要用账本 ✓)
+        let outcome = tap.press.judge(dragEvidence: tap.dragEvidencePending())   // 先判卷(要用账本 ✓)
         tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
         DispatchQueue.main.async {
             let tap = ThreeFingerTap.shared

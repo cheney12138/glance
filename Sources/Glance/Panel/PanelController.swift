@@ -8,6 +8,13 @@ import SwiftUI
 @MainActor
 final class PanelController: ObservableObject {
     @Published private(set) var groups: [AppGroup] = []
+    /// 上一局的名单**副本** + 它属于哪块屏(用于"陈旧名单先上屏" ✓)
+    ///
+    /// ⚠️ 为什么不能直接拿 `groups`:散场时有一句 `groups = []`(第 1195 行 ✓,拆窗的一部分)
+    /// ⇒ 第二局唤起时它是空的 ✗ —— 第一版就是这么写的,实机一验:`[打卡] … 枚举 39.6` 照旧等枚举 ✓
+    /// 所以另存一份副本(只有一份源:由 `finishBegin` / `applyList` 在"名单成为事实"那两处写 ✓)
+    private var lastSessionGroups: [AppGroup] = []
+    private var lastSessionScreenID: CGDirectDisplayID?
     @Published var appIndex = 0
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
@@ -225,6 +232,9 @@ final class PanelController: ObservableObject {
             self.updateStripClickGate()   // Bug2:指针在托盘玻璃里就让长条对合成器隐身
             self.pollRingHover()
             self.resyncSelectionUnderPointer()
+            // ★ 2026-09-24:未启动段那一行原本靠它自己视图里的 TimelineView 每帧轮询
+            //   (而且那个 TimelineView **没有 paused**)現在三处 hover 轮询共用这一个定时器 ✓
+            self.pollLaunchHover()
         }
         t.resume()
         hoverPollTimer = t
@@ -478,22 +488,62 @@ final class PanelController: ObservableObject {
         // 事件 tap 的 runloop 挂在主线程,枚举(几十毫秒)一旦压在 tap 回调里,系统会判回调超时
         // 把 tap 停用 —— 停用那一瞬漏出去的 ⌘Tab 就是 macOS 原生切换器(实机量到:
         // begin 之后主线程被占 ~110ms,期间投递的按键全在排队)。让回调立刻返回,枚举在后台跑。
+        // ★ ① 「陈旧名单先上屏」(2026-09-24):别干等枚举那 40–63ms ✗
+        //   账:`[打卡] 唤起 共 85.9ms | 枚举 44.8 · 落点 16.0 · 开窗 17.4 · 首帧 7.7`
+        //   ⇒ 枚举占一多半,而且它**挡在面板出现之前** ⇒ 入口那两根弹簧的头 3 帧被等掉 ✓
+        //   门槛(`StaleListPolicy` ✓):档位开着 ∧ 有名单 ∧ 有窗 ∧ **同一块屏**(ADR-0008 ✓)
+        let stale = StaleListPolicy.canShowStale(
+            enabled: DebugFlags.staleListFirst,
+            listCount: lastSessionGroups.count,
+            windowCount: lastSessionGroups.reduce(0) { $0 + $1.windows.count },
+            sameScreen: DisplayOrder.displayID(of: screen) == lastSessionScreenID)
+        if stale {
+            // ⚠️ **必须下一拍再做,不能在 tap 回调里同步做**:`finishBegin` 里还有 AX 调用、
+            //   Dock 名单读取(首局要加载图标,几十 ms)与开窗布局 —— 这些压在事件 tap 的回调里,
+            //   系统会判回调超时把 tap 停用 ⇒ 那一瞬漏出去的 ⌘Tab 就是 macOS 原生切换器 ✗
+            //   (这正是当初把枚举搬后台的原因,别在原地把它请回来 ✓)
+            //   下一拍 ≈ 0.1–1ms,仍比等枚举(40–63ms)早得多 ✓
+            DispatchQueue.main.async {
+                guard generation == self.beginGeneration else { return }
+                // 用上一局的名单把面板画出来(位置/落点/入场照旧 ✓);枚举回来只**刷新内容** ✓
+                let staleList = self.lastSessionGroups
+                let wins = staleList.reduce(0) { $0 + $1.windows.count }
+                self.trace("[T8] 陈旧名单先上屏:\(staleList.count) 个 App · \(wins) 扇窗(不等枚举)")
+                self.finishBegin(staleList, generation: generation, beganAt: beganAt,
+                                 reverse: reverse, stale: true)
+            }
+        }
         Task.detached(priority: .userInitiated) {
             let raw = WindowEnumerator.rawGroups(on: screen)
             await MainActor.run {
-                self.finishBegin(raw, generation: generation, beganAt: beganAt, reverse: reverse)
+                if stale {
+                    // 已经用陈旧名单上屏了 ⇒ **不能**再走 `finishBegin`(那会重演一次入场 ✗)
+                    // ⇒ 走现成的刷新路径:顺序冻结、按 pid 认住选中(与"处决后刷新"同一条路 ✓)
+                    let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
+                    self.trace(String(format: "[T8] 枚举到达 +%.0fms(上屏用的是陈旧名单,这里只刷新内容)", ms))
+                    let keepPID = self.groups.indices.contains(self.appIndex) ? self.groups[self.appIndex].pid : nil
+                    self.applyRefreshed(raw, keepPID: keepPID, keepWin: self.winIndex, forceReshoot: false)
+                } else {
+                    self.finishBegin(raw, generation: generation, beganAt: beganAt, reverse: reverse)
+                }
             }
         }
     }
 
-    private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime, reverse: Bool) {
-        SessionMarks.step("枚举")
+    /// - Parameter stale: true = 这一趟画的是**上一局的名单**(枚举还没回来)
+    private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime,
+                             reverse: Bool, stale: Bool = false) {
+        // 打卡器上的名字要说实话:陈旧那一趟不能记成"枚举" ✗(否则 A/B 看不出省了多少)
+        SessionMarks.step(stale ? "陈旧上屏" : "枚举")
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
         let screen = contextScreen
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        // 记下这份名单(和它属于哪块屏):下一局唤起要靠它先上屏 ✓
+        lastSessionGroups = groups
+        lastSessionScreenID = screen.flatMap { DisplayOrder.displayID(of: $0) }
         // ★ 唤起**也要**剪一次记号(2026-09-22 用户实报「已经从缩率态回来了, 图标没有消失」的真因 ✓):
         //   剪枝原本只挂在 `applyRefreshed` 上 —— 而它只在我们**自己的动作后**才跑(⌘M/W/H ✓)。
         //   "从 Dock 把窗点回来"**不产生我们的任何动作** ✗ ⇒ 那条路根本没人剪 ✗
@@ -611,14 +661,23 @@ final class PanelController: ObservableObject {
         //
         // 世代守卫:中途开了新一局就作废这一单,免得与新一局的预截白拍两遍;
         // dismiss 自己会把 beginGeneration +1,所以"面板已关"也自动作废,不用另判 isVisible。
+        // ★ ② 开局面板**只补"真的没有图"的那些窗**(2026-09-24):
+        //   账:`[打卡] 首图上屏 +211 / +254 / +475 / +579 / +611ms(本批 1 张)` —— 缺图那扇窗
+        //   要等到 `recaptureDelay`(0.45s)那一趟才拿到图 ⇒ 用户正盯着的那张卡一直是"截图中…"
+        //   `maxAge: .infinity` ⇒ 只拍**缓存里压根没有**的窗(命中与过期的都不拍 ⇒
+        //   T86 那条"唤起零拍"的意思照旧成立:别为了刷新去重拍已有的图)
+        Snapshotter.shared.precapture(shown, maxAge: .infinity)
+        Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) }, maxAge: .infinity)
         let shownGeneration = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.recaptureDelay) { [weak self] in
-            guard let self, shownGeneration == self.beginGeneration else { return }
+            guard !stale, let self, shownGeneration == self.beginGeneration else { return }
             Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
             Snapshotter.shared.precapture(shown, force: true)
         }
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
-        trace(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
+        if !stale {
+            trace(String(format: "[T8] 按键→枚举就位 %.0fms(后台枚举,不卡按键)", ms))
+        }
         guard !groups.isEmpty else {
             print("[T6] 本屏无窗,面板不出现(语境屏 = \(screen?.localizedName ?? "?"))")
             endActivity() // 同上:早退要还
@@ -1793,10 +1852,6 @@ final class PanelController: ObservableObject {
     /// **不许在这里直接写 @Published**,否则 Runtime 警告 + `-layoutSubtreeIfNeeded`
     /// 布局递归(2026-09-16 实机两连的病例,见 pollLaunchHover 头上的注释)。
     /// 落账在 `resyncSelectionUnderPointer`,它自己带全部门卫(在台上 / 指针挪过窝 / 等值守卫)。
-    func pollWindowHover() {
-        Task { @MainActor in self.resyncSelectionUnderPointer() }
-    }
-
     // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
 
     /// 滚轮 / 双指滑动 = 面板里的「Tab」。事件由 **navTap** 转来(会话期才存在的那个 tap,
@@ -2712,9 +2767,11 @@ final class PanelController: ObservableObject {
         }
     }
 
-    private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int) {
+    /// - Parameter forceReshoot: true = 显示组强制重拍(处决等真变化);
+    ///   false = 只补缺图 —— 「陈旧名单 → 新鲜枚举」那一趟用它,免得在入场那几帧里重拍已有的图
+    private func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int, forceReshoot: Bool = true) {
         reconcileMinimizedMarks(raw)
-        applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin)
+        applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin, forceReshoot: forceReshoot)
     }
 
     /// 一局之内**顺序冻结**:本局的 App 顺序在开局那一刻定下(开局那次才走 MRU 排序),
@@ -2772,7 +2829,7 @@ final class PanelController: ObservableObject {
     }
 
     /// 列表落地(内容 → 屏幕):钳选中、剪缓存、重拍、重排长条与托盘。
-    private func applyList(_ fresh: [AppGroup], keepPID: pid_t?, keepWin: Int) {
+    private func applyList(_ fresh: [AppGroup], keepPID: pid_t?, keepWin: Int, forceReshoot: Bool = true) {
         guard !fresh.isEmpty else {
             dismiss(reason: "处决后无窗可切")
             return
@@ -2790,13 +2847,14 @@ final class PanelController: ObservableObject {
         Snapshotter.shared.reapAlive()
         let shown = groups.first?.windows ?? []
         let shownIDs = Set(shown.map(\.wid))
-        Snapshotter.shared.precapture(shown, force: true)
+        Snapshotter.shared.precapture(shown, force: forceReshoot)
         Snapshotter.shared.precapture(groups.flatMap { $0.windows }.filter { !shownIDs.contains($0.wid) })
         // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
         if let panel, let target = centerFrame(for: paddedSize()) {
             setFrameIfNeeded(panel, target)
         }
         updatePreview()
+        lastSessionGroups = groups   // 名单已刷新 ⇒ 陈旧副本跟上(否则下一局先上屏的是更旧的 ✓)
         print("[处决后] \(groups.count) 个 App,选中 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
         trace("[T12] 处决后顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
     }

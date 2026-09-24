@@ -1,4 +1,5 @@
 import Foundation
+import GlanceCore   // `tapUndoPolicy` 要拼领域层的 `TapUndoPolicy`(判据只在那边 ✓)
 
 /// ★ 全部调试/诊断开关的**唯一入口**。
 ///
@@ -111,9 +112,54 @@ enum DebugFlags {
 
     /// 启动时叫一次（`GlanceApp.init`）：有重型开关开着就大声报出来。
     /// 常态（全关）下**一行都不打** ⇒ 不影响日志预算。
+    /// **生效后"指针位移多少 pt 就撤销"**(默认 40pt;设 0 = 关掉这条)。
+    ///
+    /// 病例(2026-09-23 用户「又复现误触了」):判卷那一拍样样合规(150ms / 位移 0.3 / size 1.4),
+    /// 指针却在 +220ms 后动了 152pt,而系统把拖拽事件拖到 +1.2s 才交出来 ✗
+    /// ⇒ 这条把撤销从"等拖拽事件"提前到 **250ms 那一拍** ✓
+    /// ⚠️ 只在 **手指还在板上** 时才撤(hover 选 App 时手已离板 ⇒ 不撤)—— 判据见 `TapUndoPolicy` ✓
+    static var tapUndoDriftPt: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugTapUndoDriftPt) as? NSNumber)?.doubleValue ?? 40
+    }
+
+    /// **陈旧名单先上屏**(默认 true):唤起不等枚举,先用上一局的名单把面板画出来,
+    /// 枚举回来走现成的刷新路径(`applyRefreshed`)✓ —— 门槛在 `GlanceCore.StaleListPolicy` ✓
+    ///
+    /// 账(2026-09-24):`[打卡] 唤起 共 85.9ms | 枚举 44.8 · …` ⇒ 枚举占一多半,
+    /// 而且它**挡在面板出现之前** ⇒ 入口那两根弹簧的头 3 帧被等掉 ✗
+    /// 关掉它(`-bool false`)就是旧行为,用来 A/B ✓
+    static var staleListFirst: Bool {
+        (UserDefaults.standard.object(forKey: Keys.debugStaleListFirst) as? Bool) ?? true
+    }
+
+    /// 把档位拼成领域层判据(**唯一一处拼装**)
+    static var tapUndoPolicy: TapUndoPolicy {
+        var p = TapUndoPolicy.standard
+        p.minDrift = tapUndoDriftPt
+        return p
+    }
+
+    /// **送窗"塞不下"时切哪边**(2026-09-24 用户实报 DataGrip 右沿跑出去后加)。
+    ///
+    /// 病例:请求内建屏可见区 1728 宽,而 DataGrip 最小宽度 1752 ⇒ 多出的 24pt 必然被切 ✗
+    /// ⇒ 默认 `keepLeft`(**现状,一个字都不变** ✓);想换边就改这个键(改完即生效,不用重启 ✓)
+    ///    按本仓"锚定只能用固定边 / 或居中"的口径,只有这三档 ✓
+    static var moveOverflowRule: ScreenMovePolicy.OverflowRule {
+        let raw = UserDefaults.standard.string(forKey: Keys.debugMoveOverflowRule) ?? ""
+        return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
+    }
+
     static func reportHeavySwitchesIfNeeded() {
         // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
         // 与重型量具同一条纪律:不许静默偏离默认 ✓
+        if moveOverflowRule != .keepLeft {
+            print("[重型开关] debug.moveOverflowRule = \(moveOverflowRule.rawValue)(默认 keepLeft)—— 送窗塞不下时切哪边")
+            print("[重型开关]   复位:defaults delete com.cheney12138.macswitcher \(Keys.debugMoveOverflowRule)")
+        }
+        if tapUndoDriftPt != 40 {
+            print("[重型开关] debug.tapUndoDriftPt = \(tapUndoDriftPt)pt(默认 40, 设 0 = 关)—— 生效后撤销的位移下限")
+            print("[重型开关]   排查完请复位:defaults delete com.cheney12138.macswitcher \(Keys.debugTapUndoDriftPt)")
+        }
         if tapMinContactSize != 0.6 {
             print("[⚠️ 重型开关] debug.tapMinContactSize = \(tapMinContactSize)(默认 0.6, 设 0 = 关)—— 点按触点重量下限")
             print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinContactSize)")
