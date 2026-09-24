@@ -20,8 +20,14 @@ enum IconTint {
     /// - Returns: nil ⇒ 调用方退回白色（宁可不变，也不要灰蒙蒙 ✗）
     static func color(for image: NSImage, key: String) -> NSColor? {
         if let hit = cache[key] { return hit }      // 含"上次算出来就是 nil" ✓
+        let t0 = CFAbsoluteTimeGetCurrent()
         let c = compute(image)
         cache[key] = c
+        // 它**唯一的真实代价**就是这第一次(32×32 位图 + 1024 个采样 ⇒ 每枚图标一次/进程 ✓)
+        // ⇒ 把数字打出来,别把它留成"感觉上很贵" ✗(一次查询 = 查表 ⇒ 每帧的成本可忽略 ✓)
+        if isTraceEnabled {
+            glog(String(format: "[光晕] 首次取色 %@ 用时 %.2fms(之后都是查表 ✓)", key, (CFAbsoluteTimeGetCurrent() - t0) * 1000))
+        }
         return c
     }
 
