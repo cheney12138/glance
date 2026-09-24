@@ -78,7 +78,10 @@ enum DebugFlags {
     /// ⚠️ 0.6 是**初步值**:有意轻点的 size 分布还没有样本(日志里只有这两次误触 ✓)
     ///    ⇒ 真机 A/B:`defaults write … -float 0.6` / `-float 0.4` / `-int 0` ✓
     static var tapMinContactSize: Float {
-        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue ?? 0.6
+        // ⚠️ 出厂默认值**只有一处** = `TapRound.Policy.standard.minContactSize`(领域层 ✓)
+        //   这里原来写死 0.6 ⇒ 改领域层默认值时这里会悄悄跟不上 ✗(把一件事实写成两份)
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.minContactSize
     }
 
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
@@ -132,7 +135,24 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugStaleListFirst) as? Bool) ?? true
     }
 
+    /// **三指判卷的位移上限**(归一化;默认取领域层)。
+    /// 2026-09-24 用户实报「三指要点好多遍才能唤起」⇒ 真点按的漂移(0.03–0.05)被误杀 ✗
+    /// 想更宽容:`defaults write com.cheney12138.macswitcher debug.tapMaxMoveNorm -float 0.08`
+    static var tapMaxMoveNorm: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMaxMoveNorm) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.maxMove
+    }
+
     /// 把档位拼成领域层判据(**唯一一处拼装**)
+    /// 把两个档位拼成判卷策略(**唯一一处拼装** ✓ —— 触发层只认它)
+    static var tapPolicy: TapRound.Policy {
+        var p = TapRound.Policy.standard
+        p.minDuration = Double(tapMinDurationMs) / 1000   // 时长下限(默认 30ms)
+        p.minContactSize = tapMinContactSize              // 重量门(默认 0.6)
+        p.maxMove = tapMaxMoveNorm                        // 位移上限(默认 0.05)
+        return p
+    }
+
     static var tapUndoPolicy: TapUndoPolicy {
         var p = TapUndoPolicy.standard
         p.minDrift = tapUndoDriftPt
