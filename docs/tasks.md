@@ -241,3 +241,19 @@ Q/W/M 保留这条;**zoom/fullscreen 不摘**(全屏是进出 Space,猜错方向
   个别 max 尖峰 100–173ms,单发、不成串。
 
 **结论**:同根变形 v1.1(0.18s + 轻推淡切)在自动化长压测下无帧率回归,越用越稳的担忧排除。
+
+## 2026-09-23 深夜:三指误触"最后一刀"——拖移证据一票否决(本机实锤驱动)
+
+**病例(用户复现 + trace.log 实锤)**:误触那发 `[27900ms] 三指 237ms 位移 norm=0.0251 size=0.6 → 唤起`,
+同会有意轻点 `94ms norm=0.0287 size=0.8` —— 误触的位移**反而更低** ⇒ 静态阈值(时长/位移/重量)
+在数学上分不开这一对;快速选词的拖移在**接触期间完成**,抬手后无 dragged ⇒ 事后撤销也抓不到。
+
+**修**:三指拖移被系统消费时必**合成 `leftMouseDown`**(真轻点不合成)⇒ 用已有的 `mouseTap`
+采集"≥2 指在板时见过鼠标按下",`TapRound.judge(now:dragEvidence:)` 一票否决(滑动判定之后、
+生效之前 —— 只拦"本该生效"的局,大位移照旧报"让给系统"不改口)。窗口 1.5s(取舍见
+design/gesture-session-spec.md 表二)。改动:`TapRound.swift`(核,+1 参)、`TapRoundTests.swift`
+(+3 例:三指拦/四指拦/滑动不改口)、`ThreeFingerTap.swift`(证据采集 + Press.lastTouching)、
+`HotkeyTap.swift`(handleMouse 记证据)。规格先改表后改代码 ✓。
+
+**验**:check-architecture ✅ · GlanceCore 44 测试全绿(含新 3 例)✅ · xcodebuild Debug ✅
+(dylib 内确认 `judge3now12dragEvidence` 符号)· 真机验收待用户(口径见 debugging.md §20)。

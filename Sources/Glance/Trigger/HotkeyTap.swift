@@ -435,6 +435,10 @@ final class HotkeyTapCenter {
 
     /// ⌘+点击补焦的耳朵。**只听不吞**:事件本身照常送到前台 App
     private func handleMouse(_ event: CGEvent) -> Bool {
+        // 拖移证据(2026-09-23,规格文档表二"一票否决"):≥2 指在板时出现鼠标按下 =
+        // 三指拖移被系统消费的签名(合成拖动就是"按住左键移动" ✓)。真轻点不产生
+        // 任何鼠标事件 ⇒ 不会误记 ✓。方法内部自带手指数门禁,平时零开销 ✓
+        ThreeFingerTap.shared.noteMouseDownWhileTouching()
         if event.flags.contains(.maskCommand), state != .navigating {
             onCmdClick?(event.location)
         }
