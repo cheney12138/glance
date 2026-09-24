@@ -179,6 +179,18 @@ enum DebugFlags {
         return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
     }
 
+    /// **托盘入场的淡入时长**(毫秒;默认 120 ✓ 设 0 = 回到"硬出现"的旧行为 ✓)。
+    ///
+    /// 用户口径(2026-09-24):「唤起是**闪烁出来的**,有一个上浮或者撑大的效果,代表选中的状态」
+    /// ⇒ 原来是 `place()` 里一句 `orderFrontRegardless()` 硬上屏(托盘窗的 alpha 一直是 1 ✗)
+    ///   ⇒ 玻璃与卡片**同一帧**出现 = 闪 ✓ 现在:先 alpha 0 上屏并把首帧真画出来(长条那条白光对策 ✓),
+    ///   再用这段时长把 alpha 拉起来 ⇒ 与内容上浮(同一根弹簧 ✓)落在同一段里 ✓
+    ///     defaults write com.cheney12138.macswitcher debug.trayEntryFadeMs -int 300   # 试更慢
+    ///     defaults write com.cheney12138.macswitcher debug.trayEntryFadeMs -int 0     # 回旧行为
+    static var trayEntryFadeMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugTrayEntryFadeMs) as? NSNumber)?.intValue ?? 120
+    }
+
     /// **托底(选中标志那块板)的亮度倍率**（只作用于浅色模式 ✓ 默认 0.75）。
     ///
     /// 用户原话(2026-09-24):「其实我是想把**原本那个白色的高光**给去掉, 有点太亮了,
