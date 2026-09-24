@@ -1743,8 +1743,7 @@ final class PanelController: ObservableObject {
         guard let previewPanel else { return }
         // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
-        // ⚠️ 别在这里硬设 alpha = 1:入场淡入期间会把那次动画打断 ✗(见 ensureContentVisible 的病例 ✓)
-        trayChrome?.ensureContentVisible()
+        previewPanel.alphaValue = 1
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
         // (整块 tray 内容重排 + 后备存储重分配)。实机日志里 `[工] 键盘换选中 主线程 13–26ms`
@@ -3125,79 +3124,12 @@ final class ChromeWindow {
     ///   而主面板那次没人再上屏 ⇒ 症状正是"**环没了、托盘还在**" ✓
     ///   ⇒ 加**会话闸**:收场之后、下一局 `beginSession()` 之前,`place()` 一律 no-op ✓
     ///   (连 `hidden` 都不碰:会话结束后它就该保持隐藏 ✓)
-    /// 入场淡入的截止时刻(这段时间里**谁都不许抢 alpha** ✗ —— 见 `ensureContentVisible` 的病例)
-    private var fadeUntil: CFAbsoluteTime = 0
-    /// 入场淡入的驱动器(自己跑,不用 AppKit 动画 —— 原因见 `startEntryFade` 的病例)
-    private var fadeTimer: DispatchSourceTimer?
-
-    /// **自己驱动**的 alpha 斜坡(≈60Hz,`easeOut`)。
-    ///
-    /// ⚠️ 2026-09-24 病例:我先用的是 `NSAnimationContext { panel.animator().alphaValue = 1 }` ✗
-    ///   实机连拍 8 帧:托盘**一帧内**就到满不透明 ⇒ 那次动画根本没演 ✓
-    ///   真因:**这台机器的系统「减弱动态效果」是开着的**(仓里早有注释:reducedMotion = 1 ✓)
-    ///   ⇒ 它会压掉 **AppKit 的 NSAnimationContext** ✓(我们的 `MotionPolicy` 只管 SwiftUI ✗)
-    ///   ⇒ 于是改成自己驱动:每帧算一次 alpha(便宜 ✓)、系统设置压不掉它 ✓
-    ///   这与本仓既有的哲学一致:尊重系统偏好,但**不是掐掉**动效,而是降级成"短淡入" ✓
-    private func startEntryFade(ms: Int) {
-        fadeTimer?.cancel(); fadeTimer = nil
-        let steps = max(1, Int(Double(ms) / 1000 * 60))
-        fadeUntil = CFAbsoluteTimeGetCurrent() + Double(ms) / 1000
-        var i = 0
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now(), repeating: .milliseconds(max(1, ms / steps)), leeway: .milliseconds(2))
-        t.setEventHandler { [weak self] in
-            guard let self else { return }
-            i += 1
-            if i >= steps {
-                self.panel.alphaValue = 1
-                self.fadeTimer?.cancel(); self.fadeTimer = nil
-                return
-            }
-            let x = Double(i) / Double(steps)
-            let eased = 1 - pow(1 - x, 3)          // easeOut:起手快、收尾稳(与"浮上来"同调 ✓)
-            self.panel.alphaValue = CGFloat(eased)
-        }
-        t.resume()
-        fadeTimer = t
-    }
-
     func place() {
         guard !sessionEnded else { return }
         if hidden { setContentHidden(false) }
         guard !placed else { return }
         placed = true
-        // ★ 入场(2026-09-24 用户口径:「唤起是**闪烁出来的**」—— 原来是硬上屏 ✗):
-        //   ① 先以 alpha 0 上屏,并把**首帧真画出来** —— 与长条那条"白光对策"同一手法 ✓
-        //      (`layoutSubtreeIfNeeded` + `displayIfNeeded` 是同步的 ⇒ 屏幕上第一帧就带着内容,
-        //       而不是"先出现一块空玻璃" ✗)
-        //   ② 再把 alpha 拉到 1:`debug.trayEntryFadeMs`(默认 120ms ✓ 设 0 = 回到旧行为 ✓)
-        //      玻璃与卡片**一起淡入** ⇒ 与内容上浮(同一根弹簧 ✓)落在同一段时间里 ✓
-        //   只动 alpha:不碰任何几何 ⇒ 与"窗口 frame 一律瞬时"那条纪律不冲突 ✓
-        let fadeMs = DebugFlags.trayEntryFadeMs
-        panel.alphaValue = 0
         panel.orderFrontRegardless()
-        panel.contentView?.layoutSubtreeIfNeeded()
-        panel.displayIfNeeded()
-        if fadeMs > 0 {
-            startEntryFade(ms: fadeMs)
-        } else {
-            fadeUntil = 0
-            panel.alphaValue = 1
-        }
-        if isTraceEnabled { glog("[T6] 托盘入场:淡入 \(fadeMs)ms(首帧已先画 ✓)") }
-    }
-
-    /// **"内容该可见"的统一入口**(`updatePreview` 每次更新都会走 ✓)。
-    ///
-    /// ⚠️ 2026-09-24 病例(自己踩的):入场淡入那 800ms 里,`updatePreview` 里原来那句
-    /// `previewPanel.alphaValue = 1` 会在**开始后 20ms** 把淡入一帧打断 ✗
-    /// (试淡入时连拍 7 帧:托盘直接从透明跳到满不透明 ✓ 这就是"淡入没生效"的真因 ✓)
-    /// ⇒ 淡入期间这里**让位**:alpha 交给那次动画,别抢 ✓
-    func ensureContentVisible() {
-        guard !sessionEnded else { return }
-        if hidden { setContentHidden(false) }
-        guard CFAbsoluteTimeGetCurrent() >= fadeUntil else { return }   // 淡入中 ⇒ 让它演完 ✓
-        panel.alphaValue = 1
     }
 
     /// 新一局开始:重新允许上屏 ✓(与 `teardown()` 配对 —— 见 `place()` 的病例)
@@ -3207,8 +3139,6 @@ final class ChromeWindow {
     func setContentHidden(_ on: Bool) {
         guard on != hidden else { return }
         hidden = on
-        // 🔬 它也在改 alpha ⇒ 与入场淡入**会打架**;这一行把次序留证(只在变化时出 ✓)
-        if isTraceEnabled { glog("[T6] 托盘内容 \(on ? "隐藏" : "显示")(alpha → \(on ? 0 : 1))") }
         panel.alphaValue = on ? 0 : 1
         panel.ignoresMouseEvents = on
     }
@@ -3218,8 +3148,6 @@ final class ChromeWindow {
         sessionEnded = true          // ★ 收场 ⇒ 迟到的 place() 不许再上屏(见 place 的病例 ✓)
         placed = false
         hidden = false
-        fadeTimer?.cancel(); fadeTimer = nil   // 淡入驱动器归零(ADR:每个状态都要有归零路径 ✓)
-        fadeUntil = 0
         panel.alphaValue = 1
         panel.ignoresMouseEvents = false
         // ★ 2026-09-22 用户实报「预览容器会在环之后才消失, 看着跟有残留一样」:

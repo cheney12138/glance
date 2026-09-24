@@ -66,8 +66,6 @@ enum Keys {
     static let debugSheenGain = "debug.sheenGain"
     /// `debug.puckBrightness` —— 选中图标底下那块托底的亮度倍率(浅色模式;默认 0.75,1 = 原样)
     static let debugPuckBrightness = "debug.puckBrightness"
-    /// `debug.trayEntryFadeMs` —— 托盘入场淡入时长(默认 120ms;0 = 回到"硬出现"的旧行为)
-    static let debugTrayEntryFadeMs = "debug.trayEntryFadeMs"
     static let debugMoveOverflowRule = "debug.moveOverflowRule"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
