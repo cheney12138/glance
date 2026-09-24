@@ -53,11 +53,19 @@ enum Keys {
     static let debugTapMinDurationMs = "debug.tapMinDurationMs"
     /// `debug.tapMinContactSize` —— 点按的**触点重量下限**(默认 0.6;设 0 = 关)
     static let debugTapMinContactSize = "debug.tapMinContactSize"
+    /// `debug.tapMaxMoveNorm` —— 三指判卷的位移上限(归一化;默认取领域层,越大越宽容)
+    static let debugTapMaxMoveNorm = "debug.tapMaxMoveNorm"
+    /// `debug.tapMaxMajor` —— 三指判卷的触点主轴上界(默认取领域层 14;掌心误触多就调小)
+    static let debugTapMaxMajor = "debug.tapMaxMajor"
     /// `debug.tapUndoDriftPt` —— 生效后"指针位移多少 pt 就撤销"(默认 40;设 0 = 关)
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)
     static let debugStaleListFirst = "debug.staleListFirst"
     /// `debug.moveOverflowRule` —— 送窗"塞不下"时切哪边(keepLeft 默认/center/keepRight)
+    /// `debug.sheenGain` —— 指针光晕的强度倍率(默认 1.0;0.5 = 一半,1.5 = 更亮)
+    static let debugSheenGain = "debug.sheenGain"
+    /// `debug.puckBrightness` —— 选中图标底下那块托底的亮度倍率(浅色模式;默认 0.75,1 = 原样)
+    static let debugPuckBrightness = "debug.puckBrightness"
     static let debugMoveOverflowRule = "debug.moveOverflowRule"
     /// `debug.trace`
     static let debugTrace = "debug.trace"

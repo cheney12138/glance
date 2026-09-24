@@ -223,6 +223,31 @@ final class PanelController: ObservableObject {
     /// 现在面板在台期间挂 60Hz 定时器,统一驱动主环与托盘的指针重定位;散场即停。
     private var hoverPollTimer: DispatchSourceTimer?
 
+    /// 光晕要用的颜色 = **选中的那个 App 图标的主色**（2026-09-24 用户口径：
+    /// 固定白高光 → 图标本色的晕染 ✓）。nil = 那枚图标基本是灰的 ⇒ 视图退回白色 ✓
+    ///
+    /// 视图每 30Hz 会问一次 ⇒ 必须便宜：`IconTint` 内部有缓存，这里是纯查表 ✓
+    /// 未启动段里那些 App 没在跑（没有 pid）⇒ 用 `launch:<id>` 当缓存键 ✓
+    /// 上面那个颜色属于哪个 App（**同一个源** ⇒ 日志与实际画出来的必然一致 ✓）
+    var sheenTintOwner: String? {
+        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
+            return launchables[li].name
+        }
+        guard groups.indices.contains(appIndex) else { return nil }
+        return groups[appIndex].appName
+    }
+
+    var sheenTint: NSColor? {
+        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
+            let app = launchables[li]
+            return IconTint.color(for: app.icon, key: "launch:\(app.id)")
+        }
+        guard groups.indices.contains(appIndex) else { return nil }
+        let g = groups[appIndex]
+        return IconTint.color(for: IconProvider.art(for: g.pid).image,
+                              key: "pid:\(g.pid):\(g.bundleID ?? "")")
+    }
+
     private func startHoverPolling() {
         guard hoverPollTimer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: .main)
@@ -804,14 +829,16 @@ final class PanelController: ObservableObject {
         // **只在档位变化时打**:同一台机器上它几乎每局一样,重印就是噪音;变了一定要看
         if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
         Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)
-        print(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
+        // ⚠️ 这里原来用 `print`(走 stdout)⇒ **块缓冲** ⇒ 落盘能延迟几分钟 ✗
+        //   (2026-09-24 查"面板比屏还宽"时被它坑了一次:明明打了,日志里半天看不见 ✓)
+        trace(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
                      s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
                      cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : ""))
         // (托盘窗口尺寸那行撤了:它是"整局只 setFrame 一次"的验证账,已验证完;
         //  要复核时看 `[工] 托盘改尺寸` 是否只在开局出现即可)
         if cap < 0.6 {
-            print("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
+            trace("[尺寸] 提示:本局 < 60%,面板会明显偏小 —— 是 App 数太多(长条压尺寸),不是托盘")
         }
     }
 

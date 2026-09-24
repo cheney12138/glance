@@ -78,7 +78,10 @@ enum DebugFlags {
     /// ⚠️ 0.6 是**初步值**:有意轻点的 size 分布还没有样本(日志里只有这两次误触 ✓)
     ///    ⇒ 真机 A/B:`defaults write … -float 0.6` / `-float 0.4` / `-int 0` ✓
     static var tapMinContactSize: Float {
-        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue ?? 0.6
+        // ⚠️ 出厂默认值**只有一处** = `TapRound.Policy.standard.minContactSize`(领域层 ✓)
+        //   这里原来写死 0.6 ⇒ 改领域层默认值时这里会悄悄跟不上 ✗(把一件事实写成两份)
+        (UserDefaults.standard.object(forKey: Keys.debugTapMinContactSize) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.minContactSize
     }
 
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
@@ -132,7 +135,34 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugStaleListFirst) as? Bool) ?? true
     }
 
+    /// **三指判卷的位移上限**(归一化;默认取领域层)。
+    /// 2026-09-24 用户实报「三指要点好多遍才能唤起」⇒ 真点按的漂移(0.03–0.05)被误杀 ✗
+    /// 想更宽容:`defaults write com.cheney12138.macswitcher debug.tapMaxMoveNorm -float 0.08`
+    static var tapMaxMoveNorm: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMaxMoveNorm) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.maxMove
+    }
+
     /// 把档位拼成领域层判据(**唯一一处拼装**)
+    /// 把两个档位拼成判卷策略(**唯一一处拼装** ✓ —— 触发层只认它)
+    static var tapPolicy: TapRound.Policy {
+        var p = TapRound.Policy.standard
+        p.minDuration = Double(tapMinDurationMs) / 1000   // 时长下限(默认 30ms)
+        p.minContactSize = tapMinContactSize              // 重量门:太小 = 搭着/掠着(默认 0.6)
+        p.maxMove = tapMaxMoveNorm                        // 位移上限(默认 0.05)
+        p.maxMajor = tapMaxMajor                          // 主轴上限:太大 = 掌心/掌缘(默认 14)
+        return p
+    }
+
+    /// **触点"主轴"上限**(默认取领域层 = 14)。
+    /// 2026-09-24 用户实报:笔记本打字时**掌心**压到触摸板 ⇒ 误触三指 ✓
+    /// 实测掌心主轴 17–29 ✗、手指 8–10 ✓ ⇒ 14 在中间;掌心误触还多就调小
+    ///     defaults write com.cheney12138.macswitcher debug.tapMaxMajor -float 12
+    static var tapMaxMajor: Float {
+        (UserDefaults.standard.object(forKey: Keys.debugTapMaxMajor) as? NSNumber)?.floatValue
+            ?? TapRound.Policy.standard.maxMajor
+    }
+
     static var tapUndoPolicy: TapUndoPolicy {
         var p = TapUndoPolicy.standard
         p.minDrift = tapUndoDriftPt
@@ -147,6 +177,29 @@ enum DebugFlags {
     static var moveOverflowRule: ScreenMovePolicy.OverflowRule {
         let raw = UserDefaults.standard.string(forKey: Keys.debugMoveOverflowRule) ?? ""
         return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
+    }
+
+    /// **托底(选中标志那块板)的亮度倍率**（只作用于浅色模式 ✓ 默认 0.75）。
+    ///
+    /// 用户原话(2026-09-24):「其实我是想把**原本那个白色的高光**给去掉, 有点太亮了,
+    /// 或者说可以降一点亮度试试」—— 他指的是选中图标底下那块**白亮板 + 白唇** ✓
+    ///     defaults write com.cheney12138.macswitcher debug.puckBrightness -float 0.5   # 更淡
+    ///     defaults write com.cheney12138.macswitcher debug.puckBrightness -float 1.0   # 回到原样
+    ///     defaults delete com.cheney12138.macswitcher debug.puckBrightness              # 复位
+    static var puckBrightness: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugPuckBrightness) as? NSNumber)?.doubleValue ?? 0.75
+    }
+
+    /// **指针光晕的强度倍率**（默认 1.0 ✓）。
+    ///
+    /// 2026-09-24 用户口径：「目前的高光有点亮了, 能不能把固定的高光变成选中 app 图标本身的颜色晕染」
+    /// ⇒ 两件事一起做了：① 颜色改成**选中图标的主色**（见 `IconTint` / `VibrantColor` ✓）
+    ///    ② 默认强度降下来（白 → 饱和色本身观感就暗一档，再加一档 ✓）
+    /// 这个倍率是给"还嫌亮/还想更亮"留的出口，**改完即生效不用重启** ✓
+    ///     defaults write com.cheney12138.macswitcher debug.sheenGain -float 0.6
+    ///     defaults delete com.cheney12138.macswitcher debug.sheenGain
+    static var sheenGain: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugSheenGain) as? NSNumber)?.doubleValue ?? 1.0
     }
 
     static func reportHeavySwitchesIfNeeded() {

@@ -156,14 +156,14 @@ final class ThreeFingerTap {
 
         private var tracker: TapRound.Tracker = {
             var t = TapRound.Tracker()
-            // 点按时长下限的**真机档位**(默认 30ms = 原行为 ✓)
-            // 病例(2026-09-22):一次"三指静置 60ms 后抬起"被判成点按 ⇒ 面板自己弹出来 ✗
-            // (用户:「就在回复的时候, 三指误触又出现了」✓ 日志 `三指 60ms 位移 abs=0.3 → 唤起`)
-            // 判卷没写错 —— 那个形状**就是**一记标准点按;要治的是"这种形状也可能是无意的一搭" ✓
-            // ⇒ 抬下限的代价是"更快的轻点会被挡" ⇒ 只能由用户在真机上定 ⇒ 做成档位 ✓
-            t.policy.minDuration = Double(DebugFlags.tapMinDurationMs) / 1000
-            // 重量门(默认 0.6):"很轻地搭一下"不是点按(见 Policy.minContactSize 的病例 ✓)
-            t.policy.minContactSize = DebugFlags.tapMinContactSize
+            // ⚠️ 三个档位(时长下限 / 重量门 / 位移上限)由 `DebugFlags.tapPolicy` **一处拼装** ✓
+            //   —— 这里**不要**再逐条赋值 ✗:我先写的是"先设 minDuration、再整体覆盖 policy",
+            //   顺序一颠倒就把时长档位冲掉了(自己刚踩过 ✓);一处拼装从构造上没这个坑 ✓
+            // 各自的病例:
+            //   · 时长下限(默认 30ms):「三指静置 60ms 后抬起」被判成点按 ⇒ 面板自己弹出来 ✗
+            //   · 重量门(默认 0.6):很轻地搭一下不是点按(见 Policy.minContactSize 的病例 ✓)
+            //   · 位移上限(默认 0.05,2026-09-24 从 0.03 放宽):手指自然漂移不算滑动 ✓
+            t.policy = DebugFlags.tapPolicy
             return t
         }()
         private var lastSnapshot = TapRound.Snapshot()
