@@ -62,6 +62,8 @@ enum Keys {
     /// `debug.moveOverflowRule` —— 送窗"塞不下"时切哪边(keepLeft 默认/center/keepRight)
     /// `debug.sheenGain` —— 指针光晕的强度倍率(默认 1.0;0.5 = 一半,1.5 = 更亮)
     static let debugSheenGain = "debug.sheenGain"
+    /// `debug.puckBrightness` —— 选中图标底下那块托底的亮度倍率(浅色模式;默认 0.75,1 = 原样)
+    static let debugPuckBrightness = "debug.puckBrightness"
     static let debugMoveOverflowRule = "debug.moveOverflowRule"
     /// `debug.trace`
     static let debugTrace = "debug.trace"

@@ -352,13 +352,23 @@ enum PanelColors {
     /// **深色改用实色 L=138**(旧版 白 .26 合成后只有 L≈77,只比玻璃亮 12 级 → 看不见)。
     /// 深色里"选中"要读成**一块更亮的板**,靠的是绝对亮度而不是 alpha;
     /// 实色还带来一个好处:哪怕底下的壁纸变了,托底与玻璃的**落差恒定**。
-    static let puck = dynamic(white(0.62), slate(138, alpha: 0.92))
+    /// ⚠️ 2026-09-24 浅色那一档从 `white(0.62)` 收到 **0.62 × puckGain**（用户原话:
+    ///   「其实我是想把**原本那个白色的高光**给去掉, 有点太亮了, 或者说可以降一点亮度试试」——
+    ///   他指的就是这一块:选中图标底下那块**白亮板** + 它那条白唇 ✓ 深色档不动(那边是实色板,调过两轮 ✓)
+    ///   档位:`debug.puckBrightness`(默认 0.75 ×;设 1 = 回到原样 ✓)
+    static var puck: Color {
+        let w = white(0.62 * CGFloat(DebugFlags.puckBrightness))
+        return dynamic(w, slate(138, alpha: 0.92))
+    }
     /// 托底发丝边:白底上"本体隐形"的那一半就靠它 —— 边是暗的,白底上才看得见形。
     /// 深色反过来:托底已经比玻璃亮,边要用**更亮的**唇来交代"这是一块浮起来的板"
     static let puckBorder = dynamic(ink(0.08), white(0.16))
     /// 上缘受光唇:浅色 .6 是"果冻感"的一半;深色**提到 .5** ——
     /// 深色托底是实色,受光唇是它唯一"玻璃感"的来源,弱了就变成一张塑料片
-    static let puckLip = dynamic(white(0.6), white(0.5))
+    static var puckLip: Color {
+        let w = white(0.6 * CGFloat(DebugFlags.puckBrightness))
+        return dynamic(w, white(0.5))
+    }
     /// 入口槽分隔缝的**中段色**(两端收干的渐变由视图承担)。浅色暗、深色亮 —— 与发丝边同一族:
     /// 它要读成"玻璃上的一道记号",不是"画上去的一条线"
     /// 入口槽分割线(v10 定色,用户口径:浅色主体下为**黑**,暗色主体下为**白**,
@@ -479,7 +489,10 @@ enum PanelColors {
     /// ⚠️ 2026-09-24 降了一档（0.14→0.11 / 0.26→0.20）：用户口径「目前的高光有点亮了」✓
     /// 同时光晕颜色从**固定白**改成**选中图标的主色**（见 `IconTint`）—— 饱和色本身观感就比白暗一档，
     /// 所以只小幅降；还嫌亮就用 `debug.sheenGain`（倍率，默认 1.0）✓
-    static let sheenAlphaLight: CGFloat = 0.11
+    /// ⚠️ 2026-09-24 浅色档 **0.11 → 0.17**:用户实报「浅色模式下的晕染高光不明显」——
+    ///   浅色玻璃本身就亮,彩色光在低 alpha 下会被冲淡 ✗ ⇒ 浅色需要更高的 alpha 才读得出颜色 ✓
+    ///   (它**不是**"更亮"的意思:同样是 alpha,饱和色比白暗一档 ✓)
+    static let sheenAlphaLight: CGFloat = 0.17
     static let sheenAlphaDark: CGFloat = 0.20
 
     /// 光晕强度倍率（`debug.sheenGain`，默认 1.0 ⇒ 一个字都不变 ✓）

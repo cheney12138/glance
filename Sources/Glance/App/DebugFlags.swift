@@ -169,6 +169,17 @@ enum DebugFlags {
         return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
     }
 
+    /// **托底(选中标志那块板)的亮度倍率**（只作用于浅色模式 ✓ 默认 0.75）。
+    ///
+    /// 用户原话(2026-09-24):「其实我是想把**原本那个白色的高光**给去掉, 有点太亮了,
+    /// 或者说可以降一点亮度试试」—— 他指的是选中图标底下那块**白亮板 + 白唇** ✓
+    ///     defaults write com.cheney12138.macswitcher debug.puckBrightness -float 0.5   # 更淡
+    ///     defaults write com.cheney12138.macswitcher debug.puckBrightness -float 1.0   # 回到原样
+    ///     defaults delete com.cheney12138.macswitcher debug.puckBrightness              # 复位
+    static var puckBrightness: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugPuckBrightness) as? NSNumber)?.doubleValue ?? 0.75
+    }
+
     /// **指针光晕的强度倍率**（默认 1.0 ✓）。
     ///
     /// 2026-09-24 用户口径：「目前的高光有点亮了, 能不能把固定的高光变成选中 app 图标本身的颜色晕染」
