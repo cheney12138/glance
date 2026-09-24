@@ -149,6 +149,18 @@ enum DebugFlags {
         return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
     }
 
+    /// **指针光晕的强度倍率**（默认 1.0 ✓）。
+    ///
+    /// 2026-09-24 用户口径：「目前的高光有点亮了, 能不能把固定的高光变成选中 app 图标本身的颜色晕染」
+    /// ⇒ 两件事一起做了：① 颜色改成**选中图标的主色**（见 `IconTint` / `VibrantColor` ✓）
+    ///    ② 默认强度降下来（白 → 饱和色本身观感就暗一档，再加一档 ✓）
+    /// 这个倍率是给"还嫌亮/还想更亮"留的出口，**改完即生效不用重启** ✓
+    ///     defaults write com.cheney12138.macswitcher debug.sheenGain -float 0.6
+    ///     defaults delete com.cheney12138.macswitcher debug.sheenGain
+    static var sheenGain: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugSheenGain) as? NSNumber)?.doubleValue ?? 1.0
+    }
+
     static func reportHeavySwitchesIfNeeded() {
         // 这两个不是布尔开关(是毫秒档位),但它们**改变时序/判据** ⇒
         // 与重型量具同一条纪律:不许静默偏离默认 ✓

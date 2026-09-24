@@ -223,6 +223,31 @@ final class PanelController: ObservableObject {
     /// 现在面板在台期间挂 60Hz 定时器,统一驱动主环与托盘的指针重定位;散场即停。
     private var hoverPollTimer: DispatchSourceTimer?
 
+    /// 光晕要用的颜色 = **选中的那个 App 图标的主色**（2026-09-24 用户口径：
+    /// 固定白高光 → 图标本色的晕染 ✓）。nil = 那枚图标基本是灰的 ⇒ 视图退回白色 ✓
+    ///
+    /// 视图每 30Hz 会问一次 ⇒ 必须便宜：`IconTint` 内部有缓存，这里是纯查表 ✓
+    /// 未启动段里那些 App 没在跑（没有 pid）⇒ 用 `launch:<id>` 当缓存键 ✓
+    /// 上面那个颜色属于哪个 App（**同一个源** ⇒ 日志与实际画出来的必然一致 ✓）
+    var sheenTintOwner: String? {
+        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
+            return launchables[li].name
+        }
+        guard groups.indices.contains(appIndex) else { return nil }
+        return groups[appIndex].appName
+    }
+
+    var sheenTint: NSColor? {
+        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
+            let app = launchables[li]
+            return IconTint.color(for: app.icon, key: "launch:\(app.id)")
+        }
+        guard groups.indices.contains(appIndex) else { return nil }
+        let g = groups[appIndex]
+        return IconTint.color(for: IconProvider.art(for: g.pid).image,
+                              key: "pid:\(g.pid):\(g.bundleID ?? "")")
+    }
+
     private func startHoverPolling() {
         guard hoverPollTimer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: .main)

@@ -75,7 +75,9 @@ struct PanelView: View {
             if sheen {
                 SheenOverlay(
                     active: controller.isVisible,
-                    pointer: { [weak controller] in controller?.pointerInContent() }
+                    pointer: { [weak controller] in controller?.pointerInContent() },
+                    tint: { [weak controller] in controller?.sheenTint },
+                    owner: { [weak controller] in controller?.sheenTintOwner ?? "?" }
                 )
             }
 
@@ -528,6 +530,11 @@ struct SheenOverlay: View {
     let active: Bool
     /// 指针在面板内容坐标里的位置(nil = 不在面板上)
     let pointer: () -> CGPoint?
+    /// ★ 光晕的**颜色** = 选中 App 图标的主色（nil ⇒ 白：图标基本是灰的 / 还没选中 ✓）
+    ///   30Hz 每帧问一次 ⇒ 走 `IconTint` 的缓存查表，很便宜 ✓
+    let tint: () -> NSColor?
+    /// 日志用:这个颜色属于哪个 App(只给排查看 ✓;与 `tint` **同一个源** ✓)
+    let owner: () -> String
     @State private var tracker = SheenTracker()
     @Environment(\.colorScheme) private var scheme
 
@@ -538,14 +545,19 @@ struct SheenOverlay: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active)) { _ in
             Canvas { ctx, _ in
                 guard let (p, alpha) = tracker.step(target: pointer()) else { return }
-                let peak = (scheme == .dark ? PanelColors.sheenAlphaDark : PanelColors.sheenAlphaLight) * alpha
+                tracker.note(tint: tint(), owner: owner())
+                let peak = (scheme == .dark ? PanelColors.sheenAlphaDark : PanelColors.sheenAlphaLight)
+                    * alpha * PanelColors.sheenGain
+                // 颜色跟着选中的那一格走（用户口径:要的是"图标本色的晕染" ✓;
+                // 图标基本是灰的 ⇒ 退回白 —— 灰蒙蒙的染色比没有更糟 ✗）
+                let base = tint().map { Color(nsColor: $0) } ?? .white
                 let r = PanelMetrics.sheenExtent // demo 的 220px 是**结束形状半径**
                 ctx.fill(
                     Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
                     with: .radialGradient(
                         Gradient(stops: [
-                            .init(color: .white.opacity(peak), location: 0),
-                            .init(color: .white.opacity(0), location: PanelMetrics.sheenStop),
+                            .init(color: base.opacity(peak), location: 0),
+                            .init(color: base.opacity(0), location: PanelMetrics.sheenStop),
                         ]),
                         center: p, startRadius: 0, endRadius: r
                     )
@@ -562,10 +574,25 @@ final class SheenTracker {
     private var point: CGPoint?
     private var intensity: CGFloat = 0
     private var logged = false
+    /// 上一次报过的颜色(换色时才打一行 ⇒ "光晕到底跟的谁"一眼可见 ✓)
+    private var lastTintHex: String?
     /// demo 的 `transition: background .08s linear`:60fps 下每帧追 45%,约 80ms 跟到位
     private let follow: CGFloat = 0.45
 
     /// 返回这一帧该画的位置与强度;nil = 不画
+    /// 颜色换了就报一行(trace 门 + 只在变化时 ⇒ 常态零噪声 ✓)
+    func note(tint: NSColor?, owner: String) {
+        guard isTraceEnabled else { return }
+        let hex: String
+        if let c = tint, let srgb = c.usingColorSpace(.sRGB) {
+            hex = String(format: "#%02X%02X%02X", Int(srgb.redComponent * 255),
+                         Int(srgb.greenComponent * 255), Int(srgb.blueComponent * 255))
+        } else { hex = "白(图标基本是灰的 ⇒ 退回白)" }
+        guard hex != lastTintHex else { return }
+        lastTintHex = hex
+        glog("[光晕] 颜色 = \(hex) · 跟的是 \(owner)")
+    }
+
     func step(target: CGPoint?) -> (CGPoint, CGFloat)? {
         if let t = target {
             // 第一次被点亮打一行:光晕有没有被驱动起来,日志里一眼可见(只打一次)

@@ -476,8 +476,14 @@ enum PanelColors {
     /// 换算:soft-light(白)= √b,按 .30 权重大约提亮 0.06~0.08;白 alpha .12/.16 给 0.05~0.09。
     /// 深色 .20 → **.26**:深玻璃的底更暗,同样的 alpha 提亮量感知上更小(暗部 Weber 效应),
     /// 不补的话手电筒扫过深色面板几乎看不出光
-    static let sheenAlphaLight: CGFloat = 0.14
-    static let sheenAlphaDark: CGFloat = 0.26
+    /// ⚠️ 2026-09-24 降了一档（0.14→0.11 / 0.26→0.20）：用户口径「目前的高光有点亮了」✓
+    /// 同时光晕颜色从**固定白**改成**选中图标的主色**（见 `IconTint`）—— 饱和色本身观感就比白暗一档，
+    /// 所以只小幅降；还嫌亮就用 `debug.sheenGain`（倍率，默认 1.0）✓
+    static let sheenAlphaLight: CGFloat = 0.11
+    static let sheenAlphaDark: CGFloat = 0.20
+
+    /// 光晕强度倍率（`debug.sheenGain`，默认 1.0 ⇒ 一个字都不变 ✓）
+    static var sheenGain: CGFloat { CGFloat(DebugFlags.sheenGain) }
 }
 
 // MARK: - Elevation(逐元素一根外阴影,数值逐字抄 demo;CSS blur 直径 ÷2 = radius)
