@@ -113,18 +113,24 @@ enum WindowFocuser {
 
     /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
     private static func raiseWithinApp(pid: pid_t, wid: CGWindowID) {
-        guard let element = axWindowElement(pid: pid, wid: wid) else { return }
-        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        guard let element = axWindowElement(pid: pid, wid: wid) else {
+            if isTraceEnabled { glog("[T7] ⚠️ AX raise 没找到窗口元素(wid=\(wid))⇒ 这一发没抬起来") }
+            return
+        }
+        let err = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        if err != .success, isTraceEnabled {
+            glog("[T7] ⚠️ AX raise 失败 err=\(err.rawValue) wid=\(wid)")
+        }
     }
 
     /// wid → AX 元素(唯一正统桥:枚举该 App 所有窗逐个比对,alt-tab 同法)
     private static func axWindowElement(pid: pid_t, wid: CGWindowID) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
-        // ★ 2026-09-24:给这次枚举一个**短上限**。病例:用户问「个别 App 切换过去有 ~0.2s 延迟」——
-        //   分段计时实测 AX raise 要 **48–83ms**(IntelliJ/DataGrip/Chrome/CatPaw 都是这个量级 ✓),
-        //   而"设前台 + 补 key"只占 4–7ms ⇒ 慢的全在这儿 ✓。AX 对忙的 App 能一直等到全局超时(0.5s ✗)
-        //   ⇒ 这里单独压到 80ms:够正常的 App 答完,忙的 App 也不会把我们拖住 ✓
-        AXUIElementSetMessagingTimeout(app, 0.08)
+        // ⚠️⚠️ 2026-09-24 **不要**在这里加短超时限制(踩过):
+        //   我一度给它压了 80ms(为了"切换不等 AX")—— 但实测 AX raise 本身就要 **42–92ms**
+        //   (忙的 App 更久)⇒ 80ms 正好把它们压超时 ⇒ `axWindowElement` 返回 nil
+        //   ⇒ **raise 静默失败** ⇒ 用户看到的是「点击 App 唤不起来,而且个别 App 才这样」✗✗
+        //   而"切换不等 AX"这件事**已经由后台分发解决了**(见 focus 里那段 ✓)⇒ 这里不需要上限 ✓
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let elements = value as? [AXUIElement] else { return nil }
