@@ -64,13 +64,32 @@ enum WindowFocuser {
             degrade(w, reason: "私有符号 _SLPSSetFrontProcessWithOptions 不存在(系统版本抽风?)")
             return
         }
+        let t0 = CFAbsoluteTimeGetCurrent()
         let frontErr = setFront(&psn, w.wid, modeUserGenerated)
         guard frontErr == .success else {
             degrade(w, reason: "_SLPSSetFrontProcessWithOptions err=\(frontErr.rawValue)")
             return
         }
+        let t1 = CFAbsoluteTimeGetCurrent()
         makeKeyWindow(&psn, wid: w.wid)
-        raiseWithinApp(w)
+        let t2 = CFAbsoluteTimeGetCurrent()
+        // ★★ 2026-09-24:**AX raise 挪到后台**。它是"这一 App 里哪扇窗在最上"的校正,
+        //   不该挡住切换本身 —— 实测它在忙的 App 上要 48–83ms ✗,而用户在按下去的那一刻
+        //   已经切过去了(设前台 + 补 key 都已完成 ✓)。放在主线程 = 白等 ✗
+        //   (同一 App 的落焦窗在绝大多数情况下本来就是对的 ⇒ 晚几十毫秒的校正看不出来 ✓)
+        let pid = w.pid, wid = w.wid, owner = w.ownerName
+        DispatchQueue.global(qos: .userInitiated).async {
+            let t3 = CFAbsoluteTimeGetCurrent()
+            raiseWithinApp(pid: pid, wid: wid)
+            if isTraceEnabled, (CFAbsoluteTimeGetCurrent() - t3) * 1000 >= 20 {
+                glog(String(format: "[T7] AX raise(后台) 用时 %.0fms @%@",
+                            (CFAbsoluteTimeGetCurrent() - t3) * 1000, owner))
+            }
+        }
+        if isTraceEnabled, (t2 - t0) * 1000 >= 20 {
+            glog(String(format: "[T7] 同步段 %.0fms(设前台 %.0f · 补 key %.0f) @%@ —— AX raise 已挪后台 ✓",
+                        (t2 - t0) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000, owner))
+        }
         glog("[T7] 已聚焦: \(w.ownerName) — \(w.title)")
     }
 
@@ -93,14 +112,19 @@ enum WindowFocuser {
     }
 
     /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
-    private static func raiseWithinApp(_ w: WindowRecord) {
-        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return }
+    private static func raiseWithinApp(pid: pid_t, wid: CGWindowID) {
+        guard let element = axWindowElement(pid: pid, wid: wid) else { return }
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }
 
     /// wid → AX 元素(唯一正统桥:枚举该 App 所有窗逐个比对,alt-tab 同法)
     private static func axWindowElement(pid: pid_t, wid: CGWindowID) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
+        // ★ 2026-09-24:给这次枚举一个**短上限**。病例:用户问「个别 App 切换过去有 ~0.2s 延迟」——
+        //   分段计时实测 AX raise 要 **48–83ms**(IntelliJ/DataGrip/Chrome/CatPaw 都是这个量级 ✓),
+        //   而"设前台 + 补 key"只占 4–7ms ⇒ 慢的全在这儿 ✓。AX 对忙的 App 能一直等到全局超时(0.5s ✗)
+        //   ⇒ 这里单独压到 80ms:够正常的 App 答完,忙的 App 也不会把我们拖住 ✓
+        AXUIElementSetMessagingTimeout(app, 0.08)
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let elements = value as? [AXUIElement] else { return nil }
