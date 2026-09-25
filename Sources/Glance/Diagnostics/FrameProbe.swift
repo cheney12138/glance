@@ -55,11 +55,19 @@ final class FrameProbe: NSObject {
         link?.invalidate()
         link = nil
         guard enabled, intervals.count > 5 else { intervals.removeAll(); return }
+        // ★★ 2026-09-24 病例(用户实报「点空白处关面板响应很慢、指针 loading」):
+        //   `longFrame`/`cadenceMs` 是**计算属性**,每取一次 = suffix(240)+filter+sorted 一套;
+        //   原来直接写进下面 filter / for 的**逐元素条件**里 ⇒ 每帧各重算两遍 ⇒
+        //   n 帧 = 2n 次"240 帧排序+数组分配",Debug 下 ≈0.7ms/帧 ⇒
+        //   3324 帧那一局关面板时主线程同步卡 **2.37s**( BeachBall 就是它)✗
+        //   ⇒ 各算一次存本地,闭包里只读常量 ✓。日志铁证:空窗时长 ≈ 帧数 × 0.7ms 线性。
+        let threshold = longFrame
+        let pace = cadenceMs
         let sorted = intervals.sorted()
         let pick = { (q: Double) -> Double in
             sorted[min(Int(Double(sorted.count) * q), sorted.count - 1)] * 1000
         }
-        let long = intervals.filter { $0 > longFrame }.count
+        let long = intervals.filter { $0 > threshold }.count
         // **抖动**(2026-09-15 加):`长帧` 只回答"有没有打到一帧",分不清两种完全不同的观感 ——
         //   · 稳定 16.7ms(在高刷屏上"没打到 8.3ms",但节奏均匀 → 看着顺 ✓)
         //   · 忽 8.3 忽 16.7(judder → 肉眼明显抖 ✗)
@@ -73,7 +81,7 @@ final class FrameProbe: NSObject {
         var elapsed: TimeInterval = 0
         var bySecond: [Int: (count: Int, worst: Double)] = [:]
         for interval in intervals {
-            if interval > longFrame {
+            if interval > threshold {
                 let sec = Int(elapsed)
                 let old = bySecond[sec] ?? (0, 0)
                 bySecond[sec] = (old.count + 1, max(old.worst, interval * 1000))
@@ -88,9 +96,9 @@ final class FrameProbe: NSObject {
         // 判定基准**总是**标出来(带实测节拍)—— 读日志的人才知道这行是按多少毫秒的口径判的 ✓
         // 标称与实测差得远(>30%)时**大声说**:那就是"屏幕标称 120 但 App 只有 60"那种环境项 ✓
         let nominalMs = 1000 / max(nominalFps, 1)
-        let mismatch = abs(cadenceMs - nominalMs) / nominalMs > 0.3
+        let mismatch = abs(pace - nominalMs) / nominalMs > 0.3
         let judge = String(format: " [按实测节拍 %.1fms 判定:>%.1fms%@]",
-                           cadenceMs, longFrame * 1000,
+                           pace, threshold * 1000,
                            mismatch ? String(format: ";屏幕标称 %.0fHz ✗ 与实测不符", nominalFps) : "")
         // ★ 量尺自带语境（2026-09-21）：把**当前打开的重型开关**写进汇总行。
         //   为什么：A/B 对照时我们俩上一次就因为这个白跑一轮 —— 日志是**多进程交错追加**的，

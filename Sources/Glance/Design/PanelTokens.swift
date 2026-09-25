@@ -173,21 +173,23 @@ enum PanelMetrics {
     /// 底色接管卡面,内容只留"结构"可辨(侧栏 / 终端网格 / 标签页)——"认窗"靠结构,
     /// "哪个 App"靠图标层,"哪一扇"靠标题芯片,三者都不受压色影响
     static let thumbWash: Double = 0.30
-    /// 红绿灯上方那层**毛玻璃**的模糊半径与渐变高度(固定 UI 规格:灯本身固定 11pt,不随卡片缩放)。
-    /// 用户口径:"要跟现在 Switcher 长条一样的模糊,但是是渐变效果" —— 所以这是模糊,不是暗色遮罩
-    /// 14 → 26、46 → 62(2026-09-14 用户实评"模糊度不够高,而且好像没覆盖红绿灯的区域")。
-    /// 高度的取法:要**盖过灯那一行并留出余量** —— 灯在 9…20pt,渐变到 62pt 才收干,
-    /// 头顶这一行才算真的"坐在毛玻璃上"。
-    /// ⚠️ 一句技术实话:纯模糊对**白色内容**几乎无效(白糊了还是白),所以"看不出覆盖"很大程度
-    /// 是内容太素,不是没生效(对比同位置的结构化内容最明显)。要让白底内容也读得出"毛玻璃",
-    /// 就得在模糊之上再压一层**极淡的白/灰膜**(材质的做法) —— 那会改变画面亮度,单独一轮再议
-    static let lightsBlur: CGFloat = 26
-    /// 2026-09-15:62 → 78。用户要"没有底边",而**任何渐变被固定高度截断都会留出边** ✗ ——
-    /// 62 时最后收干段只剩十几个点,视觉上仍是一条边;拉长到 78 让尾段有足够距离收干 ✓。
-    static let lightsFade: CGFloat = 78
+    /// 卡顶**雾檐**的渐变高度。
+    /// 案底:2026-09-15 曾一路加到 78(那时渐变是可读性的**主力**,要盖过灯行并留余量);
+    /// 2026-09-24 对齐「预览容器整体设计 Demo」收短到 k(26) —— 可读性主力改由红绿灯自己的
+    /// 胶囊座承担(`.lights`),这条雾退为兜底:demo 是 30px 单线性渐变,盖过胶囊底边即可。
+    /// (案底:这里曾有 `lightsBlur` = 「座」的模糊半径 —— 座随遮罩改静态雾檐整体退役,同日删除 ✓)
+    static var lightsFade: CGFloat { k(26) }
+    /// 红绿灯胶囊的自然占地:3 粒(11+3×2)×3 + 内边 5×2 ≈ 61pt 宽、~21pt 高(固定 UI 规格,不随卡片缩放)。
+    /// **卡比它大不了多少 ⇒ 整组灯 + 雾檐都不画**(2026-09-25 用户实报:窗口缩得比胶囊还小 ⇒
+    /// 灯被卡缘裁掉一半,可见性问题 ✗)。放不下时这扇窗本来也点不准三粒灯,关掉走 W 键 ✓
+    static let thumbLightsMinW: CGFloat = 80
+    static let thumbLightsMinH: CGFloat = 40
     /// 窗口名**芯片**(2026-09-14 用户要求:标题从卡片内挪到**卡片外**下方,做成芯片样式 ——
     /// "显示在预览框里很丑…不影响文字显示,又不跟预览窗耦合,位置相对 app 的每个窗口居中")
-    static var chipH: CGFloat { k(18) }
+    /// ★ 2026-09-25 放大(k18 → k24,用户口径:「IDEA 起很多项目,只能靠芯片名区分,
+    ///   尺寸太小反而没法为效率服务」)—— 芯片不是装饰,是**窗口列表** ⇒ 按"可读文本行"给尺寸,
+    ///   字号/图标/圆点同步长(见下)。尺寸账走 thumbH 单一来源,面板窗高跟着自动重算 ✓
+    static var chipH: CGFloat { k(24) }
     /// 芯片前面的**选中圆点**(2026-09-14 用户要求:多窗口时"浮动效果不明显",要一眼看出选中的是哪扇窗)。
     /// 颜色选**系统强调色**:与 macOS 的选中语言一致,而且跟随用户在系统设置里挑的强调色。
     /// 未选中时留一颗极淡的灰点**占位** —— 否则圆点出现/消失会让芯片文字左右跳
@@ -196,8 +198,8 @@ enum PanelMetrics {
     /// 动机:原来靠"位置"抚示归属(卡片在哪个图标下面)⇒ 而位置和行宽绑死 ⇒ 窗口一多必出屏 ✗,
     /// 而且小组居中后跟选中图标毫无几何关系 ✗(用户实拍"错了十万八千里")。
     /// 归到卡片自己身上之后,**位置就自由了** ⇒ 后续可以"永远居中、换 App 不动"✓
-    static var chipIcon: CGFloat { k(12) }
-    static var chipDot: CGFloat { k(5) }
+    static var chipIcon: CGFloat { k(15) }
+    static var chipDot: CGFloat { k(6) }
     /// 卡片与芯片之间的缝:两者解耦的分界(芯片不在卡片的环/影/浮起里)
     static var chipGap: CGFloat { k(6) }
     static var thumbH: CGFloat { shotH + chipGap + chipH }
@@ -217,15 +219,18 @@ enum PanelMetrics {
     static var rPanel: CGFloat { k(34) }
     static var rTray: CGFloat { k(30) }
     static var rPuck: CGFloat { k(24) }
-    static var rThumb: CGFloat { k(16) }
+    /// 卡片圆角:16 → 10(2026-09-24 对齐「预览容器整体设计 Demo」的 13px ——
+    /// 按卡高折算 13×122/183 ≈ 8.7,取 10 留一点"窗"感;芯片仍是全圆角,形成"方中带圆" ✓)
+    static var rThumb: CGFloat { k(10) }
     /// 发丝不随尺寸缩放:0.5pt 的物理意义就是"一根线",放大成 2pt 就不再是发丝了
     static let hairline: CGFloat = 1
     // 字阶(随卡片一起放大)
     /// 题头(App 名)13pt:2026-09-14 把面板截图丢给一份通用评审后对方**唯一说对的一条** ——
     /// "字体偏大偏黑,像网页弹窗"。原值是 15 基准 ×1.2 = **18pt**,而 macOS 自己的窗口标题是 13;
     /// 现在 13 ×1.2 ≈ 15.6,字重同步从 semibold 降到 medium(见 PreviewPanelView)
-    /// 标题字号 12 → 10.5(同上:"字体缩小一点")
-    static var titleSize: CGFloat { k(10.5) }
+    /// 标题字号:12 → 10.5(2026-09-14:"字体缩小一点")→ **12**(2026-09-25:芯片是
+    /// 区分 IDEA 多项目的唯一依据,字号要为扫读效率服务 —— 与 macOS 窗口标题 13pt 同量级)
+    static var titleSize: CGFloat { k(12) }
     /// 标题双保险截断的**第一道**:只做病理保护(标量是字符数,中英混排靠宽度截断兜底)。
     /// 2026-09-14 实评:12 把终端 tab 名 "π - tab-group-search" 斩成 "π - tab-grou…",
     /// 卡片加宽到 196 后提到 28;同时又随尺寸同比例放宽(面板调大 = 一行能装更多字)
@@ -400,6 +405,14 @@ enum PanelColors {
         NSColor(srgbRed: 236 / 255, green: 239 / 255, blue: 243 / 255, alpha: 1),
         NSColor(srgbRed: 43 / 255, green: 48 / 255, blue: 55 / 255, alpha: 1)
     )
+    /// 卡顶**雾檐**(2026-09-24 深夜,用户拍板"遮罩改到容器顶部,不坐在画面上"):
+    /// 原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— 图像派生 ⇒ 要等图、要后台算、换屏要作废,
+    /// "卡面先到、檐后浮"永远治不干净 ✗。檐改成**容器自己的一条静态雾**:
+    /// 浅色白雾(亮卡顶的 titlebar 语言)/ 深色暗雾,渐变收干见 `lightsFade`。
+    /// 首帧就在、不依赖任何源、无异步 ⇒ 没有后置渲染 ✓。
+    /// 深色 alpha 对齐「预览容器整体设计 Demo」的 `.wframe::before`(black .28 → 0)——
+    /// 可读性的主力已挪给红绿灯自己的胶囊座,这条雾退为兜底,所以淡 ✓
+    static let thumbHaze = dynamic(white(0.32), NSColor.black.withAlphaComponent(0.28))
     /// 标题条墨色(demo .win-title color):深色必须是**亮字** ——
     /// 它坐在深色芯片上,旧版 白 .75 已经偏灰,提到 .88;
     /// 深夜那轮芯片底再淡一档(见 `chipBg`),字补到 **.92** 兜住对比度。
@@ -459,6 +472,10 @@ enum PanelColors {
     ///   这是·权宜之计;根治办法写在 `design/预览托盘-设计说明.md`:
     ///     **把标题挪进卡片画面之内**(压在卡底 + 渐变兜底)⇒ 它永远坐在"这张窗自己的画"上,
     ///     不再需要跟任意背景比对比度 ✓。
+    /// ★★ 2026-09-25 第五次改(用户实评「改成全透明的了,会被背景污染」):
+    ///   验证了上面三轮(.40 → .74 → .90)的结论 —— demo 的 6% 只在"永远坐深色画布"时成立,
+    ///   我们的芯片浮在任意桌面上 ⇒ **回到 .90**(第四次跟 demo 只活了一天,案底留着:
+    ///   这个值不是审美选择,是"芯片必须自己站住"的物理下限,往低调之前先读这段)。
     static let chipBg = dynamic(white(0.90), slate(18, alpha: 0.90))
     /// 芯片的边。
     /// 底变透之后,边的职责从"给不透明块收边"变成"交代这是一块玻璃" —— 深色 .14 → **.24**。这不是加重:半透底在**深**玻璃上只剩 Δ −15 的亮度差,
@@ -471,6 +488,7 @@ enum PanelColors {
     /// 浅色 .06 不动。
     /// 浅色 .06 → **.10**(2026-09-21,与 `chipBg` 同一次):底变实之后需要一根清楚的边界,
     /// 否则白底上一枚浅胶囊读不出"这里有一块" ✓。深色 .10 不动。
+    /// 2026-09-25:随 `chipBg` 一起回到"自己站住"的值(半透明边的历史同上,往低调先读 chipBg 的案底)
     static let chipBorder = dynamic(ink(0.10), white(0.10))
     /// 红绿灯:macOS 系统规格色(#FF5F57 / #FEBC2E / #28C840),深浅一致不随外观变
     static let tlClose = dynamic(NSColor(srgbRed: 1.0, green: 95 / 255, blue: 87 / 255, alpha: 1),
@@ -479,8 +497,26 @@ enum PanelColors {
                                NSColor(srgbRed: 254 / 255, green: 188 / 255, blue: 46 / 255, alpha: 1))
     static let tlZoom = dynamic(NSColor(srgbRed: 40 / 255, green: 200 / 255, blue: 64 / 255, alpha: 1),
                                 NSColor(srgbRed: 40 / 255, green: 200 / 255, blue: 64 / 255, alpha: 1))
+    /// 三粒灯的**胶囊座**(2026-09-24,用户拿「预览容器整体设计 Demo」拍板:灯不再裸坐在画面上,
+    /// 收进一枚胶囊)。⚠️ 不糊卡面:demo 的 backdrop-blur 在原生侧 = 「座」的老路(图像派生、
+    /// 异步、换屏作废 ✗,见 docs/live-preview-设计.md),可读性由**雾檐 + 这层半透底**承担。
+    ///
+    /// ★ 双色配方(2026-09-24 深夜,用户实评「暗色模式 + 黑色窗口内容时胶囊不清晰…
+    ///   任何主题、任何内容下都要清晰,胶囊和边框不要被弱化」):
+    ///   单层半透明永远有一个底色上读不出(白 .10 在黑内容上消失、在白内容上也消失)✗。
+    ///   ⇒ **亮底 + 暗边 + 投影**三层各管一种内容:亮内容上暗边+投影立住 ✓,
+    ///   暗内容上亮底立住 ✓,中间灰两层一起 ✓ —— 永远至少有一层读得出,与主题/内容无关 ✓
+    /// ★ 浅色那格减分量(2026-09-25,用户实评「浅色模式 + 深色窗口内容,胶囊有点重」):
+    ///   .72 的实白压在暗内容上是**一团白**而不是一层雾 ✗ ⇒ 降到 .45(仍是亮底,
+    ///   但读作磨砂玻璃);边的职责不变(亮内容上的那根线),略加深兜住对比 ✓
+    static let tlSeat = dynamic(white(0.45), white(0.16))
+    static let tlSeatHover = dynamic(white(0.62), white(0.26))
+    /// 胶囊的**暗边**:亮内容上的那根线(暗内容上它融进去,由亮底接管 ✓)
+    static let tlSeatEdge = dynamic(ink(0.20), ink(0.30))
     /// 选中缩略图的内圈聚焦光:深色提到 .62 —— 聚焦圈要在**深色截图**上也读得出,
     /// 而截图本身多半是暗的(终端、编辑器),.4 会被截图吃掉
+    /// (2026-09-24 曾按「预览容器整体设计 Demo」改成系统强调色 outline —— 用户实评
+    ///  「选中的时候不要那个蓝色边框,很丑」⇒ 当日退回白环 ✓)
     static let thumbFocus = dynamic(white(0.55), white(0.62))
     /// 指针跟随高光:demo 是 soft-light 的白 30%,混不进进程外的玻璃,折成等效普通 alpha。
     /// 换算:soft-light(白)= √b,按 .30 权重大约提亮 0.06~0.08;白 alpha .12/.16 给 0.05~0.09。
@@ -633,6 +669,30 @@ struct TrafficLights: View {
             light(PanelColors.tlMin, "minus", "最小化窗口", 1, minimize)
             light(PanelColors.tlZoom, "arrow.up.left.and.arrow.down.right", "缩放窗口", 2, zoom)
         }
+        // 内边对齐 demo `.lights`(4.5/8):每粒灯自带 3pt 命中垫 ⇒ 这里补 1.5/5 即视觉 4.5/8
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
+        // ★ 胶囊座(2026-09-24,「预览容器整体设计 Demo」拍板):三粒灯收进一枚半透明胶囊,
+        //   与卡片的关系从"裸坐在画面上"改成"坐在自己的座上" —— 可读性不再全部押给
+        //   卡顶那一大片压色(雾檐仍在,职责退为兜底)。
+        //   提亮时机对齐 demo `.wcard:hover .lights`:**卡片被 hover**(= 我们这里的选中,
+        //   因为 hover 即选中)或**指针踩上灯组** ⇒ .10 → .20
+        .background(
+            Capsule(style: .continuous)
+                .fill(hoveredDot != nil || !dimmed ? PanelColors.tlSeatHover : PanelColors.tlSeat)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(PanelColors.tlSeatEdge, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.24), radius: 2, y: 1)
+        // ★ 未选中 = 整组(灯 + 胶囊座)随卡片一起蒙一层(2026-09-24 深夜用户裁定:
+        //   「未选中的红绿灯跟随窗口带蒙层这个可以保留,不用参照 HTML —— 常亮反而不对」)。
+        //   蒙层语义 = macOS 的非激活窗口;hover 即选中 ⇒ 看着它的那张永远是亮的 ✓
+        .saturation(dimmed ? 0 : 1)
+        .opacity(dimmed ? 0.55 : 1)
+        .animation(.easeOut(duration: 0.18), value: hoveredDot != nil || !dimmed)
+        .animation(.easeOut(duration: 0.18), value: dimmed)
     }
 
     private func light(_ color: Color, _ symbol: String, _ hint: String,
@@ -641,7 +701,7 @@ struct TrafficLights: View {
         TrafficLight(color: color, symbol: symbol, hint: hint,
                      showsGlyph: hoveredDot != nil,
                      hovering: hoveredDot == index,
-                     dimmed: dimmed || disabled,
+                     disabled: disabled,
                      action: disabled ? {} : action)
             .padding(3)
             // 逐粒听 hover,而不是给 HStack 挂一个:容器上的 onHover 会被子按钮吃掉
@@ -663,8 +723,8 @@ struct TrafficLight: View {
     let hint: String
     let showsGlyph: Bool
     let hovering: Bool
-    /// 未选中 = 灰(见 TrafficLights.dimmed)
-    let dimmed: Bool
+    /// 红灯禁用(Glance 自己的窗):置灰 + 点了没反应
+    var disabled: Bool = false
     let action: () -> Void
 
     var body: some View {
@@ -683,12 +743,9 @@ struct TrafficLight: View {
                         .opacity(showsGlyph ? 1 : 0)
                 }
                 .scaleEffect(hovering ? 1.15 : 1)
-                // 去饱和是"克制"的来源:亮点只在你看着它的时候出现。
-                // 用 saturation+opacity 而非新增灰色常量 —— 灰值随明暗外观自动正确,
-                // 也不必为一个中间态往设计系统里塞 token ✓
-                .saturation(dimmed ? 0 : 1)
-                .opacity(dimmed ? 0.55 : 1)
-                .animation(.easeOut(duration: 0.18), value: dimmed)
+                // 未选中的蒙层在**整组**那一层(见 TrafficLights.body);这里只剩"禁用"置灰
+                .saturation(disabled ? 0 : 1)
+                .opacity(disabled ? 0.45 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .animation(.easeOut(duration: 0.12), value: showsGlyph)
         }
@@ -707,7 +764,7 @@ struct TrafficLightClose: View {
 
     var body: some View {
         TrafficLight(color: PanelColors.tlClose, symbol: "xmark", hint: "关闭",
-                     showsGlyph: true, hovering: hovered, dimmed: false, action: action)
+                     showsGlyph: true, hovering: hovered, action: action)
             .scaleEffect(hovered ? 1.1 : 1)
             .padding(3)
             .onHover { hovered = $0 }

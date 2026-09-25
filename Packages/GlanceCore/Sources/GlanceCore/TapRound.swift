@@ -106,6 +106,15 @@ public enum TapRound {
         ///   —— 手指在板上自然漂一两毫米就被判成"滑动" ✗;真滑动的量级是 **0.097–0.127**(实测 ✓)
         ///   ⇒ 0.05 仍把滑动挡在外面,而小漂移不再误杀 ✓
         public var maxMove: Float = 0.05
+        /// **拖后宽限**(2026-09-25,用户裁定「任何时候三指都应该是 Glance 的唤起手势」):
+        /// 刚拖完(鼠标刚抬起)的一小窗里,系统会抢着把下一发三指认成拖移(合成鼠标按下)——
+        /// 那一下"点击/小拖"反正已经发生、收不回来,唯一的选择是**面板给不给** ⇒ 给。
+        /// 只放"收尾快、幅度小"的局:真拖(长/大)照样让 ✓。
+        /// ⚠️ 这套宽门**只在**「按压开始前刚拖完 ∧ 本轮带拖移证据」时启用
+        ///   (见 `judge` 的 `postDragGrace`):快速选词(237ms / 0.025,也是短促小拖)
+        ///   在**没有前序拖拽**时仍一票否决(2026-09-23 语料,见 corpus 样本)✓
+        public var dragGraceDuration: Double = 0.50
+        public var dragGraceMove: Float = 0.25
 
         /// ⚠️ 2026-09-24 试过放宽到 0.45 —— **被语料测试当场拦下** ✓ 保持 0.6:
         ///   依据(用户实报「三指要点好多遍才能唤起」):有意点按实测落在 **0.6–0.9** ✓,
@@ -351,9 +360,14 @@ public enum TapRound {
         /// —— 时钟与采集都在 App 侧,核里只认布尔 ✓)。真轻点不产生任何鼠标事件 ⇒ 该证据只在
         /// "看起来像轻点的拖移"上为真,一票否决(2026-09-23 实锤病例见规格文档表二 ✓)。
         /// 放在时长/手指数闸**之后**:不动作的轮次不因它多话,只有"本该生效"的局才被它拦下 ✓
-        public func judge(now: Double, dragEvidence: Bool = false) -> Outcome {
+        /// `postDragGrace` = **这轮按压开始前刚拖完**(调用方按"鼠标抬起时刻 < 按压起点 < +0.8s"判 ✓)
+        /// —— 与证据同时成立时启用拖后宽限(见 Policy.dragGrace*):系统抢走的那下收不回来,
+        /// 面板照给;真拖(长/大)仍拒 ✓
+        public func judge(now: Double, dragEvidence: Bool = false, postDragGrace: Bool = false) -> Outcome {
             if fired { return .rejected("") }
             let snap = snapshot(now: now)
+            // 拖后宽限是否适用于本轮:刚拖完 ∧ 系统本轮真的又来抢(有证据)⇒ 换宽门
+            let wide = dragEvidence && postDragGrace
             // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
             guard snap.maxSize >= policy.minContactSize else {
                 return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
@@ -372,14 +386,15 @@ public enum TapRound {
                 return .rejected(String(format: "时长 %.0fms < 下限 %.0fms",
                                         snap.held * 1000, policy.minDuration * 1000))
             }
-            guard (snap.fingerCount == 3 || snap.fingerCount == 4), snap.held <= policy.maxDuration else {
+            guard (snap.fingerCount == 3 || snap.fingerCount == 4),
+                  snap.held <= (wide ? policy.dragGraceDuration : policy.maxDuration) else {
                 // 一指的普通点按：不进账（只在可能相关的局里留账，便于对账"漏在哪一档"）
                 guard snap.fingerCount >= 2 || snap.palmCount > 0 else { return .rejected("") }
                 let st = snap.statesSeen.map(String.init).joined(separator: "/")
                 return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且落齐后 ≤%.0fms;整轮 %.0fms)",
                                         snap.fingerCount, snap.palmCount, st, snap.held * 1000,
                                         snap.normalizedMove, snap.absoluteMove, snap.maxSize, snap.maxMajorAxis,
-                                        policy.maxDuration * 1000, snap.heldTotal * 1000))
+                                        (wide ? policy.dragGraceDuration : policy.maxDuration) * 1000, snap.heldTotal * 1000))
             }
             if snap.sawFrameGap {
                 return .rejected(String(format: "%d 指 帧间隔 >%.0fms(丢帧 ⇒ 位移不可信)⇒ 不动作",
@@ -389,17 +404,23 @@ public enum TapRound {
                 return .rejected(String(format: "%d 指 抬手用了 %.0fms(>%.0fms)⇒ 不是点按",
                                         snap.fingerCount, snap.releaseSpan * 1000, policy.maxReleaseSpan * 1000))
             }
-            if snap.normalizedMove > policy.maxMove { return .slide(norm: snap.normalizedMove) }
+            if snap.normalizedMove > (wide ? policy.dragGraceMove : policy.maxMove) {
+                return .slide(norm: snap.normalizedMove)
+            }
             // ★ 拖移证据门:按压期间系统按下过鼠标 ⇒ 这不是轻点,是拖移的起手/全程(规格表二 ✓)。
             //   放在滑动判定**之后**:大位移的局照旧按"让给系统"报(不改口 ✓),只有"本该生效"
             //   的局才被它拦下 —— 日志里它一出现,就说明真拦住了一次误触 ✓
-            if dragEvidence {
+            //   ★ 拖后宽限(wide):刚拖完 + 系统又来抢 ⇒ 那一下"点击/小拖"反正已经发生、
+            //   收不回来,面板照给(用户 2026-09-25 裁定:「任何时候三指都应该是唤起手势」);
+            //   真拖已在上面两道宽门(0.50s / 0.25)被挡 ✓
+            if dragEvidence, !wide {
                 return .rejected("按压期间出现过鼠标按下(三指拖移被系统消费的签名)⇒ 让给系统,不动作")
             }
-            if snap.held > policy.maxDuration {
+            if snap.held > (wide ? policy.dragGraceDuration : policy.maxDuration) {
                 guard snap.fingerCount == 4, policy.pressHoldRange.contains(snap.held) else {
                     return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",
-                                            snap.fingerCount, snap.held * 1000, policy.maxDuration * 1000,
+                                            snap.fingerCount, snap.held * 1000,
+                                            (wide ? policy.dragGraceDuration : policy.maxDuration) * 1000,
                                             policy.pressHoldRange.lowerBound, policy.pressHoldRange.upperBound))
                 }
                 return .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove,

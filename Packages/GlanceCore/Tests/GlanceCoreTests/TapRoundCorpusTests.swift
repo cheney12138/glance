@@ -38,6 +38,8 @@ final class TapRoundCorpusTests: XCTestCase {
         /// 日志里那行原文(留档:一眼能对上 ✓)
         let log: String
         var dragEvidence = false
+        /// 拖后宽限(2026-09-25):按压开始前刚拖完 ⇒ 与证据同时成立时换宽门(见 Policy.dragGrace*)
+        var postDragGrace = false
     }
 
     // MARK: 造帧(照真实节奏:落齐约 40ms、此后每 ~40ms 一帧 ✗ 别隔 160ms ⇒ 会被丢帧门挡 ✓)
@@ -77,13 +79,13 @@ final class TapRoundCorpusTests: XCTestCase {
         var lastTime = 0.0
         for f in s.frames {
             if tracker.feed(f) == 0 {
-                let out = tracker.judge(now: f.time, dragEvidence: s.dragEvidence)   // 先判卷 ✓
+                let out = tracker.judge(now: f.time, dragEvidence: s.dragEvidence, postDragGrace: s.postDragGrace)   // 先判卷 ✓
                 tracker.endRound()
                 return out
             }
             lastTime = f.time
         }
-        return tracker.judge(now: lastTime, dragEvidence: s.dragEvidence)
+        return tracker.judge(now: lastTime, dragEvidence: s.dragEvidence, postDragGrace: s.postDragGrace)
     }
 
     // MARK: 语料表
@@ -141,6 +143,15 @@ final class TapRoundCorpusTests: XCTestCase {
             Sample(name: "误触(已挡住)· 三指 47ms/0.5(很轻)", kind: .rejected("过轻"), verdict: .misfire,
                    frames: frames(fingers: 3, holdMs: 47, size: 0.5, major: 6.9, moveTo: 0.0115),
                    log: "三指   47ms norm=0.0115 abs=1.2 size=0.5 major=6.9"),
+
+            // ── 拖后宽限(2026-09-25,用户实报「拖完窗口边框,三指第一次是点击,第二次才唤起」)──
+            // 日志 1463160 的真实形状:305ms / norm 0.185 —— 严门(0.30s/0.05)都超,
+            // 但"刚拖完 + 本轮带拖移证据" ⇒ 宽门(0.50s/0.25)放行 ✓;
+            // 没有"刚拖完"的同一形状仍一票否决(上面那条 237ms 选词样本 ✓)
+            Sample(name: "拖后宽限 · 三指 305ms/0.185(刚拖完+证据 ⇒ 放行)", kind: .fires, verdict: .intended,
+                   frames: frames(fingers: 3, holdMs: 265, size: 0.9, major: 10.4, moveTo: 0.185),
+                   log: "3 指(豁免掌 0)[state 3/4]305ms 位移 norm=0.1850 abs=28.6 size=1.0 major=11.0 → 唤起(拖后宽限)",
+                   dragEvidence: true, postDragGrace: true),
 
             // ── "拖移证据"在场时:今天就已经被拦下 ✓(这是他那条修复的能力边界 ✓)──────
             Sample(name: "拖移证据 · 三指 237ms(同一形状 + 证据)", kind: .rejected("鼠标按下"),

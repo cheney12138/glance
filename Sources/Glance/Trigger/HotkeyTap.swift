@@ -199,7 +199,8 @@ final class HotkeyTapCenter {
 
         installEventHandler()
         flagsTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.flagsChanged])
-        mouseTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.leftMouseDown])
+        // leftMouseUp 也在:拖后宽限要"鼠标刚抬起"的时刻(见 ThreeFingerTap 拖后宽限段 ✓)
+        mouseTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.leftMouseDown, .leftMouseUp])
         navTap = makeTap(at: .cghidEventTap, options: .defaultTap, types: [.keyDown, .scrollWheel])
         guard flagsTap != nil else {
             print("[Glance] 触发层创建失败——辅助功能权限未就绪,触发层不工作")
@@ -324,6 +325,9 @@ final class HotkeyTapCenter {
             onMoveWindowToNextScreen?()
             return
         }
+        // ★ 久闲后的第一发触发键:先问一句"多指设备还活着吗"——
+        //   合盖一夜后 Multitouch 回调会死,而自愈原来住在喂帧路径里(没帧 ⇒ 永远不触发 ✗)
+        ThreeFingerTap.shared.recoverIfStale()
         // ★ 热键开面板会**大声报一行**(手势那条另有日志);两条互斥出现 ⇒ 一眼知道是谁按的 ✓
         //   (Carbon 回调只给 id,给不出"物理上是哪颗键"—— 但注册的和弦启动时已报 ✓)
         glog("[热键] \(hotKey == .reverse ? "反向" : "正向") 触发键开面板 — 进之前的状态=\(state)")
@@ -388,6 +392,9 @@ final class HotkeyTapCenter {
         switch event.type {
         case .flagsChanged: return handleFlags(event)
         case .leftMouseDown: return handleMouse(event)
+        case .leftMouseUp:
+            ThreeFingerTap.shared.noteMouseUp()   // 拖后宽限的"刚拖完"时刻(只听不吞 ✓)
+            return false
         case .keyDown: return handleNavKey(event)
         case .scrollWheel:
             // ★★ 2026-09-22 事故(用户实报「触摸板双指滑动怎么失效了」,他正在工作 ✗):

@@ -742,6 +742,9 @@ struct ShortcutPane: View {
     @State private var monitor: Any?
     /// **跨屏送窗**的快捷键(脱面板 ✓ ADR-0016):默认 ⌘⇧M,可在这里重录 ✓
     @State private var moveConfig = TriggerConfig.loadMoveWindow()
+    /// 送窗后的撑满门槛(2026-09-25 用户裁定:「做成配置的, 放设置面板里, 让用户自己选择」):
+    /// 窗口面积占**当前屏可见区** > 这个百分数 ⇒ 过去后撑满;否则保持原尺寸(按相对位置落)✓
+    @AppStorage(Keys.panelMoveFillMinRatio) private var moveFillMinRatio = KeyDefaults.moveFillMinRatio
     @State private var recordingMove = false
     @State private var moveMonitor: Any?
     /// 唤起落点:true(默认,macOS 原生)= 直接切一次(上一个 App);false = 只定位到当前 App
@@ -828,6 +831,23 @@ struct ShortcutPane: View {
                     .buttonStyle(.plain)
                     .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                     .help(recordingMove ? "按 Esc 取消录制" : "点一下开始录制新的快捷键")
+                }
+                // 主从档:上面那行的"送过去之后怎么办"(2026-09-25 用户口径:
+                // 「有的窗口不适合全屏…超过 1/2 原显示器占比的才全屏」⇒ 交给用户自己调 ✓)
+                SettingsRow(title: "送过去后撑满屏幕",
+                            desc: "窗口面积占当前屏幕超过这个比例才撑满;"
+                                + "小窗保持原尺寸、落在同样的相对位置。0% = 一律撑满,100% = 一律保持。") {
+                    HStack(spacing: 10) {
+                        // 与「切换速度」同一形状:裸 Slider(带 step 会画刻度点,本设计无刻度语言 ✓)
+                        Slider(value: $moveFillMinRatio, in: 0...100)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text("\(Int(moveFillMinRatio))%")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
+                    }
                 }
                 SettingsRow(title: "触发键",
                             desc: "点击后按下新的组合键。修饰键支持 ⌥、⌘、⌃、⌘⇧。",

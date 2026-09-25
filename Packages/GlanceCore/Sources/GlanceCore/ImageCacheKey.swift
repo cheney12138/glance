@@ -11,10 +11,10 @@ import Foundation
 /// 键相同、值却该换，是缓存最典型的错法 ✓（挪窗口大小反而不受影响：那时 `wid` 会变 ✓）。
 ///
 /// ⇒ 口径：**键必须覆盖"决定了那个值长什么样"的全部输入** ✓。
-///   卡片图 = 窗 id + 像素尺寸（尺寸里已经含了 scale ✓）；
-///   座图（高斯模糊）= 窗 id（模糊半径里含屏 scale，而换屏会整本 `reset()` ✓）。
+///   卡片图 = 窗 id + 像素尺寸（尺寸里已经含了 scale ✓）。
 ///
-/// ⚠️ 同时改这个文件的两处：`CardImageCache` / `SeatImageCache`。
+/// （"座图"的键曾只有窗 id —— 2026-09-24 深夜「座」随遮罩改静态雾檐整体退役，
+///   键与缓存一并删除，此处留一行案底。）
 public enum ImageCacheKey {
 
     /// 卡片图（`CardImageCache.Prepared`）的键
@@ -43,7 +43,4 @@ public enum ImageCacheKey {
         let px = pixelSize(target: target, scale: scale)
         return Card(windowID: windowID, pixelWidth: px.width, pixelHeight: px.height)
     }
-
-    /// 座图（高斯模糊）的键 —— 只有窗 id（理由见文件头 ✓）
-    public static func seat(windowID: UInt32) -> UInt32 { windowID }
 }
