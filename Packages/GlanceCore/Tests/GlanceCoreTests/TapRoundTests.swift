@@ -21,19 +21,19 @@ final class TapRoundTests: XCTestCase {
 
     /// 模拟 App 的用法：喂帧；某一帧空 ⇒ 当场判卷（照 LumaRing：只在全部离开那一帧判）
     private func run(_ frames: [TapRound.Frame], policy: TapRound.Policy = .standard,
-                     dragEvidence: Bool = false) -> TapRound.Outcome {
+                     dragEvidence: Bool = false, postDragGrace: Bool = false) -> TapRound.Outcome {
         var tr = TapRound.Tracker(policy: policy)
         for f in frames {
             if tr.feed(f) == 0 {
                 // ⚠️ 顺序照 App:**先判卷、再清账** —— 反了就是拿空账本判卷（我第一版写反过 ✗）
-                let out = tr.judge(now: f.time, dragEvidence: dragEvidence)
+                let out = tr.judge(now: f.time, dragEvidence: dragEvidence, postDragGrace: postDragGrace)
                 tr.endRound()
                 return out
             }
         }
         // 没等到空帧 ⇒ 用最后一帧时刻判（测试里基本用不到）
         let last = frames.last?.time ?? 0
-        return tr.judge(now: last, dragEvidence: dragEvidence)
+        return tr.judge(now: last, dragEvidence: dragEvidence, postDragGrace: postDragGrace)
     }
 
     /// 三根手指：分两帧落齐（第 3 根 40ms 后到 —— 本仓病历里就是常态 ✓）
@@ -340,6 +340,50 @@ final class TapRoundTests: XCTestCase {
         frames.append(frame(0.12))
         let out = run(frames, dragEvidence: true)
         guard case .slide = out else { return XCTFail("大位移照旧是滑动(让给系统), 实际:\(out)") }
+    }
+
+    // MARK: ⑧½ 拖后宽限(2026-09-25,用户裁定「任何时候三指都应该是唤起手势」)
+
+    /// 造"拖完边框后那一发"的形状:落齐后缓慢漂到 norm ≈0.18,305ms 抬手(严门两条都超 ✓)
+    private func sloppyTapAfterDrag() -> [TapRound.Frame] {
+        var out = threeFingers(t0: 0)
+        var t = 0.04
+        while t < 0.32 {
+            out.append(frame(t, c(11, 0.5 + t * 0.55, 0.5), c(12, 0.52 + t * 0.55, 0.5), c(13, 0.54 + t * 0.55, 0.5)))
+            t += 0.04
+        }
+        out.append(frame(0.345))
+        return out
+    }
+
+    /// 用户现场(日志 1463160/1464023):拖完 Sublime 边框,下一发 305ms/norm 0.185 被严门拒 ⇒
+    /// "第一次是点击,第二次才唤起" ⇒ 刚拖完 + 带证据 ⇒ 宽门(0.50s/0.25)放行 ✓
+    func testPostDragGraceAdmitsSloppyTapAfterDrag() {
+        let out = run(sloppyTapAfterDrag(), dragEvidence: true, postDragGrace: true)
+        guard case .fireThree = out else { return XCTFail("刚拖完+证据+小幅超时/漂移 ⇒ 宽门放行, 实际:\(out)") }
+    }
+
+    /// 同一形状**没有"刚拖完"** ⇒ 严门原样(快速选词的防线一步不退 ✓)
+    func testNoGraceWithoutPostDragFlag() {
+        let out = run(sloppyTapAfterDrag(), dragEvidence: true, postDragGrace: false)
+        guard case .rejected = out else { return XCTFail("无前序拖拽 ⇒ 仍按严门拒, 实际:\(out)") }
+    }
+
+    /// 宽门不放真拖:600ms 长拖,刚拖完+有证据也照样拒 ✓
+    func testGraceDoesNotAdmitRealDrag() {
+        let frames = heldThree(t0: 0, until: 0.64)
+        let out = run(frames, dragEvidence: true, postDragGrace: true)
+        guard case .rejected = out else { return XCTFail("长拖不进宽门, 实际:\(out)") }
+    }
+
+    /// 宽门也不放大位移:norm 0.6 > 0.25 ⇒ 照旧让给系统 ✓
+    func testGraceDoesNotAdmitBigMove() {
+        var frames = threeFingers(t0: 0)
+        frames.append(frame(0.08, c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.60, 0.5)))
+        frames.append(frame(0.12, c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.90, 0.5)))
+        frames.append(frame(0.16))
+        let out = run(frames, dragEvidence: true, postDragGrace: true)
+        guard case .slide = out else { return XCTFail("大位移照旧是滑动, 实际:\(out)") }
     }
 
     // MARK: - 掌心/掌缘(2026-09-24 用户实报:笔记本打字时手心碰到触摸板)

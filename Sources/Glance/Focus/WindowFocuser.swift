@@ -91,6 +91,34 @@ enum WindowFocuser {
                         (t2 - t0) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000, owner))
         }
         glog("[T7] 已聚焦: \(w.ownerName) — \(w.title)")
+        verifyFronted(w, since: t0)
+    }
+
+    /// ★★ 聚焦**事后核验 + 降级补发**(2026-09-25,用户实报「点 Ghostty 唤不起来,点 App/点卡都不行」)。
+    ///
+    /// 病例(日志铁证):`已聚焦: Ghostty` 打出后 **371ms**,用户再按 ⌘Tab,面板开局仍报
+    ///   `当前=Apifox` —— 也就是说 `_SLPSSetFrontProcessWithOptions` 返回了 `.success`,
+    ///   而前置**根本没发生** ✗。私有 API 的"成功谎言"在日志里完全看不见(三步全绿),
+    ///   用户看到的是"点了没反应,而且个别 App 才这样"。
+    /// 处方(与 D1 毒账本同一哲学:判卷不跑 = 沉默失效 ⇒ 必须有人复核):
+    ///   0.5s 后看一眼**谁是真前台** ——
+    ///     · 已是目标 ✓ ⇒ 收工;
+    ///     · 还是**原来那个** App ⇒ SLPS 静默失败实锤 ⇒ 公共 API `activate` 补一发
+    ///       (级联拉起,但"唤得醒"是底线 —— 与 degrade 同一口径);
+    ///     · 是**第三个** App ⇒ 用户已经去了别处 ⇒ **别抢** ✗(这条最重要)。
+    private static func verifyFronted(_ w: WindowRecord, since t0: CFAbsoluteTime) {
+        // 此刻(确认那一拍)的前台 = 用户正要离开的那个 App(我们的面板 nonactivating,不占前台)
+        guard let before = NSWorkspace.shared.frontmostApplication,
+              before.processIdentifier != w.pid else { return }   // 重激活当前 App:必然"成功",不用验
+        let beforePID = before.processIdentifier
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            guard front != w.pid else { return }                       // ✓ 成了
+            guard front == beforePID else { return }                   // 用户去了第三处 ⇒ 不抢
+            glog("[T7] ⚠️ 聚焦核验:0.5s 后仍是 \(before.localizedName ?? "?") 在前台 ⇒ "
+                 + "SLPS 成功是谎言,降级 activate 补一发 @\(w.ownerName)")
+            NSRunningApplication(processIdentifier: w.pid)?.activate(options: [])
+        }
     }
 
     // MARK: - 私有区(以下不许被外部调用,也不许离开这个文件)

@@ -154,6 +154,17 @@ final class Snapshotter: ObservableObject {
 
     func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil) {
         guard !windows.isEmpty else { return }
+        // ★★ S5(2026-09-24 终版,用户裁定「回到上一版,loading 显示 App 图标能接受」):
+        //   冷窗垫图(S2'')**整体退役** —— 垫图 ⇒ 换源那一下内容仍会"移一下"(快照裁过透明边,
+        //   live 不裁,位移感治不干净 ✗),用户实报抖动复现 ⇒ 冷窗回到**静默 App 图标**,
+        //   live 是唯一源(I1 彻底成立)。⇒ live 开时快照**完全不采**(不管面板在不在台上):
+        //   既不跟流抢 WindowServer,也不再为"垫图"做任何无用功。
+        //   关掉实时预览 ⇒ 这道门整个不存在,快照链原样全速 ✓。
+        //   (S5' 的案底:曾让"面板关着"时照常采,给垫图供货 —— 垫图退役,货源一并关 ✓)
+        if LivePreviewPool.enabled {
+            logLiveSkipOnce()
+            return
+        }
         // ★ **录屏权限预检**(2026-09-19 用户实报「怎么老是弹录屏授权」):后台 sweep(5s 开窗拍)
         // 触发 SCK 时,若权限缺失/失效(重签名、系统更新都会让 TCC 记录失效),macOS 就弹授权框
         // —— 用户被骚扰,而弹窗本该只属于权限引导流程。`CGPreflightScreenCaptureAccess`
@@ -397,6 +408,15 @@ final class Snapshotter: ObservableObject {
 
 /// 录屏权限未授权的跳过账:**每进程只喊一次**(sweep 5s 一轮,不设闸就刷屏)
 nonisolated(unsafe) private var permissionSkipLogged = false
+
+/// live 开 ⇒ 快照"台上让位"的跳过账:同样**每进程只喊一次**(sweep/激活拍都指向 precapture,
+/// 不设闸就每 5s 一行 ✗)。这一行是"台上那会儿快照为什么没更新"的答案,得留个字据 ✓
+nonisolated(unsafe) private var liveSkipLogged = false
+private func logLiveSkipOnce() {
+    guard !liveSkipLogged else { return }
+    liveSkipLogged = true
+    print("[T5] live 开 ⇒ 面板在台上时快照采集让位(流在跑);面板关着照常采,给冷窗垫图")
+}
 
 /// `SCShareableContent` 的短命缓存:这个枚举**很贵**(要跟 WindowServer 打一轮),
 /// AltTab 也是缓存复用同一份。1 秒新鲜度对"缩略图"这件事完全够。

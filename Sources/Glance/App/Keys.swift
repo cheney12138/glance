@@ -57,6 +57,8 @@ enum Keys {
     static let debugTapMaxMoveNorm = "debug.tapMaxMoveNorm"
     /// `debug.tapMaxMajor` —— 三指判卷的触点主轴上界(默认取领域层 14;掌心误触多就调小)
     static let debugTapMaxMajor = "debug.tapMaxMajor"
+    /// `debug.tapReattachIdleMin` —— 多指设备"久闲多久后自愈重挂"(分钟;默认 30,0 = 关)
+    static let debugTapReattachIdleMin = "debug.tapReattachIdleMin"
     /// `debug.tapUndoDriftPt` —— 生效后"指针位移多少 pt 就撤销"(默认 40;设 0 = 关)
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)
@@ -67,6 +69,8 @@ enum Keys {
     /// `debug.puckBrightness` —— 选中图标底下那块托底的亮度倍率(浅色模式;默认 0.75,1 = 原样)
     static let debugPuckBrightness = "debug.puckBrightness"
     static let debugMoveOverflowRule = "debug.moveOverflowRule"
+    /// 「送窗撑满门槛」的正式键(2026-09-25:debug 键只活了一天就按用户裁定提升为设置项 ✓)
+    static let panelMoveFillMinRatio = "panel.moveFillMinRatio"
     /// `debug.trace`
     static let debugTrace = "debug.trace"
 
@@ -162,6 +166,12 @@ extension Keys {
         if ProcessInfo.processInfo.arguments.contains("-debug.pinPanelOnRelease") { return true }
         return UserDefaults.standard.object(forKey: panelPinOnRelease) as? Bool ?? KeyDefaults.pinOnRelease
     }
+
+    /// 「送窗撑满门槛」的**唯一读取点**(0–1;默认 0.5)。每次按快捷键现读 ⇒ 设置里拖完即生效 ✓
+    static var moveFillMinRatio: Double {
+        let v = (UserDefaults.standard.object(forKey: panelMoveFillMinRatio) as? NSNumber)?.doubleValue
+        return min(max(v ?? KeyDefaults.moveFillMinRatio, 0), 100) / 100
+    }
 }
 
 enum KeyDefaults {
@@ -194,6 +204,9 @@ enum KeyDefaults {
     static let slideFromLastApp = false
     /// 保持面板打开(松手不关)。**关**:钉住是高级玩法 ✓
     static let pinOnRelease = false
+    /// 送窗撑满门槛(窗口面积占源屏可见区的百分数)。**50**(2026-09-25 用户口径:
+    /// "超过 1/2 原显示器占比的才全屏" ✓;0 = 一律撑满,100 = 一律保持原尺寸)
+    static let moveFillMinRatio: Double = 50
     /// 接管系统 ⌘Tab / ⌘`。**关**:抢系统快捷键必须先问(ADR-0005)⇒ 出厂不许默认抢 ✓
     static let takeoverSystemSwitcher = false
     static let takeoverGraveCyclesWindows = false

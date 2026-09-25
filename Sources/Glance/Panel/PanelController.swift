@@ -79,6 +79,10 @@ final class PanelController: ObservableObject {
     /// dismiss 时通知触发层收尸(见 HotkeyTapCenter.endSession)。App 装配时接线
     var onSessionEnd: (() -> Void)?
 
+    // (2026-09-24 深夜:这里曾有一个"快照落账 ⇒ 预热座"的 Combine 常驻订阅,治"冷启动遮罩
+    //  后浮"。当晚用户拍板把遮罩改成容器自己的静态雾檐(PanelColors.thumbHaze)——不再有
+    //  任何图像派生的座 ⇒ 订阅与 SeatImageCache 一并退役,后浮从根上不存在 ✓。)
+
     /// 指针在「面板内容坐标」(PanelView 里那个 ZStack 的坐标系,原点左上、y 向下)里的位置。
     ///
     /// 光晕每帧问一次这里 —— **不走鼠标事件**:面板是 nonactivating,永不成 key,
@@ -709,20 +713,7 @@ final class PanelController: ObservableObject {
             return
         }
         // 面板出现那行并入 `showPanel` 的"唤起结算"(那里才有"按键→上屏"的读数)
-        applySessionScaleCap(on: screen)
-        // **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
-        // (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
-        trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
-            let c = previewContentSize(for: g)
-            return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
-        }
-        // 启动行(方案 E)也是托盘的一种内容:它可能是本局**最大**的托盘(未启动比某组的窗多),
-        // 不进 max 的话,选中入口槽那一下就会把托盘窗口撑到中途改尺寸
-        if launchSectionEnabled {
-            let c = previewContentSize(launchCount: launchables.count)
-            trayMaxContentSize = NSSize(width: max(trayMaxContentSize.width, c.width),
-                                        height: max(trayMaxContentSize.height, c.height))
-        }
+        recomputeSessionFit(on: screen)
         // 动效在不在线,一眼可见(系统"减弱动态效果"会把弹簧静默压成淡入淡出)
         // 动效状态**只在变化时打**:它在一台机器上是常量,每局重印就是噪音
         if Self.lastMotionDescribe != MotionPolicy.describe {
@@ -759,6 +750,25 @@ final class PanelController: ObservableObject {
         // (说话局"托盘绝不参与"的守卫住在 previewFrame —— 那是托盘上屏的唯一门口,
         //  这里打补丁拦不住 showPanel 末尾那次 updatePreview 的回拉)
         showPanel(beganAt: beganAt, enumerateMs: ms)
+    }
+
+    /// 本局的"放得下"账:**收紧 cap + 托盘最大布局**,同一份数学两个调用点 ——
+    /// 开局(finishBegin)与局中名单变化(applyList 的"只收紧"守卫)。
+    /// **收紧之后**再算托盘窗口的最大布局:所有度量都随 sessionCap 变,算早了就是上一局的尺寸
+    /// (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
+    private func recomputeSessionFit(on screen: NSScreen?) {
+        applySessionScaleCap(on: screen)
+        trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
+            let c = previewContentSize(for: g)
+            return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
+        }
+        // 启动行(方案 E)也是托盘的一种内容:它可能是本局**最大**的托盘(未启动比某组的窗多),
+        // 不进 max 的话,选中入口槽那一下就会把托盘窗口撑到中途改尺寸
+        if launchSectionEnabled {
+            let c = previewContentSize(launchCount: launchables.count)
+            trayMaxContentSize = NSSize(width: max(trayMaxContentSize.width, c.width),
+                                        height: max(trayMaxContentSize.height, c.height))
+        }
     }
 
     /// 本会期托盘可用的**玻璃**空间(2026-09-14 换行那轮引入)。
@@ -1681,26 +1691,22 @@ final class PanelController: ObservableObject {
         }
         // ★ S1 接线:把"当前该活的窗口"交给流池(它只管起流收帧,不参与绘制)。
         //   选这里是因为 updatePreview 是**唤起 + 每次换 app/换窗**的唯一公共出口。
-        // ★ 2026-09-21:「座」的模糊**预热门**。面板一开就把全环的窗在后台算一遍
-        //   ⇒ 指针 hover 换 app 时一次都不用算(原来每换一次重算高斯模糊 ⇒ 主线程 12–24ms ✗)。
-        //   注:缓存以"第一次拿到的快照"为准 —— 它只是一层**模糊**过的底,内容略有更新看不出来。
-        // 卡片底图同样预缩放到"卡片像素尺寸"⇒ 托盘重建时不再 decode/缩放(见 CardImageCache)
-        // 目标尺寸 = 卡片那套"不放大"的口径(与视图里的 imageBox 同一算法,免得预热出的图与绘制不一致)
-        let shots = groups.flatMap { $0.windows }.compactMap { w -> (wid: CGWindowID, source: NSImage, target: CGSize)? in
-            guard let img = Snapshotter.shared.cache[w.wid] else { return nil }
-            let cardW = PanelMetrics.thumbWidth(aspect: w.aspect)
-            let win = w.bounds.size
-            let s = (win.width > 1 && win.height > 1)
-                ? min(1, max(cardW / win.width, PanelMetrics.shotH / win.height)) : 1
-            return (wid: w.wid, source: img,
-                    target: CGSize(width: max(1, win.width * s), height: max(1, win.height * s)))
-        }
-        CardImageCache.shared.prewarm(shots)
-        SeatImageCache.shared.prewarm(
-            groups.flatMap { $0.windows }.compactMap { w in
-                Snapshotter.shared.cache[w.wid].map { (wid: w.wid, source: $0) }
+        // 卡片底图预缩放到"卡片像素尺寸"⇒ 托盘重建时不再 decode/缩放(见 CardImageCache)。
+        // 目标尺寸 = 卡片那套"不放大"的口径(与视图里的 imageBox 同一算法,免得预热出的图与绘制不一致)。
+        // (「座」的模糊预热门已随座整体退役 —— 2026-09-24 深夜遮罩改成容器自己的静态雾檐,
+        //   见 `PanelColors.thumbHaze`;垫图(S2'')同日退役 ⇒ live 开时快照**不采也不显示**,
+        //   这条预热只在快照链(live 关)下有意义 ✓。)
+        // ★ 顺带修一处笔误(2026-09-24):下面原来手算 `min(1, max(宽比, 高比))` ✗ ——
+        //   "不放大"的口径是 **min**(CardSizing.size ✓);max 会把图预热到**超过卡片高**的尺寸
+        //   ⇒ 渲染时键对不上 ⇒ 预热整批白算。直接调同一个函数,不再手抄公式 ✓。
+        if !LivePreviewPool.enabled {
+            let shots = groups.flatMap { $0.windows }.compactMap { w -> (wid: CGWindowID, source: NSImage, target: CGSize)? in
+                guard let img = Snapshotter.shared.cache[w.wid] else { return nil }
+                return (wid: w.wid, source: img,
+                        target: PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect))
             }
-        )
+            CardImageCache.shared.prewarm(shots)
+        }
         __mark("预热")
         if !entrySelected {
             // ★★ 2026-09-21 修正(S1.2 → S1.3):**只预热"当前这一组"的窗口**,不再预热整个环。
@@ -1712,7 +1718,12 @@ final class PanelController: ObservableObject {
             //   ⇒ 换来的只是"hover 到任意 app 都零延迟";而池本来就有 **5s keepAlive** ✓ ⇒
             //     在同一批 app 之间来回 hover 根本不会重启流 ✓ —— 那个收益**不需要**全环预热 ✓。
             //   代价:第一次进某个 app,卡片会先显示静默态(实测首帧 36–74ms)✓ 可接受。
-            let items = (currentGroup?.windows ?? []).map { (wid: $0.wid, aspect: $0.aspect) }
+            // ★ A 修(2026-09-24):盒子随名单一起交给池 —— 出流像素规格的**输入**与卡片盒
+            //   同一份账(`record.bounds` ⇒ `PanelMetrics.thumbSize` ✓),池不再从 SCWindow.frame 重算 ✗
+            let items = (currentGroup?.windows ?? []).map {
+                (wid: $0.wid, aspect: $0.aspect,
+                 box: PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect))
+            }
             if items.isEmpty {
                 LivePreviewPool.shared.stopAll(reason: "环里没有窗口")
             } else {
@@ -2876,6 +2887,22 @@ final class PanelController: ObservableObject {
         let shownIDs = Set(shown.map(\.wid))
         Snapshotter.shared.precapture(shown, force: forceReshoot)
         Snapshotter.shared.precapture(groups.flatMap { $0.windows }.filter { !shownIDs.contains($0.wid) })
+        // ★★ 2026-09-25 病例(用户实报「面板偶发超长,伸到屏幕外面去了」):
+        //   sessionCap 原来只在 finishBegin 按**当时的 App 数**算一次,而这里每次刷新都按
+        //   paddedSize() 重开窗框 —— 局中 App **变多**(「陈旧名单先上屏」⇒ 枚举带回更多;
+        //   钉住期间新 App 冒头)⇒ 窗框按旧 cap 一路撑出屏外 ✗
+        //   ⇒ 局中**只收紧、不放松**:重算一次,更紧才采纳(变少 ⇒ 保持原档,
+        //     图标不当着用户的面跳大;trayMaxContentSize 的"整局不变"也一并守住 ✓)
+        let savedCap = PanelMetrics.sessionCap
+        let savedTrayMax = trayMaxContentSize
+        recomputeSessionFit(on: contextScreen)
+        if PanelMetrics.sessionCap >= savedCap {
+            PanelMetrics.sessionCap = savedCap
+            trayMaxContentSize = savedTrayMax
+        } else {
+            trace(String(format: "[尺寸] 局中名单变多 ⇒ 收紧 %.2f → %.2f(玻璃不超屏)",
+                         savedCap == .greatestFiniteMagnitude ? -1 : savedCap, PanelMetrics.sessionCap))
+        }
         // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
         if let panel, let target = centerFrame(for: paddedSize()) {
             setFrameIfNeeded(panel, target)
@@ -2976,6 +3003,7 @@ final class PanelController: ObservableObject {
         dismiss(reason: "确认")                                     // ★ 先收面板 ✓
         WindowFocuser.focus(window: w)
     }
+
 
     /// 面板外点击 = 放弃(CONTEXT.md)。钉住模式下不装——要的就是能切出去截图
     ///

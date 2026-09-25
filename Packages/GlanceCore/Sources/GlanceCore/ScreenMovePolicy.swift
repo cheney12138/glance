@@ -39,26 +39,49 @@ public enum ScreenMovePolicy {
         case fillScreen
         /// 保留原来的 pt 尺寸,只挪位置 ✓（第一版的默认;留着,一行就能切回来）
         case keepSize
+        /// **看占比下菜**(2026-09-25 用户口径:「有的窗口不适合全屏…超过 1/2 原显示器占比的才全屏」):
+        /// 窗口面积占**源屏可见区面积** ≥ `fillMinRatio` ⇒ 撑满;否则保持原尺寸(位置按 `landing`)✓
+        /// —— 小窗(弹窗/小工具)被撑爆是"替它重新设计",保持才是尊重 ✓
+        case adaptive
 
         public var displayName: String {
             switch self {
             case .fillScreen: return "撑满屏幕"
             case .keepSize: return "保持原尺寸"
+            case .adaptive: return "按占比自适应"
             }
         }
     }
 
     public static let defaultLanding: Landing = .relative
-    /// 默认**撑满** ✓（用户 2026-09-22 裁定）
-    public static let defaultPlacement: Placement = .fillScreen
+    /// 默认**按占比自适应**(2026-09-25 取代 09-22 的「一律撑满」:小窗被撑爆的实报见 `.adaptive`)
+    public static let defaultPlacement: Placement = .adaptive
+    /// 撑满门槛(**面积占比**,默认 0.5):0 = 全部撑满(≈ 09-22 旧默认),1 = 全部保持(≈ keepSize)。
+    /// `var` 只是给 App 侧喂档位的口子;纯函数一律走参数 ✓
+    public static var fillMinRatio: Double = 0.5
+
+    /// **要不要撑满**(纯函数):窗口面积 / 源屏可见区面积 > 门槛(**严格大于**)。
+    /// 用**面积**而不是宽/高分别卡:半屏贴边的窗(50%×100%)占比正好 0.5 ——
+    /// 用户口径是"**超过** 1/2 才全屏" ⇒ 边界归**保持**(0.5 不撑 ✓);
+    /// 想让它撑 ⇒ 门槛调低一格(如 49)✓
+    public static func shouldFill(window: CGSize, inVisible source: CGSize, minRatio: Double) -> Bool {
+        let wa = max(window.width, 0) * max(window.height, 0)
+        let sa = max(source.width, 1) * max(source.height, 1)
+        return wa / sa > minRatio
+    }
 
     /// 目标 frame：
     ///  · `.fillScreen` ⇒ **就是目标矩形本身**（可见区 ⇒ 自动避开菜单栏与 Dock ✓；位置与源尺寸无关 ✓）
     ///  · `.keepSize`   ⇒ 尺寸不变，位置按 `landing` 算，再夹紧 ✓
     public static func targetFrame(current: CGRect, source: CGRect, target: CGRect,
                                    placement: Placement = defaultPlacement,
-                                   landing: Landing = defaultLanding) -> CGRect {
-        if placement == .fillScreen { return target }
+                                   landing: Landing = defaultLanding,
+                                   fillMinRatio: Double = ScreenMovePolicy.fillMinRatio) -> CGRect {
+        let effective: Placement = placement == .adaptive
+            ? (shouldFill(window: current.size, inVisible: source.size, minRatio: fillMinRatio)
+               ? .fillScreen : .keepSize)
+            : placement
+        if effective == .fillScreen { return target }
         let size = current.size
         var origin: CGPoint
         switch landing {

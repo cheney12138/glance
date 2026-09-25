@@ -76,6 +76,32 @@ final class ThreeFingerTap {
         return CFAbsoluteTimeGetCurrent() - lastDragEvidenceAt < Self.dragEvidenceWindow
     }
 
+    // MARK: 拖后宽限(2026-09-25,用户裁定「任何时候三指都应该是唤起手势」)
+    //
+    // 刚拖完(鼠标刚抬起)的一小窗里,系统会抢着把下一发三指认成拖移 —— 那一下"点击/小拖"
+    // 反正收不回来,面板照给(判卷见 `TapRound.judge` 的 postDragGrace)。
+    // 与"快速选词"的区分点:**前序拖拽** —— 选词的按压开始前没有刚抬起的鼠标,
+    // 拖完边框再点的那一发有 ✓。所以记的是**鼠标抬起**时刻,不是按下。
+    private var lastSystemMouseUpAt: CFAbsoluteTime = 0
+    /// 拖后宽限的窗口:鼠标抬起多久之内的下一发按压算"刚拖完"
+    static let postDragGraceWindow: CFAbsoluteTime = 0.8
+
+    /// HotkeyTapCenter 的 mouseTap(主线程)调:左键抬起 ⇒ 记一笔(不设手指数门禁,
+    /// 拖边框/拖窗口都是单指操作,抬起时板上根本没有第二根手指 ✓)
+    func noteMouseUp() {
+        dragEvidenceLock.lock(); defer { dragEvidenceLock.unlock() }
+        lastSystemMouseUpAt = CFAbsoluteTimeGetCurrent()
+    }
+
+    /// contactFrame(回调线程)判卷前问:这轮按压是不是"刚拖完"开始的
+    /// (鼠标抬起 < 按压起点 < +0.8s;`pressStart` = now − 整轮时长 ✓)
+    private func postDragGracePending(pressStart: Double) -> Bool {
+        dragEvidenceLock.lock(); defer { dragEvidenceLock.unlock() }
+        guard lastSystemMouseUpAt > 0 else { return false }
+        let gap = pressStart - lastSystemMouseUpAt
+        return gap > 0 && gap < Self.postDragGraceWindow
+    }
+
     // MARK: 私有框架的接口(反推布局,只读 state 一个字段)
 
     private struct MTPoint { var x: Float = 0; var y: Float = 0 }
@@ -128,9 +154,44 @@ final class ThreeFingerTap {
     static var maxDuration: Double { TapRound.Policy.standard.maxDuration }
 
     private var started = false
+    /// 睡醒/屏变化的重挂只装一次 ✓
+    private var observing = false
+    /// 上次挂设备的时刻(久闲后的第一次唤起会用它做自愈判据 ✓)
+    private var lastAttachAt: CFAbsoluteTime = 0
+    /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
+    private var lastFrameAt: CFAbsoluteTime = 0
+
+    /// **久闲之后第一次按触发键 ⇒ 把设备重挂一遍**(不依赖"有帧进来" ✓)。
+    ///
+    /// 病例(2026-09-25 用户实报):合盖一夜后**三指/四指全哑**,而 ⌘Tab 照常 ✓
+    /// 自愈为什么没生效:原来那条"账本 1.0s 未收口"的补丁住在**喂帧路径**里 ✗
+    /// ⇒ 回调死了 ⇒ **一帧都不来** ⇒ 它永远不会被触发 ✓(他记的"卡 40 多小时"是账本卡住,
+    ///   那是另一半;这一半是"根本没帧" ✓)
+    /// 判据:距上一帧 > `debug.tapReattachIdleMin` 分钟(默认 30 ✓ 设 0 = 关 ✓)
+    ///   —— 正常使用中永不成立(滑动/打字时帧一直在 ✓),只有"长时间没碰触控板"才会 ✓
+    func recoverIfStale() {
+        let idleMin = DebugFlags.tapReattachIdleMin
+        guard idleMin > 0 else { return }
+        // ⚠️ 判据只看"距上次**挂载**多久" ✗ 不要看"距上一帧":
+        //   第一次实现用 lastFrameAt —— 实机一测**不触发** ✗ 因为**鼠标设备也在吐帧**
+        //   (设备列表里不只有触控板 ✓)⇒ 时间戳被一路刷新 ⇒ 永远不到 30 分钟 ✓
+        //   改成只看挂载时刻:久闲后的第一发触发键重挂一次(注册是亚毫秒级 ✓ 很便宜 ✓)
+        let age = CFAbsoluteTimeGetCurrent() - lastAttachAt
+        guard age > Double(idleMin) * 60 else { return }
+        attachDevices(reason: String(format: "久闲 %.0f 分钟后自愈", age / 60))
+    }
     /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
     /// 判卷逻辑越来越长,再跟"读 C 结构体 + 回调线程纪律"搅在一起,每次动都会伤到别的)
     private var press = Press()
+    /// MT 回调的**串行闸**(2026-09-25 病例:进程 297% CPU 卡死):
+    /// MultitouchSupport **每个设备一条回调线程**(`mt_ThreadedMTEntry`)—— 设备列表里
+    /// 不只有内建板(鼠标设备也在 ✓ 外接板/睡醒后重建的设备同理)⇒ 同一时刻**两条线程**
+    /// 同时进 `contactFrame`,`press`(值类型账本,内嵌 Array/Set)被并发读写 ⇒
+    /// Swift 的并发变更断言在 `statesSeen.sorted()` 里炸开,两条线程在断言里打转 ⇒
+    /// 整机卡死(采样铁证:两条 MT 线程 100% 栈都是
+    /// `Press.feed → Tracker.snapshot → sorted → _assertionFailure`)。
+    /// ⇒ 回调整段进锁:喂帧、判卷 + 清账必须同一临界区(两张抬手帧交错 = 拿空账判 ✗)
+    let feedLock = NSLock()
     /// 上一次成功判卷的时刻。**0.35s 防抖**(LumaRing 同款):连击的第二发不重复动作 ——
     /// 用户连着试几次的时候,面板被反复拆建,读起来就是"闪"
     private var lastTapAt: CFAbsoluteTime = 0
@@ -174,6 +235,8 @@ final class ThreeFingerTap {
 
         /// 量尺(进日志):本轮见过的 state 档
         var statesSeen: [Int32] { lastSnapshot.statesSeen }
+        /// 整轮时长(给"按压起点 = now − heldTotal"用,拖后宽限的判据之一 ✓)
+        var heldTotal: Double { lastSnapshot.heldTotal }
         var pressFired: Bool { tracker.hasFired }
 
         /// 喂一帧,返回"此刻在板上的真手指数"(0 = 全部离开 ⇒ 调用方去判卷 ✓)
@@ -202,8 +265,10 @@ final class ThreeFingerTap {
 
         /// 判卷(**先判卷,再 `endRound()`** —— 顺序反了就是拿空账本判 ✗)。
         /// `dragEvidence` = 这轮按压期间系统按下过鼠标(见 ThreeFingerTap 拖移证据那段 ✓)
-        func judge(dragEvidence: Bool = false) -> Outcome {
-            tracker.judge(now: CFAbsoluteTimeGetCurrent(), dragEvidence: dragEvidence)
+        /// `postDragGrace` = 按压开始前刚拖完(拖后宽限,见 ThreeFingerTap 同名牌段 ✓)
+        func judge(dragEvidence: Bool = false, postDragGrace: Bool = false) -> Outcome {
+            tracker.judge(now: CFAbsoluteTimeGetCurrent(),
+                          dragEvidence: dragEvidence, postDragGrace: postDragGrace)
         }
 
         mutating func endRound() {
@@ -214,36 +279,75 @@ final class ThreeFingerTap {
         /// 标记"本轮已生效"(按压触发那条路用;抬手不再按点按重复计)
         mutating func markFired() { tracker.markFired() }
     }
-
     func start() {
-        guard !started else { return }   // 幂等
+        guard !started else { return }   // 幂等:载库只做一次 ✓
         started = true
+        guard Self.loadFramework() else { return }
+        attachDevices(reason: "启动")
+        observeWakeAndScreenChanges()
+    }
+
+    /// 载 MultitouchSupport 并把三个符号拿好(只做一次 ✓;拿不到就永久降级 ✓)
+    /// MultitouchSupport 的四个函数类型(类型作用域 ✓ —— 属性要用到它们,不能留在函数里 ✗)
+    private typealias CreateList = @convention(c) () -> CFMutableArray?
+    private typealias Register = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
+    private typealias StartDevice = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
+    private typealias StopDevice = @convention(c) (UnsafeMutableRawPointer) -> Void
+
+    private static var symbols: (list: CreateList, register: Register, start: StartDevice, stop: StopDevice?)?
+
+    private static func loadFramework() -> Bool {
+        guard symbols == nil else { return true }
         let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
         guard let lib = dlopen(path, RTLD_NOW),
               let symList = dlsym(lib, "MTDeviceCreateList"),
               let symRegister = dlsym(lib, "MTRegisterContactFrameCallback"),
               let symStart = dlsym(lib, "MTDeviceStart") else {
             glog("[指点按] 取不到 MultitouchSupport ⇒ 该手势不可用(其余照常)")
-            return
+            return false
         }
-        typealias CreateList = @convention(c) () -> CFMutableArray?
-        typealias Register = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
-        typealias StartDevice = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
-        let createList = unsafeBitCast(symList, to: CreateList.self)
-        let register = unsafeBitCast(symRegister, to: Register.self)
-        let startDevice = unsafeBitCast(symStart, to: StartDevice.self)
-        guard let devices = createList() else {
-            glog("[指点按] 拿不到触控设备 ⇒ 该手势不可用(其余照常)")
-            return
-        }
+        symbols = (unsafeBitCast(symList, to: CreateList.self),
+                   unsafeBitCast(symRegister, to: Register.self),
+                   unsafeBitCast(symStart, to: StartDevice.self),
+                   dlsym(lib, "MTDeviceStop").map { unsafeBitCast($0, to: StopDevice.self) })
+        return true
+    }
+
+    /// **把当前设备重新挂一遍**(可重复调用 ✓)。
+    ///
+    /// 病例(2026-09-25 用户实报):**另一台机器合盖一夜**,早上打开 ⇒ 三指/四指都唤不起来,
+    /// 而 ⌘Tab 照常响 ✓ 他说"以前修过、当时卡了 40 多小时"⇒ 那是**账本**卡住(自愈住在喂帧路径里 ✓)。
+    /// 这一早的是**另一半**:`start()` 里有 `guard !started` ⇒ 整个进程**只挂一次设备** ✗
+    /// ⇒ 睡醒后 Multitouch 的回调常常就死了 ⇒ **一帧都不来** ⇒ 账本自愈**永远不会触发** ✗
+    /// ⇒ 三指/四指彻底静默,而 ⌘Tab 走 Carbon 热键(另一套机制)⇒ 照常 ✓ 现象与之一字不差 ✓
+    /// 所以:睡醒 / 屏参数变化 / **久闲后的第一次唤起** 都重挂一遍 ✓(重挂幂等、很便宜 ✓)
+    private func attachDevices(reason: String) {
+        guard let sym = Self.symbols, let devices = sym.list() else { return }
         let count = CFArrayGetCount(devices)
         for i in 0..<count {
             guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
-            register(UnsafeMutableRawPointer(mutating: raw), ThreeFingerTap.contactFrame)
-            startDevice(UnsafeMutableRawPointer(mutating: raw), 0)
+            let p = UnsafeMutableRawPointer(mutating: raw)
+            sym.stop?(p)                              // 先停(若符号在)—— 避免重复注册后帧送两遍 ✗
+            sym.register(p, Self.contactFrame)
+            sym.start(p, 0)
         }
-        glog("[指点按] 已上线(\(count) 个设备)· 三指=\(enabled ? "开" : "关")(\(Self.defaultsKey))"
-             + " · 四指=\(enabledFour ? "开" : "关")(\(Self.defaultsKeyFour))")
+        lastAttachAt = CFAbsoluteTimeGetCurrent()
+        glog("[指点按] 已挂载 \(count) 个设备(\(reason))· 三指=\(enabled ? "开" : "关")"
+             + " · 四指=\(enabledFour ? "开" : "关")")
+    }
+
+    /// 睡醒 / 屏参数变化 ⇒ 重挂(这两件正是"设备回调会死"的时刻 ✓)
+    private func observeWakeAndScreenChanges() {
+        guard !observing else { return }
+        observing = true
+        let c = NSWorkspace.shared.notificationCenter
+        c.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            ThreeFingerTap.shared.attachDevices(reason: "睡醒")
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                              object: nil, queue: .main) { _ in
+            ThreeFingerTap.shared.attachDevices(reason: "屏参数变化")
+        }
     }
 
     /// **起拖就撤销这次唤起**(2026-09-22 用户实报「我三指拖拽窗口边框, 也唤起了面板。
@@ -354,8 +458,12 @@ final class ThreeFingerTap {
     }
 
     /// C 回调:主线程之外也可能被调 ⇒ 只喂数据、只在抬手帧判卷,回主线程才动作。
+    /// ⚠️ "主线程之外"不是一条线程,是**每个设备一条**(见 `feedLock` 的病例)⇒ 整段进锁 ✓
     private static let contactFrame: ContactCallback = { _, data, nFingers, _, _ in
         let tap = ThreeFingerTap.shared
+        tap.feedLock.lock()
+        defer { tap.feedLock.unlock() }
+        tap.lastFrameAt = CFAbsoluteTimeGetCurrent()   // 给"久闲后自愈"当判据 ✓
         if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
             // ⚠️ 2026-09-22 这里原本有一条"**中途开火**":四指齐压满 0.25s 就当场生效(不必抬手)✗
             //   四指下滑的前 0.25s 与"四指按住"完全一样 ⇒ 拖/滑被误判(用户实报三次 ✓)。
@@ -375,8 +483,13 @@ final class ThreeFingerTap {
         //    "不误触"是因为**什么都不触发** ✗,日志:开火 0 / 不动作 0 / 账本 1.0s 未收口)
         //   ⇒ 恢复"抬手帧当场判" ✓;单指误触由**起点清 id**那条真修复挡着 ✓
         let states = tap.press.statesSeen.sorted().map(String.init).joined(separator: "/")
-        let outcome = tap.press.judge(dragEvidence: tap.dragEvidencePending())   // 先判卷(要用账本 ✓)
+        let evidence = tap.dragEvidencePending()
+        // 拖后宽限:按压起点 = 此刻 − 整轮时长;鼠标刚抬起 + 本轮被系统抢过(证据)⇒ 宽门 ✓
+        let now0 = CFAbsoluteTimeGetCurrent()
+        let grace = evidence && tap.postDragGracePending(pressStart: now0 - tap.press.heldTotal)
+        let outcome = tap.press.judge(dragEvidence: evidence, postDragGrace: grace)   // 先判卷(要用账本 ✓)
         tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
+        let graceNote = grace ? "(拖后宽限)" : ""
         DispatchQueue.main.async {
             let tap = ThreeFingerTap.shared
             let now = CFAbsoluteTimeGetCurrent()
@@ -388,8 +501,8 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起(钉住)",
-                            held, states, norm, absMove, maxSize, maxMajor))
+                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起(钉住)%@",
+                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 if tap.enabled { tap.onFire?() }
                 Haptics.fire(.summonThreeFinger)
                 ThreeFingerTap.logPostFirePointerDrift("三指点按")
@@ -401,8 +514,8 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起并直接进未启动环(钉住)",
-                            held, states, norm, absMove, maxSize, maxMajor))
+                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起并直接进未启动环(钉住)%@",
+                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 if tap.enabledFour { tap.onFireFour?() }
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")

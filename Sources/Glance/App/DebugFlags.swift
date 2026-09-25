@@ -179,6 +179,9 @@ enum DebugFlags {
         return ScreenMovePolicy.OverflowRule(rawValue: raw) ?? .keepLeft
     }
 
+    // (送窗撑满门槛曾是 debug 键 —— 2026-09-25 当天提升为正式设置项 `panel.moveFillMinRatio`,
+    //  唯一读取点 `Keys.moveFillMinRatio` ✓ 这里不再留第二把尺 ✗)
+
     /// **托底(选中标志那块板)的亮度倍率**（只作用于浅色模式 ✓ 默认 0.75）。
     ///
     /// 用户原话(2026-09-24):「其实我是想把**原本那个白色的高光**给去掉, 有点太亮了,
@@ -200,6 +203,13 @@ enum DebugFlags {
     ///     defaults delete com.cheney12138.macswitcher debug.sheenGain
     static var sheenGain: Double {
         (UserDefaults.standard.object(forKey: Keys.debugSheenGain) as? NSNumber)?.doubleValue ?? 1.0
+    }
+
+    /// **多指设备"久闲多久后自愈重挂"**(分钟;默认 30 ✓ 设 0 = 关)。
+    /// 病例(2026-09-25):合盖一夜后三指/四指全哑 —— 睡醒会让 Multitouch 回调死掉,
+    /// 而原自愈住在喂帧路径里(没帧 ⇒ 不触发)⇒ 久闲后的第一发触发键主动重挂一遍 ✓
+    static var tapReattachIdleMin: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugTapReattachIdleMin) as? NSNumber)?.intValue ?? 30
     }
 
     static func reportHeavySwitchesIfNeeded() {

@@ -326,14 +326,29 @@ enum MoveFocusedWindowToNextScreen {
         //   想回到"保持原尺寸只挪位置" ⇒ `ScreenMovePolicy.defaultPlacement = .keepSize` 一行 ✓
         // ⚠️ 用**可见区**(`quartzVisibleFrame`)而不是整块屏:整块屏会把窗口送到菜单栏底下,
         //    连标题栏都抓不到 ✗(Quartz 坐标里 y 越小越靠上 ✓)
+        // ★ 2026-09-25 用户口径:「有的窗口不适合全屏…超过 1/2 原显示器占比的才全屏」⇒
+        //   默认档从「一律撑满」改成「按占比自适应」(ScreenMovePolicy.adaptive):
+        //   小窗保持原尺寸(按相对位置落),大窗才撑满 ✓。门槛 = 设置项(快捷键页,`Keys.moveFillMinRatio`)
+        let srcVisible = WindowEnumerator.quartzVisibleFrame(of: src)
+        let fill: Bool
+        switch ScreenMovePolicy.defaultPlacement {
+        case .fillScreen: fill = true
+        case .keepSize: fill = false
+        case .adaptive:
+            fill = ScreenMovePolicy.shouldFill(window: win.bounds.size,
+                                               inVisible: srcVisible.size,
+                                               minRatio: Keys.moveFillMinRatio)
+        }
         let target = ScreenMovePolicy.targetFrame(current: win.bounds,
-                                                 source: WindowEnumerator.quartzVisibleFrame(of: src),
-                                                 target: WindowEnumerator.quartzVisibleFrame(of: dst))
-        let fill = ScreenMovePolicy.defaultPlacement == .fillScreen
+                                                 source: srcVisible,
+                                                 target: WindowEnumerator.quartzVisibleFrame(of: dst),
+                                                 placement: fill ? .fillScreen : .keepSize)
         // 屏数 >2 时,这行日志就是"循环对不对"的唯一凭据 ⇒ 必须写明"第 i/N 块屏" ✓
+        let ratio = win.bounds.width * win.bounds.height / max(srcVisible.width * srcVisible.height, 1)
         glog("[T33] 送屏 第 \(srcIdx + 1)/\(screens.count) 块 → 第 \(dstIdx + 1)/\(screens.count) 块"
              + "(\(src.localizedName) → \(dst.localizedName)):\(name) — \(win.title)"
-             + " \(ScreenMovePolicy.defaultPlacement.displayName)")
+             + " \(fill ? "撑满" : "保持尺寸")(占比 \(Int(ratio * 100))% vs 门槛 "
+             + "\(Int(Keys.moveFillMinRatio * 100))%)")
         _ = WindowFocuser.move(window: win, to: target, resize: fill)
     }
 }

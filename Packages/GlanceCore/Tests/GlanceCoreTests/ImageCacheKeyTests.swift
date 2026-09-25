@@ -37,8 +37,6 @@ final class ImageCacheKeyTests: XCTestCase {
         XCTAssertEqual(a, b, "同样的输入必须命中同一把钥匙（不然缓存等于没有 ✓）")
     }
 
-    func testSeatKeyIsJustTheWindow() {
-        // 座图的模糊半径含屏 scale，而换屏会整本 reset() ⇒ 键只按窗 ✓（规则写下来，别靠记忆 ✓）
-        XCTAssertEqual(ImageCacheKey.seat(windowID: 99), 99)
-    }
+    // (testSeatKeyIsJustTheWindow 已删 —— 2026-09-24 深夜「座」随遮罩改静态雾檐退役,
+    //   ImageCacheKey.seat 一并移除 ✓)
 }

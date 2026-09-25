@@ -52,10 +52,11 @@ final class ScreenMovePolicyTests: XCTestCase {
 
     // MARK: 撑满(2026-09-22 用户口径:「移动过去之后能默认撑满整个屏幕吗, 不是全屏」)
 
-    func testDefaultPlacementFillsTheWholeTargetArea() {
-        let w = CGRect(x: 100, y: 100, width: 800, height: 600)
-        let out = ScreenMovePolicy.targetFrame(current: w, source: right, target: left)
-        XCTAssertEqual(out, left, "默认应当**撑满目标可见区**(而不是保持 800x600 挪过去 ✓)")
+    func testDefaultPlacementIsAdaptive_BigWindowFills() {
+        // 大窗(1500x1000 ≈ 源屏 72%)⇒ 默认(按占比自适应)下撑满 ✓(09-22 口径对大窗不变 ✓)
+        let big = CGRect(x: 100, y: 100, width: 1500, height: 1000)
+        let out = ScreenMovePolicy.targetFrame(current: big, source: right, target: left)
+        XCTAssertEqual(out, left, "默认(自适应)下,占比 ≥ 门槛的窗应当撑满 ✓")
     }
 
     func testFillScreenIgnoresCurrentSizeAndLanding() {
@@ -66,6 +67,32 @@ final class ScreenMovePolicyTests: XCTestCase {
                                              placement: .fillScreen, landing: .center)
         XCTAssertEqual(a, left)
         XCTAssertEqual(b, left, "撑满时:原尺寸与落点档都不参与 ✓")
+    }
+
+    // MARK: 按占比自适应(2026-09-25 用户口径:「有的窗口不适合全屏…超过 1/2 原显示器占比的才全屏」)
+
+    func testAdaptiveKeepsSmallWindowSize() {
+        // 小窗(800x600 ≈ 源屏 23%)⇒ 默认(自适应)下保持原尺寸,位置按相对落点 ✓
+        let w = CGRect(x: 100, y: 100, width: 800, height: 600)
+        let out = ScreenMovePolicy.targetFrame(current: w, source: right, target: left)
+        XCTAssertEqual(out.size, w.size, "占比 < 门槛 ⇒ 保持原尺寸(小窗不该被撑爆 ✓)")
+    }
+
+    func testAdaptiveBoundaryHalfSnappedWindowDoesNotFill() {
+        // 半屏贴边(960x1080 = **正好 50%**)⇒ 用户口径"**超过** 1/2 才全屏" ⇒ 边界归保持 ✓
+        let half = CGRect(x: 0, y: 0, width: 960, height: 1080)
+        let out = ScreenMovePolicy.targetFrame(current: half, source: right, target: left,
+                                               fillMinRatio: 0.5)
+        XCTAssertEqual(out.size, half.size, "占比恰好 50% ⇒ 不撑(严格大于 ✓)")
+        XCTAssertFalse(ScreenMovePolicy.shouldFill(window: half.size, inVisible: right.size, minRatio: 0.5))
+    }
+
+    func testAdaptiveThresholdKnob() {
+        let w = CGSize(width: 800, height: 600)   // ≈ 23%
+        XCTAssertTrue(ScreenMovePolicy.shouldFill(window: w, inVisible: right.size, minRatio: 0),
+                      "门槛 0 ⇒ 一律撑满(≈ 09-22 旧默认 ✓)")
+        XCTAssertFalse(ScreenMovePolicy.shouldFill(window: w, inVisible: right.size, minRatio: 1),
+                       "门槛 1 ⇒ 一律保持(≈ keepSize ✓)")
     }
 
     func testKeepSizeStillWorksWhenAsked() {
