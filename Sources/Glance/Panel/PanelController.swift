@@ -1728,6 +1728,21 @@ final class PanelController: ObservableObject {
     /// (指针重定位、面板外点击)都必须用这个,不能用窗口 frame。
     func previewContentRect() -> NSRect? {
         guard let p = previewPanel, p.isVisible else { return nil }
+        // ★★ 2026-10-08 病例(用户:「之前修复过的有个 bug 又出现了 —— 切换到未启动环,选中一个 app 之后,
+        //   指针在**面板之外**移动 hover,也能做 app 选中」):
+        //   未启动环里托盘**没有内容** ⇒ 走 `previewFrame() == nil` 那条路 ⇒ 内容隐藏
+        //   (`alphaValue = 0` + `ignoresMouseEvents = true`,2026-09-21 为了省掉窗口排序而定 ✓)。
+        //   但它的**窗口还留在台上** ⇒ `isVisible` 仍是 true ✗ ⇒ 这个函数照样吐出一块
+        //   **看不见的地板**的矩形 ✗ ⇒ 三个消费者全中招:
+        //     · `resyncSelectionUnderPointer()` ⇒ 指针在面板之外(那扇隐藏托盘的位置)照样改选中 ✗
+        //     · 点击闸(`长条点击闸 开…点击让给托盘`)⇒ 点那块空地会把 app **启动**掉 ✗
+        //     · 面板外点击判据 ⇒ 拿它当"点在托盘里" ⇒ 该收场时不收场 ✗
+        //   真机复现(2026-10-08):托盘 window layer=100 **alpha=0.00**,日志却打
+        //   `[T6] 视图挪位后指针重定位(启动区): [3/5] JetBrains Toolbox`,松手直接把它启动了 ✗
+        //   ⇒ 收口收在**门口**(这个函数),而不是去每个调用方补一行 ——
+        //     调用方以后还会加,门口的判据只有一个 ✓(同一课:见 previewFrame 头注的"守卫住在门口")
+        if trayChrome?.isContentHidden ?? false { return nil }
+        guard p.alphaValue > 0.01, !p.ignoresMouseEvents else { return nil }   // 双保险:与上面同源 ✓
         let c = previewContentSize()
         guard c.width > 0, c.height > 0 else { return nil }
         // 内容在窗口里:水平居中、**底部对齐**(与窗口等尺寸时 = 今天的布局,一个像素不差)
@@ -2568,6 +2583,13 @@ final class PanelController: ObservableObject {
         // 指针从入口槽(面板)走到托盘是跨窗口的一段路,状态可能已被清掉,于是"鼠标再移动也选不中"
         // (用户实报)。这里直接把它补回来,而不是让 hover 去依赖一段可能丢失的记忆。
         guard hoverAllowedByGate(), launchables.indices.contains(i) else { return }
+        // ★★ 2026-10-08 门口收口之二(同一病例):这个函数**只有托盘那一行**在调
+        //   (环里的启动格走 `hoverApp` 的 entrySelected 分支 ✓),所以"指针真的在托盘的可见内容里"
+        //   就是它的前提 ✓ —— 而托盘内容隐藏时 `previewContentRect()` 一律 nil ✓。
+        //   病例:未启动环里托盘内容已隐藏(alpha 0),指针停在**面板之外**那扇隐藏托盘上,
+        //   它的 tracking area 照样回调 `.onHover` ⇒ 这一发把 launchIndex 改掉了 ✗
+        //   (真机日志:`[T6] 启动区 hover: [2/4] Pearcleaner`,而指针在面板之外 ✓)
+        guard let tray = previewContentRect(), tray.contains(NSEvent.mouseLocation) else { return }
         entrySelected = true
         guard launchIndex != i else { return }
         trace("[T6] 启动区 hover: [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
@@ -3318,7 +3340,14 @@ extension NSRect {
 final class ChromeWindow {
     private let panel: NSPanel
     private var placed = false              // 本局"已经在台上"(自己记账,不信 isVisible)
-    private var hidden = false              // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    private(set) var hidden = false         // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    /// ★★ 2026-10-08 加(用户实报「未启动环里指针在面板之外 hover 也能改选中」):
+    ///   "窗口在台上" ≠ "内容看得见" —— 2026-09-21 起,托盘"没内容"时不再 `orderOut`,
+    ///   而是 **alpha 0 + 忽略鼠标**(为了省掉每次 hover 的窗口排序 4–35ms ✓)。
+    ///   于是 `isVisible == true` 却什么都看不见 ⇒ 谁拿 `previewContentRect()` 算几何都会算到
+    ///   **一块看不见的地板**上 ✗(指针/点击落进那片区域照样生效 ✗)。
+    ///   ⇒ 判"在不在台上"必须问**这个**(唯一真源),不要再拿 isVisible 猜 ✓
+    var isContentHidden: Bool { hidden }
     /// 这一局是否已经收场(收场后禁止 place ✓ —— 见 `place()` 的病例)
     private var sessionEnded = true
 
@@ -3354,6 +3383,13 @@ final class ChromeWindow {
     func setContentHidden(_ on: Bool) {
         guard on != hidden else { return }
         hidden = on
+        // 只打"转场"那一行(调用点每帧都来,但这里被 `on != hidden` 挡着 ⇒ 一条消息只响一次 ✓)
+        // ⚠️ ChromeWindow 不是 PanelController ⇒ 用不了那边的 `trace`(那是它的私有方法)⇒
+        //    这里判同一个开关 `isTraceEnabled` 再用 glog ✓(口径一致,不多立一个开关 ✓)
+        if isTraceEnabled {
+            glog(on ? "[托盘] 内容隐藏(alpha 0 + 忽略鼠标)⇒ 从此不参与指针与点击 ✓"
+                    : "[托盘] 内容恢复可见 ⇒ 重新参与指针与点击 ✓")
+        }
         panel.alphaValue = on ? 0 : 1
         panel.ignoresMouseEvents = on
     }
