@@ -121,6 +121,17 @@ case "sample":
                                args.count > 7 ? (Int(args[7]) ?? 1) : 1)
     print("  (\(args[3]),\(args[4]) \(args[5])x\(args[6]))  " + describe((r, g, b)))
 
+case "vprofile":
+    guard args.count >= 6, let (buf, W, H) = loadPNG(args[2]) else { print("用法: vprofile <png> x y0 y1"); exit(1) }
+    let x = Int(args[3])!, y0 = Int(args[4])!, y1 = min(Int(args[5])!, H - 1)
+    guard x >= 0, x < W, y0 < y1 else { print("  该列/区间不在图内"); exit(1) }
+    var vals: [String] = []
+    for y in y0...min(y1, y0 + 199) { vals.append(String(format: "%.3f", lum(buf, W, x, y))) }
+    print("  x=\(x) y=\(y0)…\(y0 + vals.count - 1):")
+    print("    " + vals.joined(separator: " "))
+    let nums = vals.compactMap(Double.init)
+    print(String(format: "    摘要: 最小 %.3f · 最大 %.3f", nums.min() ?? 0, nums.max() ?? 0))
+
 case "profile":
     guard args.count >= 6, let (buf, W, H) = loadPNG(args[2]) else { print("用法: profile <png> y x0 x1"); exit(1) }
     let y = Int(args[3])!, x0 = Int(args[4])!, x1 = min(Int(args[5])!, W - 1)
@@ -152,7 +163,8 @@ default:
       GlassBench —— 玻璃量具台
         bg      [秒=20]                        起一块白底(大字 + 色块),N 秒后自动退
         sample  <png> x y w h [步长=1]          一块区域的平均色/L
-        profile <png> y x0 x1                  横穿一条水平线的亮度剖面
+        profile <png> y x0 x1                  横穿一条水平线(看左右边缘)
+        vprofile <png> x y0 y1                 纵穿一条竖直线(看顶/底边缘)
         compare <pngA> <pngB> y0 y1 x0 x1      两图同一区域的 L 与对比(用来比"糊化程度")
       典型用法(与 2026-10-08 那次量玻璃一样):
         swift Tools/GlassBench.swift bg 20 &                      # ① 起白底

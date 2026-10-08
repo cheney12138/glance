@@ -58,6 +58,8 @@ enum Keys {
     static let debugGlassStyleLight = "debug.glassStyleLight"
     /// 玻璃纱的不透明度(浅色专用;0 = 不加 ✓)
     static let debugGlassVeilAlpha = "debug.glassVeilAlpha"
+    /// 亮棱的强度(0 = 不画 ✓)。原生剖面:峰比内部 **+0.22** ✓
+    static let debugGlassRimAlpha = "debug.glassRimAlpha"
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:

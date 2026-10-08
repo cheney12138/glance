@@ -69,6 +69,31 @@ struct PanelView: View {
                     .fill(PanelColors.glassVeil)
                     .allowsHitTesting(false)
             )
+            // ★★ **玻璃亮棱**(2026-10-08 用户:原生靠"高光的反光边缘"立住容器,我们错在用阴影 ✗)
+            //   量出来的原生剖面:整周一道 ~1pt 亮棱(峰比内部 **+0.22**)+ 紧贴内侧一点暗落(−0.04)✓
+            //   做法:① 内阴影(inset)打一层很轻的暗落 —— 让边缘"有厚度";
+            //        ② 上面压一道**很细的亮棱**(strokeBorder + 0.6 模糊)——
+            //           模糊是为了不像"画上去的线"(2026-09-15 那次用户否掉的是**粗而弱**的实线 ✗)
+            //   ⚠️ 只挂一圈 1pt 的环 ⇒ 一次小范围光栅化(与"11 个图标各自投影"不是一回事 ✓)
+            .overlay(
+                RoundedRectangle(cornerRadius: controller.hintText == nil
+                                 ? PanelMetrics.rPanel
+                                 : PanelMetrics.hintContentSize.height / 2,
+                                 style: .continuous)
+                    .inset(by: 1.1)                     // 落在亮棱内侧(原生的暗落就是紧贴亮棱那一圈 ✓)
+                    .strokeBorder(PanelColors.glassRimInner, lineWidth: 1.6)
+                    .blur(radius: 1.2)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: controller.hintText == nil
+                                 ? PanelMetrics.rPanel
+                                 : PanelMetrics.hintContentSize.height / 2,
+                                 style: .continuous)
+                    .strokeBorder(PanelColors.glassRim, lineWidth: 1.1)
+                    .blur(radius: 0.35)   // 原生那道棱是**脆的**(2px @2x)⇒ 只给一点点柔化 ✓
+                    .allowsHitTesting(false)
+            )
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
