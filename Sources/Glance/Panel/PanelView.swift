@@ -188,6 +188,15 @@ if sheen {
         //   容器里的内容由控制器在侧立那一帧换掉(看不见 ✓),所以这里只需要一块容器 ✓
         ringRow(launch: controller.entrySelected)
             .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+            // ★★ 2026-10-08 病例(**别再试了**):这里**不许做"唤起入场动效"** ✗
+            //   用户提「Spotlight 唤起有个 Q 弹的动效, Glance 是直接打在屏幕上的, 能借鉴吗」⇒
+            //   我做了两版(内容 `scaleEffect` / 内容 `offset` + 弹簧),**两版都一唤起就闪退** ✗:
+            //     AppKit 抛 `NSGenericException`:「The window has been marked as needing another
+            //     Update Constraints in Window pass … more passes than there are views in the window」
+            //     ⇒ 布局递归 ⇒ SIGABRT ✓(本仓第三次栽在这一族 ✓)
+            //   为什么换环的旋转没事:它发生在**面板落定之后**;而入场动效正好横跨
+            //     `orderFront → layoutSubtreeIfNeeded → displayIfNeeded` 那几拍 ✗
+            //   ⇒ 与 v1.12 那条裁定一致:**面板要"已经在",两头都不该让用户等动画** ✓
         // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
         // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
         // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),不是玻璃边

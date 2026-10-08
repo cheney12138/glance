@@ -200,6 +200,7 @@ enum PanelMotion {
 
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
+
 }
 
 

@@ -163,6 +163,7 @@ final class PanelController: ObservableObject {
     /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
     /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
     @Published private(set) var ringFlipTarget = false
+
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///
     /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
@@ -1044,6 +1045,8 @@ final class PanelController: ObservableObject {
         } else {
             panel.orderFrontRegardless()
         }
+        // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)
+
         DispatchQueue.main.async { [weak self, weak panel] in
             guard let panel else { return }
             panel.alphaValue = 1
@@ -2126,6 +2129,15 @@ final class PanelController: ObservableObject {
         appIndex = target
         winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
         trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+        // ★★ 2026-10-08 病例(用户实报「通过左右移动到头尾这种方式, 选中的 App **没有 live**、
+        //   不会主动接入;指针 hover 选中之后 live 才正常」):
+        //   真因:选中一变必须跟的**两笔**在这里漏了 ✗ —— `Tab`(moveApp)/指针(hoverApp)/
+        //   换窗口(moveWindow)三条路都有 `refreshSnapshotForSelection()` + `updatePreview()`,
+        //   **只有 ←/→ 这条路没有** ⇒ 静默图不换、`LivePreviewPool.sync` 不跑
+        //   ⇒ 那一组窗的**流从来没起过**(hover 那一路会补上,所以"hover 一下就好了" ✓)
+        //   ⇒ 补齐这两笔(与另外三条路同一个写法、同一本账 ✓ 以后加新的选中路径照抄这里 ✓)
+        traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+        traceCost("  ↳托盘更新") { updatePreview() }
     }
 
     private func moveWindow(_ delta: Int) {
