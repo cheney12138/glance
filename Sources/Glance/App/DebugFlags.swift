@@ -89,6 +89,11 @@ enum DebugFlags {
 
     /// **唤起轻弹的起始倍率**(默认 **1.04** = 先大 4% 再收到位)。
     /// 数来自 Apple 真机实测(录屏逐帧量:宽 1392→1299 = 起始宽 ~7%、130ms 内 ease-out 收位 ✓)
+    /// **唤起轻弹的时长**(毫秒;默认 130 = Apple 实测 ✓;调大只是给"看清玻璃材质"用 ✓)
+    static var summonPopMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 130
+    }
+
     static var summonPop: Double {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPop) as? NSNumber)?.doubleValue ?? 1.04
     }
@@ -125,6 +130,7 @@ enum DebugFlags {
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
         ("debug.summonPop", summonPop != 1.04, "唤起轻弹起始倍率 = \(summonPop)(默认 1.04)"),
+        ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

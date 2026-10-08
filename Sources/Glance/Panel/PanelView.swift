@@ -154,6 +154,11 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
+        // ★ 唤起轻弹(2026-10-08):挂在**整块面板**上(玻璃 + 图标一起缩放 ✓)——
+        //   用户口径:「轻弹的只是环里面的 app, 不是整个环诶」⇒ 要整块弹 ✓
+        //   ⚠️ 这一条正是"原生玻璃能不能被 2D 缩放"的**干净测试**:
+        //     前两次"掉材质"的结论都被残留的 3D 旋转污染过 ✗ ⇒ 这次只缩放、不旋转 ✓
+        .scaleEffect(controller.entryPopScale, anchor: .center)
         // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
         //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
@@ -193,7 +198,7 @@ if sheen {
             //   ⚠️ 起跳**延后一拍**(见 PanelController.showPanel):提前起跳会踩 AppKit 的
             //     "Update Constraints in Window pass" 递归 ⇒ 一唤起就 SIGABRT ✗
             //     (缩放/位移两版都验过;延后一拍是最后一条活路 —— 还崩就按 v1.12 收场,别再试 ✗)
-            .scaleEffect(controller.entryPopScale, anchor: .center)
+
             // ★★ 2026-10-08 病例(**别再试了**):这里**不许做"唤起入场动效"** ✗
             //   用户提「Spotlight 唤起有个 Q 弹的动效, Glance 是直接打在屏幕上的, 能借鉴吗」⇒
             //   我做了两版(内容 `scaleEffect` / 内容 `offset` + 弹簧),**两版都一唤起就闪退** ✗:

@@ -207,7 +207,7 @@ enum PanelMotion {
 
     /// **唤起轻弹**(2026-10-08,按 Apple 录屏实测):130ms · **ease-out**(先快后缓 ✓)。
     /// 观感是"略大 → 一下收到位",不是"从小涨大" ✓(量出来的方向就是这样 ✓)
-    static let summonPop = Animation.easeOut(duration: 0.13)
+    static var summonPop: Animation { .easeOut(duration: max(0.02, Double(DebugFlags.summonPopMs) / 1000)) }
 
 }
 

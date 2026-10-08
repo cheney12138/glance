@@ -48,6 +48,8 @@ enum Keys {
     static let panelSummonPop = "panel.summonPop"
     /// `debug.summonPop` —— 唤起轻弹的**起始倍率**(默认 1.04 = 先大 4%;1.0 = 关)
     static let debugSummonPop = "debug.summonPop"
+    /// `debug.summonPopMs` —— 唤起轻弹的**时长**(毫秒;默认 130,按 Apple 录屏实测 ✓)
+    static let debugSummonPopMs = "debug.summonPopMs"
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
