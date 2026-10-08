@@ -79,7 +79,10 @@ final class BenchBackdrop: NSObject, NSApplicationDelegate {
         w.ignoresMouseEvents = true    // 不抢指针(量的时候指针还要用来唤起面板 ✓)
         let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
         // 大字:用来量"透过玻璃还剩多少对比/糊化"
-        let lines = ["玻璃质感对照 GLASS", "背景是白色的时候可见性", "native macOS liquid glass", "0123456789 ABCDEFG abcdefg"]
+        // `bg <秒> plain` ⇒ 纯白(不摆字与色块):量**边缘本身**时用 —— 有字时,
+        // 玻璃会把字糊成一条暗带 ✗ 量到的"贴边暗带"其实是字的残留(2026-10-08 栽过 ✓)
+        let plain = CommandLine.arguments.contains("plain")
+        let lines = plain ? [] : ["玻璃质感对照 GLASS", "背景是白色的时候可见性", "native macOS liquid glass", "0123456789 ABCDEFG abcdefg"]
         for (i, t) in lines.enumerated() {
             let f = NSTextField(labelWithString: t)
             f.font = .systemFont(ofSize: 44, weight: .semibold)
@@ -88,7 +91,8 @@ final class BenchBackdrop: NSObject, NSApplicationDelegate {
             host.addSubview(f)
         }
         // 色块:看折射与染色
-        for (i, c) in [NSColor.systemRed, .systemBlue, .systemGreen, .systemOrange].enumerated() {
+        let boxColors: [NSColor] = plain ? [] : [.systemRed, .systemBlue, .systemGreen, .systemOrange]
+        for (i, c) in boxColors.enumerated() {
             let box = NSView(frame: NSRect(x: 80 + CGFloat(i) * 200, y: 120, width: 160, height: 120))
             box.wantsLayer = true
             box.layer?.backgroundColor = c.cgColor

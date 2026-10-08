@@ -69,34 +69,18 @@ struct PanelView: View {
                     .fill(PanelColors.glassVeil)
                     .allowsHitTesting(false)
             )
-            // ★★ **玻璃亮棱**(2026-10-08 用户:原生靠"高光的反光边缘"立住容器,我们错在用阴影 ✗)
-            //   量出来的原生剖面:整周一道 ~1pt 亮棱(峰比内部 **+0.22**)+ 紧贴内侧一点暗落(−0.04)✓
-            //   做法:① 内阴影(inset)打一层很轻的暗落 —— 让边缘"有厚度";
-            //        ② 上面压一道**很细的亮棱**(strokeBorder + 0.6 模糊)——
-            //           模糊是为了不像"画上去的线"(2026-09-15 那次用户否掉的是**粗而弱**的实线 ✗)
-            //   ⚠️ 只挂一圈 1pt 的环 ⇒ 一次小范围光栅化(与"11 个图标各自投影"不是一回事 ✓)
-            .overlay(
-                RoundedRectangle(cornerRadius: controller.hintText == nil
-                                 ? PanelMetrics.rPanel
-                                 : PanelMetrics.hintContentSize.height / 2,
-                                 style: .continuous)
-                    .inset(by: 1.1)                     // 落在亮棱内侧(原生的暗落就是紧贴亮棱那一圈 ✓)
-                    .strokeBorder(PanelColors.glassRimInner, lineWidth: 1.6)
-                    .blur(radius: 1.2)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: controller.hintText == nil
-                                 ? PanelMetrics.rPanel
-                                 : PanelMetrics.hintContentSize.height / 2,
-                                 style: .continuous)
-                    .strokeBorder(PanelColors.glassRim, lineWidth: 1.1)
-                    .blur(radius: 0.35)   // 原生那道棱是**脆的**(2px @2x)⇒ 只给一点点柔化 ✓
-                    .allowsHitTesting(false)
-            )
-            // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
-            // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
-            // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
+            // ★★ **玻璃反光边**(2026-10-08)—— 三条否掉的错路都记在这,别再走:
+            //   ① 2026-09-15:`strokeBorder` **均匀实线** ⇒ 「还是有边框看着」✗
+            //   ② 本日第一稿:细 stroke + 模糊 ⇒ 「**像是描的边**, 没有手机**曲面屏**那种自然向下过渡」✗
+            //      —— stroke 的亮度是**恒定**的:它只在那一圈上"亮",没有"离边缘越远越淡"这件物理 ✗
+            //   ③ 本日第二稿:`fill(.clear).shadow(.inner(...))` ⇒ 编译过了,但实测贴边只 **+0.019** ✗
+            //      —— 内阴影挂在**透明填充**上几乎不变现(它需要一层"面"才落得下来)✗
+            //   ⇒ 正解 = **层叠的圈**:贴边一圈最亮,往里逐圈更淡更宽 ⇒ 合成出来就是"向内衰减的过渡" ✓
+            //     与原生剖面同形(顶 +0.22 / 底 +0.215 / 左上 +0.25,整周均匀 ✓,紧贴内侧再 −0.04 ✓)
+            //     代价:三圈描边(不触发任何离屏光栅化 ⇒ 比 .blur/.shadow 便宜 ✓;模糊只给一点点)
+            .overlay(GlassRim(cornerRadius: controller.hintText == nil
+                              ? PanelMetrics.rPanel
+                              : PanelMetrics.hintContentSize.height / 2))
             glassTopEdge
 // ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
 //   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
@@ -679,5 +663,35 @@ struct RingFlipEffect: ViewModifier {
             .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0),
                               anchor: .center, perspective: 0.32)
             .opacity(1 - 0.75 * progress)
+    }
+}
+
+
+/// **玻璃反光边**:贴边最亮、往内逐圈变淡 —— 合起来读作"边缘自然向内的过渡"(曲面屏那种 ✓)。
+///
+/// 三圈(参数都在 `PanelColors`,量出来的依据见那边注释):
+///   1. 贴边一圈最亮(1.2pt · 峰 +0.22)
+///   2. 往里一圈中等(2.6pt · 模糊 1.6 ⇒ 化开)
+///   3. 再往里一道**内暗落**(原生紧贴亮边内侧 −0.04 ✓)
+///
+/// 为什么不用 `.blur` 铺满整块:那会退化成一次**面板尺寸**的离屏光栅化,
+/// 而这三圈各自只有一条窄环 ⇒ 光栅化面积小、且不随图标数增长 ✓
+struct GlassRim: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        ZStack {
+            ring(inset: 3.0, width: 2.4, color: PanelColors.glassRimInner, blur: 1.4)
+            ring(inset: 2.0, width: 2.6, color: PanelColors.glassRimMid, blur: 1.6)
+            ring(inset: 0.6, width: 1.2, color: PanelColors.glassRimGlow, blur: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func ring(inset: CGFloat, width: CGFloat, color: Color, blur: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: max(0, cornerRadius - inset), style: .continuous)
+            .inset(by: inset)
+            .strokeBorder(color, lineWidth: width)
+            .blur(radius: blur)
     }
 }
