@@ -15,17 +15,22 @@ bad()  { printf '  \033[31m✗ %s\033[0m\n' "$1"; FAIL=1; }
 ok()   { printf '  \033[32m✓ %s\033[0m\n' "$1"; }
 
 step "① 领域层单测(规则的可执行版本)"
-# ⚠️ 判据用 **swift test 的退出码**,不要拿尾部几行去 grep 摘要 ——
-#    第一版我按摘要匹配,`tail -3` 常常只是构建/规划行 ⇒ 明明全绿却报红 ✗(脚本自己也会假阳 ✓)
-TEST_LOG=$(mktemp)
-if (cd Packages/GlanceCore && swift test >"$TEST_LOG" 2>&1); then
-    grep -E 'Executed [0-9]+ tests, with [0-9]+ failures' "$TEST_LOG" | tail -1 | sed 's/^/    /'
-    ok "单测全绿"
+# ★ 2026-10-08:单测目录不进仓库(本机有、新克隆没有)⇒ 缺席时跳过这一门,而不是失败 ✓
+if [ ! -d "Packages/GlanceCore/Tests" ]; then
+    echo "  ⏭ 跳过单测:本机没有 Packages/GlanceCore/Tests(该目录按约定不进仓库 ✓)"
 else
-    grep -E 'error:|XCTAssert|failed|Executed [0-9]+ tests' "$TEST_LOG" | tail -8 | sed 's/^/    /'
-    bad "单测有红 ⇒ 不许提交"
+    # ⚠️ 判据用 **swift test 的退出码**,不要拿尾部几行去 grep 摘要 ——
+    #    第一版我按摘要匹配,`tail -3` 常常只是构建/规划行 ⇒ 明明全绿却报红 ✗(脚本自己也会假阳 ✓)
+    TEST_LOG=$(mktemp)
+    if (cd Packages/GlanceCore && swift test >"$TEST_LOG" 2>&1); then
+        grep -E 'Executed [0-9]+ tests, with [0-9]+ failures' "$TEST_LOG" | tail -1 | sed 's/^/    /'
+        ok "单测全绿"
+    else
+        grep -E 'error:|XCTAssert|failed|Executed [0-9]+ tests' "$TEST_LOG" | tail -8 | sed 's/^/    /'
+        bad "单测有红 ⇒ 不许提交"
+    fi
+    rm -f "$TEST_LOG"
 fi
-rm -f "$TEST_LOG"
 
 step "② 架构规矩(界面能改的键必须有运行时读取点 等)"
 if swift Tools/check-architecture.swift 2>&1 | tail -20 | grep -q '无违例'; then
