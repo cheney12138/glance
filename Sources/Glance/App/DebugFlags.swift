@@ -93,6 +93,17 @@ enum DebugFlags {
     /// **唤起轻弹的力度**(阻尼系数 · 默认 0.62):越小回弹越明显(1.0 = 不弹,纯收缩 ✓)。
     /// 用户 2026-10-08:「不如 spotlight q弹呢, 没有 duang 一下的感觉」——
     /// 那版是 `easeOut` 纯单调收缩 ⇒ 没有回弹 ✓ 现在换成弹簧 + 这个力度档 ✓
+    /// **玻璃纱**(浅色)的不透明度 · 默认 **0.04** —— 量出来的甜点:
+    /// 0 ⇒ 白底上 0.960(亮 0.011)· 0.08 ⇒ 0.937(暗 0.012)· 0.04 ⇒ ≈0.948 ≈ 原生 0.949 ✓
+    static var glassVeilAlpha: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugGlassVeilAlpha) as? NSNumber)?.doubleValue ?? 0.04
+    }
+
+    /// 🔬 临时档位:浅色下玻璃风格(`clear` = 现状 / `regular` = 系统更实的一档)。验完即删 ✓
+    static var glassStyleLight: String {
+        (UserDefaults.standard.string(forKey: Keys.debugGlassStyleLight) ?? "clear")
+    }
+
     static var summonPopBounce: Double {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopBounce) as? NSNumber)?.doubleValue ?? 0.62
     }
@@ -138,6 +149,8 @@ enum DebugFlags {
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
         ("debug.summonPop", summonPop != 1.04, "唤起轻弹起始倍率 = \(summonPop)(默认 1.04)"),
         ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
+        (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
+        ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
         ("debug.summonPopBounce", summonPopBounce != 0.62, "唤起轻弹力度(阻尼) = \(summonPopBounce)(默认 0.62)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]

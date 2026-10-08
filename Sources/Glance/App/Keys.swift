@@ -52,6 +52,12 @@ enum Keys {
     static let debugSummonPopMs = "debug.summonPopMs"
     /// `debug.summonPopBounce` —— 唤起轻弹的**力度**(阻尼系数:1.0 = 不弹 · 0.45 = 很弹;默认 0.62)
     static let debugSummonPopBounce = "debug.summonPopBounce"
+    /// 🔬 `debug.glassStyleLight` —— **临时**档位:浅色外观下玻璃用 `clear`(默认)还是 `regular`。
+    /// 用户 2026-10-08 口径:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」
+    /// ⇒ 拿它做 A/B,量完就删(仓库规矩:验完的开关不留代码 ✓)
+    static let debugGlassStyleLight = "debug.glassStyleLight"
+    /// 玻璃纱的不透明度(浅色专用;0 = 不加 ✓)
+    static let debugGlassVeilAlpha = "debug.glassVeilAlpha"
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:

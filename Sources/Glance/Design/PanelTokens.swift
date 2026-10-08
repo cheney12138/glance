@@ -346,6 +346,28 @@ enum PanelColors {
     static let glassBorder = dynamic(ink(0.12), white(0.34))
     /// 玻璃边的"受光唇":软边,几乎只在上缘显出来。数值取自原生剖面的量值(1–1.5px 级)
     static let glassLip = dynamic(white(0.10), white(0.16))
+
+    /// **玻璃纱**(2026-10-08,用户:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」)。
+    ///
+    /// 两点反解出来的两边材质(见 `PanelGlass.scrim` 的推导):
+    ///   原生 基色 L≈0.84 · α≈0.32  ⇒ 白底上应得 0.949;   我们 基色 L≈0.89 ⇒ 实得 0.961
+    /// ⇒ 差的就是那 **0.012 的"偏亮"**;平移到"我们这套"上 = 铺一层 ≈0.08 的中性灰。
+    ///
+    /// 为什么不用 `NSGlassEffectView.tintColor`:实测(2026-10-08)浅色 + `.clear` 下
+    /// 写 `tintColor` **量不出任何变化**(同一处填充 before/after 完全一样)✗ —— 那个旋钮在这个组合里不响。
+    /// 所以改成**自己铺一层纱**:玻璃之上、图标之下 ✓(图标不被压暗 ✓),折射与模糊照旧 ✓。
+    /// ⚠️ 别再走"白 .55"那条老路(V1 实测"变成透明塑料片子"):压平材质的是**高 α**,
+    /// 不是"有没有染色" ⇒ 这里只有 0.08,而且颜色是**灰**(不是白 —— 白纱在白色背景上等于没铺 ✓)。
+    /// 实测(2026-10-08,白底 1.000 上量同一点):
+    ///   α=0      ⇒ 填充 **0.960**(比原生亮 0.011)
+    ///   α=0.08   ⇒ 填充 **0.937**(比原生暗 0.012)  ← 一次只动一个变量,一量就超了
+    ///   ⇒ 取**一半** α=0.04 ⇒ 预期 ≈0.948 = 原生应得的 0.949 ✓(改完复量 ✓)
+    /// 档位:`debug.glassVeilAlpha`(0 = 完全不加纱 ✓)
+    static var glassVeil: Color {
+        dynamic(NSColor(srgbRed: 0.72, green: 0.73, blue: 0.76,
+                        alpha: DebugFlags.glassVeilAlpha),
+                NSColor.clear)
+    }
     /// 顶缘内阴影(demo `inset 0 1px 0 var(--glass-inner-shadow)`):浅色 .06 近乎无;
     /// 深色这道暗线把玻璃"压厚",整块板子才不会读成发光塑料(黑 .25 保留)
     static let glassInner = dynamic(NSColor.black.withAlphaComponent(0.06),

@@ -58,6 +58,17 @@ struct PanelView: View {
             GlassBackground(cornerRadius: controller.hintText == nil
                             ? PanelMetrics.rPanel
                             : PanelMetrics.hintContentSize.height / 2)
+            // ★ **玻璃纱**(2026-10-08):浅色一道很淡的中性灰(深色透明),铺在**玻璃之上、图标之下** ✓
+            //   目的:把基色从 0.89 压到 ≈0.84,贴住原生的两点反解(见 PanelColors.glassVeil 的推导 ✓)
+            //   ⚠️ 必须挂在玻璃**之后**、内容**之前** —— 否则要么压到图标,要么盖在玻璃底下看不见 ✓
+            .overlay(
+                RoundedRectangle(cornerRadius: controller.hintText == nil
+                                 ? PanelMetrics.rPanel
+                                 : PanelMetrics.hintContentSize.height / 2,
+                                 style: .continuous)
+                    .fill(PanelColors.glassVeil)
+                    .allowsHitTesting(false)
+            )
             // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
             // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
             // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
