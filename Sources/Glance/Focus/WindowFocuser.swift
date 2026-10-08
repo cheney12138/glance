@@ -54,7 +54,35 @@ enum WindowFocuser {
     ///   2. 合成 mouse-down 让它成 key 窗
     ///   3. AX raise 补 App 内 z 序(失败无害,第三步是锦上添花)
     /// 降级:前两步任一异常 → NSRunningApplication.activate(级联拉起,但功能还在)
+    /// ★★ 2026-10-08 病例(用户实报「我只要选中了 Glance 之后, 再选中别的 App 也无法唤起了」):
+    ///
+    /// macOS 14 起激活是**协作式**的:当前活跃的那个 App 不主动让位,别人发来的激活/前置请求
+    /// 只会被**压着** ✗(公共 `activate` 降级为"请求"是同一件事的另一面,见 `showWindow` 头注 ✓)。
+    /// 用户打开 Glance 设置窗 ⇒ **Glance 变成活跃 App** ⇒ 从此我们再前置任何别的 App:
+    ///   · `_SLPSSetFrontProcessWithOptions` 返回 `.success`(私有 API 的"成功谎言"✓)
+    ///   · 0.5s 核验也报"已聚焦"(前台确实换了 ✓)
+    ///   · 而屏幕上**纹丝不动** ✗(别的 App 的窗口根本没被抬起来 ✓)
+    /// ⇒ 处方:动手前置**之前**,只要我们自己正活跃 ⇒ 先把激活**让给目标 App** ✓
+    ///   (macOS 14 新增的 `yieldActivation(to:)`,官方给的正是这个场景 ✓)
+    private static func yieldActivationIfWeAreActive(pid: pid_t) {
+        guard #available(macOS 14.0, *), NSApp.isActive,
+              let target = NSRunningApplication(processIdentifier: pid),
+              target.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        NSApp.yieldActivation(to: target)   // API 在 NSApplication 上(macOS 14+)✓
+        glog("[T7] 让出激活 ⇒ \(target.localizedName ?? "?")(我们自己正活跃)")
+    }
+
     static func focus(window w: WindowRecord) {
+        // ★★ 2026-10-08 另一半病例(用户原话里的前半句):「**设置面板还是换不起来**」——
+        //   目标是我们**自己的窗**(设置/权限)时,上面那套"让位给对方"用不上(不能让位给自己 ✗),
+        //   而 `_SLPSSetFrontProcessWithOptions` 对自家进程也照样是"成功谎言" ✗
+        //   ⇒ 自家窗走 **AppKit 公开配方**:`activate(ignoringOtherApps:)` + `makeKeyAndOrderFront`
+        //     (与 `GlanceApp.showWindow` 完全同一套 —— 那句注释早写着"LSUIElement 的窗不会自动到前台"✓)
+        if w.pid == getpid() {
+            focusOwnWindow(w)
+            return
+        }
+        yieldActivationIfWeAreActive(pid: w.pid)   // ★ 见上:不让位的话后面全是"成功谎言" ✗
         var psn = ProcessSerialNumber()
         guard getProcessForPID(w.pid, &psn) == noErr else {
             degrade(w, reason: "GetProcessForPID 返回非 noErr")
@@ -137,6 +165,19 @@ enum WindowFocuser {
         memcpy(&bytes[0x20], &point, MemoryLayout<CGPoint>.size)
         bytes[0x08] = 0x01 // kCGEventLeftMouseDown(只发 down)
         _ = postEvent(&psn, &bytes)   // CGError 不用:补焦是"尽人事",失败不该中断流程 ✓
+    }
+
+    /// 聚焦**自家的窗**(设置/权限)—— 公开配方,不用私有 SLPS ✓
+    private static func focusOwnWindow(_ w: WindowRecord) {
+        NSApp.activate(ignoringOtherApps: true)
+        let target = NSApp.windows.first { $0.windowNumber == Int(w.wid) }
+        if let target {
+            target.makeKeyAndOrderFront(nil)
+            target.orderFrontRegardless()
+        } else {
+            glog("[T7] ⚠️ 自家的窗没找到(windowNumber=\(w.wid))⇒ 只激活了 App")
+        }
+        glog("[T7] 已聚焦(自家窗): \(w.ownerName) — \(w.title)")
     }
 
     /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
@@ -439,6 +480,7 @@ enum WindowFocuser {
     }
 
     private static func degrade(_ w: WindowRecord, reason: String) {
+        yieldActivationIfWeAreActive(pid: w.pid)   // 降级这条路同样要先让位 ✓
         NSRunningApplication(processIdentifier: w.pid)?.activate(options: [])
         if !degradedWarned {
             degradedWarned = true
