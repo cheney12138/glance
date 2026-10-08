@@ -393,6 +393,15 @@ public enum TapRound {
             let snap = snapshot(now: now)
             // 拖后宽限是否适用于本轮:刚拖完 ∧ 系统本轮真的又来抢(有证据)⇒ 换宽门
             let wide = dragEvidence && postDragGrace
+            // ★★ 2026-10-08 病例(用户「三指误触稳定复现」,日志 55.0/55.4/58.4s):
+            //   误触的形状**全是三指拖移本身**:held 359/405/451/465/469ms、位移 12–23pt,
+            //   靠"拖后宽限"(wide)一路放行 ✗ —— 因为宽限把**时长与位移一起放宽**了 ✗
+            //   它与老病例(要放行的那种"刚拖完窗边框后的第一发轻点" 305ms / norm 0.185)
+            //   几乎同形 ✗(三指拖移的起拖本身就是一次"完美轻点" —— 这条本仓早就记过 ✓)
+            //   ⇒ 唯一稳定分得开的量是**时长**:老病例 305ms;误触全在 359ms 以上 ✓
+            //   ⇒ 语义收窄(不是调阈值):**宽限只该覆盖"糙点"(位移),不该覆盖"长按"(时长)** ✓
+            //     宽限档的时长上限 = 点按窗口 + 0.03s 裕量(盖住老病例 305ms ✓,挡住 ≥359ms ✓)
+            let heldCeiling = wide ? policy.maxDuration + 0.03 : policy.maxDuration
             // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
             guard snap.maxSize >= policy.minContactSize else {
                 return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
@@ -412,14 +421,14 @@ public enum TapRound {
                                         snap.held * 1000, policy.minDuration * 1000))
             }
             guard (snap.fingerCount == 3 || snap.fingerCount == 4),
-                  snap.held <= (wide ? policy.dragGraceDuration : policy.maxDuration) else {
+                  snap.held <= heldCeiling else {
                 // 一指的普通点按：不进账（只在可能相关的局里留账，便于对账"漏在哪一档"）
                 guard snap.fingerCount >= 2 || snap.palmCount > 0 else { return .rejected("") }
                 let st = snap.statesSeen.map(String.init).joined(separator: "/")
                 return .rejected(String(format: "%d 指(豁免掌 %d)[state %@]%.0fms 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 不动作(只认 3/4 指,且落齐后 ≤%.0fms;整轮 %.0fms)",
                                         snap.fingerCount, snap.palmCount, st, snap.held * 1000,
                                         snap.normalizedMove, snap.absoluteMove, snap.maxSize, snap.maxMajorAxis,
-                                        (wide ? policy.dragGraceDuration : policy.maxDuration) * 1000, snap.heldTotal * 1000))
+                                        heldCeiling * 1000, snap.heldTotal * 1000))
             }
             if snap.sawFrameGap {
                 return .rejected(String(format: "%d 指 帧间隔 >%.0fms(丢帧 ⇒ 位移不可信)⇒ 不动作",
@@ -449,16 +458,16 @@ public enum TapRound {
             //   放在滑动/证据门**之后**:只有"本该生效"的局才被它拦下 ✓;
             //   合法局全在 ≤0.30s(宽限 0.50s)窗口内 —— `pressHoldRange` 分支当前不可达,
             //   不存在合法的长按局 ✓;掌豁免触点不算年龄(搭掌点按是既有手势 ✗不能修没)
-            let ageCeiling = (wide ? policy.dragGraceDuration : policy.maxDuration) + 0.3
+            let ageCeiling = heldCeiling + 0.3
             if snap.maxContactAge > ageCeiling {
                 return .rejected(String(format: "%d 指 最老触点已在板 %.1fs(>%.1fs ⇒ 长按的尾巴,不是轻点)",
                                         snap.fingerCount, snap.maxContactAge, ageCeiling))
             }
-            if snap.held > (wide ? policy.dragGraceDuration : policy.maxDuration) {
+            if snap.held > heldCeiling {
                 guard snap.fingerCount == 4, policy.pressHoldRange.contains(snap.held) else {
                     return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",
                                             snap.fingerCount, snap.held * 1000,
-                                            (wide ? policy.dragGraceDuration : policy.maxDuration) * 1000,
+                                            heldCeiling * 1000,
                                             policy.pressHoldRange.lowerBound, policy.pressHoldRange.upperBound))
                 }
                 return .fireFour(held: snap.held * 1000, norm: snap.normalizedMove, abs: snap.absoluteMove,

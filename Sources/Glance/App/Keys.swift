@@ -44,6 +44,22 @@ enum Keys {
     /// `debug.ringFlipDurationMs` —— 换环翻牌的**总时长**(毫秒;默认 180 = 与原来那段同长 ✓)
     /// 翻出去/翻进来各占一半(easeIn / easeOut)⇒ 两半读起来是一次动作 ✓ 0 = 不动效(当拍换)
     static let debugRingFlipDurationMs = "debug.ringFlipDurationMs"
+    /// `panel.summonPop` —— 唤起时**整块渐入**(键名不改 ✓;2026-10-08 从"轻轻收一下"改成渐入:
+    /// 用户「要 fade 吧……**没有任何的弹动**呢, 比之前的两段弹簧要好」✓)
+    static let panelSummonPop = "panel.summonPop"
+    /// `debug.summonPopMs` —— 渐入的**时长**(毫秒;默认 **120** ✓)
+    /// ⚠️ 老键 `debug.summonPop`(起始倍率)与 `debug.summonPopBounce`(阻尼)**已作废** ——
+    ///   渐入不动几何,那两个旋钮没有意义了(键常量一并删掉,别留"写了没用"的假旋钮 ✓)
+    static let debugSummonPopMs = "debug.summonPopMs"
+    /// 🔬 `debug.glassStyleLight` —— **临时**档位:浅色外观下玻璃用 `clear`(默认)还是 `regular`。
+    /// 用户 2026-10-08 口径:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」
+    /// ⇒ 拿它做 A/B,量完就删(仓库规矩:验完的开关不留代码 ✓)
+    static let debugGlassStyleLight = "debug.glassStyleLight"
+    /// 玻璃纱的不透明度(浅色专用;0 = 不加 ✓)
+    static let debugGlassVeilAlpha = "debug.glassVeilAlpha"
+    /// 亮棱的强度(0 = 不画 ✓)。原生剖面:峰比内部 **+0.22** ✓
+    static let debugGlassRimAlpha = "debug.glassRimAlpha"
+    /// 入场轻弹的**风格**:off(瞬间到位)/ pop(横向收·不回弹)/ spring(横向收·带回弹)/ fade(不动几何,整块淡入)
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
@@ -182,6 +198,7 @@ extension Keys {
 enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true
+    static let summonPop = true
     /// 展示 Dock 常驻应用。**开**:未启动的 App 也能在环尾找到 ✓
     static let showLaunchables = true
     /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓

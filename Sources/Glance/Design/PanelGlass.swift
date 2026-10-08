@@ -31,7 +31,29 @@ struct GlassBackground: NSViewRepresentable {
     /// 白底上形不足的问题改由**形**承担(暗发丝边 + 暗槽托底,见 PanelColors 的 V2 那几行)。
     /// ⚠️ 深色这边 α 更高(.42)却不怕同一个病,原因是:深色底本来就暗,tint 与背景**同向**,
     /// 不会把折射压平 —— 压平的机制是"tint 与背景对着干",浅色才成立。
+    /// 玻璃风格按**外观**分档(2026-10-08):
+    /// · 深色:.clear —— 用户实评"整个面板透明度不行",regular 在深底上像实心白板 ✗
+    /// · 浅色:默认也给 .clear,但留一个 A/B 档位(`debug.glassStyleLight` = regular)去量
+    ///   "白底可见性"到底差在哪(用户:「背景是白色的时候可见性就差一点」✓)
+    @available(macOS 26.0, *)
+    static func style(for appearance: NSAppearance) -> NSGlassEffectView.Style {
+        if appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua { return .clear }
+        return DebugFlags.glassStyleLight == "regular" ? .regular : .clear
+    }
+
+    /// ★★ 2026-10-08(用户:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」):
+    /// 原生那层材质可以**两点反解**出来(用你给的那张图 + 本仓 2026-09-15 的白底剖面):
+    ///   原生: 0.27 → 0.45 · 0.941 → 0.909   ⇒ 基色 **L≈0.84 · α≈0.32**
+    ///   我们: 0.227 → 0.462 · 1.000 → 0.961 ⇒ 基色 **L≈0.89 · α≈0.355**
+    /// ⇒ 底子几乎一样,差别只在"我们**偏亮** 0.012"(白底上 0.961 vs 原生应得 0.949)——
+    ///   同方向、同级,正是用户读到的"白底上可见性差一点" ✓
+    /// ⇒ 浅色补一道**很淡的中性灰 tint**(把基色从 0.89 压到 ≈0.84),不碰深色 ✓
+    ///   ⚠️ 别再走回"白 .55"那条老路(2026-09-14 V1 实测"更丑了, 变成透明塑料片子"):
+    ///   压平折射的是**高 α**,不是"有 tint"本身 ⇒ 这里 α 只有 0.10 ✓
+    ///   (`.regular` 试过:白底实得 0.920 ⇒ 过头了 ✗ 见 debug.glassStyleLight 的档位)
     private static func scrim(for appearance: NSAppearance) -> NSColor? {
+        // 浅色**不写 tintColor**:2026-10-08 实测在这个组合(`.clear` + 浅色)里它量不出任何变化 ✗
+        // ⇒ 浅色那道纱改由视图层铺(`PanelColors.glassVeil`,玻璃之上、图标之下 ✓)
         guard appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua else { return nil }
         // L=26 的中性冷灰(比纯黑多一点蓝,压出来不像墨块)
         return NSColor(srgbRed: 26 / 255, green: 27 / 255, blue: 31 / 255, alpha: 0.42)
@@ -46,7 +68,7 @@ struct GlassBackground: NSViewRepresentable {
             glass.cornerRadius = cornerRadius
             // **.clear**:系统给的两种玻璃(regular 偏实、clear 偏透)。用户实评"整个面板透明度不行"
             // —— regular 在任何壁纸上都像一块实心白板,clear 才看得到背后
-            glass.style = .clear
+            glass.style = Self.style(for: glass.effectiveAppearance)
             glass.tintColor = Self.scrim(for: glass.effectiveAppearance)
             glass.contentView = NSView() // 给玻璃一个可包裹的内容层
             return glass
@@ -74,6 +96,8 @@ struct GlassBackground: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) {
         if #available(macOS 26.0, *), let glass = view as? NSGlassEffectView {
             if glass.cornerRadius != cornerRadius { glass.cornerRadius = cornerRadius }
+            let want = Self.style(for: glass.effectiveAppearance)
+            if glass.style != want { glass.style = want }
             let tint = Self.scrim(for: glass.effectiveAppearance)
             if tint != context.coordinator.lastTint {
                 glass.tintColor = tint

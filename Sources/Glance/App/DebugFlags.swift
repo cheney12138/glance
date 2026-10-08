@@ -87,6 +87,31 @@ enum DebugFlags {
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
+
+    /// **亮棱强度** —— 原生实测峰比内部 **+0.22**(扫描:α0.45⇒+0.185 · 0.55⇒+0.226 · 0.80⇒+0.339)
+    /// ⇒ 与原生**等值**的那一档是 **0.55**;但用户三评「现在又有点太白」⇒ 默认取 **0.48**(≈+0.19)✓
+    /// 想回到"与原生一模一样"就写 0.55;想更淡写 0.35 ✓
+    static var glassRimAlpha: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugGlassRimAlpha) as? NSNumber)?.doubleValue ?? 0.48
+    }
+
+    /// **玻璃纱**(浅色)的不透明度 · 默认 **0.04** —— 量出来的甜点:
+    /// 0 ⇒ 白底上 0.960(亮 0.011)· 0.08 ⇒ 0.937(暗 0.012)· 0.04 ⇒ ≈0.948 ≈ 原生 0.949 ✓
+    static var glassVeilAlpha: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugGlassVeilAlpha) as? NSNumber)?.doubleValue ?? 0.04
+    }
+
+    /// 🔬 临时档位:浅色下玻璃风格(`clear` = 现状 / `regular` = 系统更实的一档)。验完即删 ✓
+    static var glassStyleLight: String {
+        (UserDefaults.standard.string(forKey: Keys.debugGlassStyleLight) ?? "clear")
+    }
+
+
+    static var summonPopMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
+    }
+
+
     /// **换环翻牌的总时长**(毫秒;默认 180 ✓ 0 = 当拍换)。
     /// 病例(2026-10-08):翻牌以前走 `.transition` ⇒ 被系统「减弱动态效果」自己降级成淡切,
     /// Glance 的「强制完整动效」管不到 ✗ ⇒ 改成参数驱动,顺手把手感做成可试档位 ✓
@@ -118,6 +143,10 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
+        ("debug.summonPopMs", summonPopMs != 120, "入场渐入时长 = \(summonPopMs)ms(默认 120)"),
+        (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
+        ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
+        ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

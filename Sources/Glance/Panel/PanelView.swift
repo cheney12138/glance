@@ -58,9 +58,29 @@ struct PanelView: View {
             GlassBackground(cornerRadius: controller.hintText == nil
                             ? PanelMetrics.rPanel
                             : PanelMetrics.hintContentSize.height / 2)
-            // 顶缘静态高光(旧 `glassTopLight`,白 .18)2026-09-14 已删:
-            // 用户实评"整个面板透明度都不行"—— 它就是那层白纱的主体。
-            // **浅色**不要这层,但**深色**要一道更窄更亮的 —— 见 glassTopEdge 的注释。
+            // ★ **玻璃纱**(2026-10-08):浅色一道很淡的中性灰(深色透明),铺在**玻璃之上、图标之下** ✓
+            //   目的:把基色从 0.89 压到 ≈0.84,贴住原生的两点反解(见 PanelColors.glassVeil 的推导 ✓)
+            //   ⚠️ 必须挂在玻璃**之后**、内容**之前** —— 否则要么压到图标,要么盖在玻璃底下看不见 ✓
+            .overlay(
+                RoundedRectangle(cornerRadius: controller.hintText == nil
+                                 ? PanelMetrics.rPanel
+                                 : PanelMetrics.hintContentSize.height / 2,
+                                 style: .continuous)
+                    .fill(PanelColors.glassVeil)
+                    .allowsHitTesting(false)
+            )
+            // ★★ **玻璃反光边**(2026-10-08)—— 三条否掉的错路都记在这,别再走:
+            //   ① 2026-09-15:`strokeBorder` **均匀实线** ⇒ 「还是有边框看着」✗
+            //   ② 本日第一稿:细 stroke + 模糊 ⇒ 「**像是描的边**, 没有手机**曲面屏**那种自然向下过渡」✗
+            //      —— stroke 的亮度是**恒定**的:它只在那一圈上"亮",没有"离边缘越远越淡"这件物理 ✗
+            //   ③ 本日第二稿:`fill(.clear).shadow(.inner(...))` ⇒ 编译过了,但实测贴边只 **+0.019** ✗
+            //      —— 内阴影挂在**透明填充**上几乎不变现(它需要一层"面"才落得下来)✗
+            //   ⇒ 正解 = **层叠的圈**:贴边一圈最亮,往里逐圈更淡更宽 ⇒ 合成出来就是"向内衰减的过渡" ✓
+            //     与原生剖面同形(顶 +0.22 / 底 +0.215 / 左上 +0.25,整周均匀 ✓,紧贴内侧再 −0.04 ✓)
+            //     代价:三圈描边(不触发任何离屏光栅化 ⇒ 比 .blur/.shadow 便宜 ✓;模糊只给一点点)
+            .overlay(GlassRim(cornerRadius: controller.hintText == nil
+                              ? PanelMetrics.rPanel
+                              : PanelMetrics.hintContentSize.height / 2))
             glassTopEdge
 // ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
 //   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
@@ -154,6 +174,14 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
+        // 〔史〕唤起轻弹第三版曾在此拉宽度 —— 已定版为渐入(见下方 .opacity)✓ 留档:
+        //   ⚠️⚠️ 必须用 **transform**(`scaleEffect(x:y:)`),不许逐帧改 `frame` ✗ ——
+        //     第二版把弹写成"宽度每帧变一次" ⇒ 那是**逐帧布局** ⇒ 一唤起就踩
+        //     "Update Constraints in Window pass" 递归 ⇒ SIGABRT ✗(真机复现 ✓)
+        //     而等比 scaleEffect 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓
+        // ★ 入场 = **整块渐入**(2026-10-08 定版):只动不透明度,**不动几何** ✓
+        //   理由:动几何会让"画面"与"命中区"在这 100 多毫秒里不一致 ✗(见 PanelController.entryFade)
+        .opacity(controller.entryFade)
         // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
         //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
@@ -188,6 +216,21 @@ if sheen {
         //   容器里的内容由控制器在侧立那一帧换掉(看不见 ✓),所以这里只需要一块容器 ✓
         ringRow(launch: controller.entrySelected)
             .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+            // 〔史〕唤起轻弹曾在此做 2D 缩放 —— 已定版为渐入(见下方 .opacity)✓ 留档:
+            //   参数按 Apple 录屏逐帧量:起始略大(默认 1.04)→ 130ms ease-out 收到位 ✓
+            //   ⚠️ 起跳**延后一拍**(见 PanelController.showPanel):提前起跳会踩 AppKit 的
+            //     "Update Constraints in Window pass" 递归 ⇒ 一唤起就 SIGABRT ✗
+            //     (缩放/位移两版都验过;延后一拍是最后一条活路 —— 还崩就按 v1.12 收场,别再试 ✗)
+
+            // ★★ 2026-10-08 病例(**别再试了**):这里**不许做"唤起入场动效"** ✗
+            //   用户提「Spotlight 唤起有个 Q 弹的动效, Glance 是直接打在屏幕上的, 能借鉴吗」⇒
+            //   我做了两版(内容 `scaleEffect` / 内容 `offset` + 弹簧),**两版都一唤起就闪退** ✗:
+            //     AppKit 抛 `NSGenericException`:「The window has been marked as needing another
+            //     Update Constraints in Window pass … more passes than there are views in the window」
+            //     ⇒ 布局递归 ⇒ SIGABRT ✓(本仓第三次栽在这一族 ✓)
+            //   为什么换环的旋转没事:它发生在**面板落定之后**;而入场动效正好横跨
+            //     `orderFront → layoutSubtreeIfNeeded → displayIfNeeded` 那几拍 ✗
+            //   ⇒ 与 v1.12 那条裁定一致:**面板要"已经在",两头都不该让用户等动画** ✓
         // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
         // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
         // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),不是玻璃边
@@ -622,5 +665,42 @@ struct RingFlipEffect: ViewModifier {
             .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0),
                               anchor: .center, perspective: 0.32)
             .opacity(1 - 0.75 * progress)
+    }
+}
+
+
+/// **玻璃反光边**:贴边最亮、往内逐圈变淡 —— 合起来读作"边缘自然向内的过渡"(曲面屏那种 ✓)。
+///
+/// 三圈(参数都在 `PanelColors`,量出来的依据见那边注释):
+///   1. 贴边一圈最亮(1.2pt · 峰 +0.22)
+///   2. 往里一圈中等(2.6pt · 模糊 1.6 ⇒ 化开)
+///   3. 再往里一道**内暗落**(原生紧贴亮边内侧 −0.04 ✓)
+///
+/// 为什么不用 `.blur` 铺满整块:那会退化成一次**面板尺寸**的离屏光栅化,
+/// 而这三圈各自只有一条窄环 ⇒ 光栅化面积小、且不随图标数增长 ✓
+struct GlassRim: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        // 用户三评(2026-10-08):「你明显**断层**了, 不是那种玻璃反光透亮的边缘效果……
+        //   你看下之前给你的截图, 原生的那个亮边的效果。现在又有点**太白**了」
+        // ⇒ 两条都记下:① 三圈**离散**叠出来就是断层(1.2/2.6/3.0pt 的三级台阶 ✗);
+        //              ② 7pt 宽的亮带**白面积太大** ⇒ 读成"太白"✗
+        // ⇒ 把原生的亮边放大 6× 再看了一眼:它是 **~1pt 的细软线(峰 +0.22),2px 内就消下去** ✓
+        //   ⇒ 收细:主亮边 1.0pt(模糊 0.45)+ 紧邻一道**很弱**的余晖(α 0.12,只用来防止"硬切")
+        //     + 内侧一道暗落。总宽 ~2.5pt(改前 ~7pt)✓ ⇒ 断层与"太白"一起消 ✓
+        ZStack {
+            ring(inset: 2.6, width: 1.6, color: PanelColors.glassRimInner, blur: 0.9)
+            ring(inset: 1.6, width: 1.4, color: PanelColors.glassRimMid, blur: 0.9)
+            ring(inset: 0.5, width: 1.0, color: PanelColors.glassRimGlow, blur: 0.45)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func ring(inset: CGFloat, width: CGFloat, color: Color, blur: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: max(0, cornerRadius - inset), style: .continuous)
+            .inset(by: inset)
+            .strokeBorder(color, lineWidth: width)
+            .blur(radius: blur)
     }
 }

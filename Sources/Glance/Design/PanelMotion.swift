@@ -93,6 +93,10 @@ enum MotionPolicy {
         return reduced ? .easeOut(duration: reducedDuration) : full
     }
 
+    /// **入口专用**动效:不受"唤起静音期"压制(轻弹本身就是"唤起这个动作"的表情 ✓),
+    /// 但仍尊重系统减弱动态效果(降级 ⇒ 不弹 ✓)
+    static func entrance(_ full: Animation) -> Animation? { reduced ? nil : full }
+
     static var describe: String {
         if alwaysAnimate {
             return systemReduced ? "完整动效(本 App 已放行;系统「减弱动态效果」开着)" : "完整动效"
@@ -200,6 +204,26 @@ enum PanelMotion {
 
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
+
+    /// **入场渐入**(2026-10-08 定版):整块(含玻璃那个 NSView,同一合成层)从淡到实 ✓
+    ///
+    /// 用户口径:「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢,
+    ///   比之前的两段弹簧要好」+ 追问「还是说, fade 是实现的有 bug, 误打误撞?」
+    /// ⇒ **不是 bug**:放慢到 6s 连拍 20 张:玻璃本体 0.168→0.231、图标带 0.252→0.444、
+    ///   整块均值 0.217→0.348 —— 三条**单调、平滑、且同步** ✓
+    ///   (假渐入的典型症状是"玻璃先到、内容后到" ✗,那样两条曲线会分家 ✓)
+    ///
+    /// 为什么它比"整块横向收"更适合这个工具(讨论留下的硬理由):
+    ///   · 动几何那几档(横向 1.04→1.00,还试过带回弹)在这 100 多毫秒里
+    ///     **画面与命中区不一致** ✗ —— 命中判据用落定尺寸,画面却被拉伸 ⇒
+    ///     9 个 App 那局最外侧那颗被推离 **≈22pt**(格距才 68pt);带回弹还要走两遍 ✗
+    ///   · 渐入**不动几何** ⇒ 从第一帧起"看到的就是点得到的" ✓
+    ///
+    /// 时长 = `debug.summonPopMs`(默认 **120** ✓);设置里的总开关仍是 `panel.summonPop`(键名不改 ✓)
+    static var summonFade: Animation {
+        .easeOut(duration: max(0.05, Double(DebugFlags.summonPopMs) / 1000))
+    }
+
 }
 
 

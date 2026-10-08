@@ -163,6 +163,33 @@ final class PanelController: ObservableObject {
     /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
     /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
     @Published private(set) var ringFlipTarget = false
+
+    /// **入场渐入的进度**(0 = 还没出现,1 = 落定)。
+    ///
+    /// ★ 2026-10-08:用户提「Spotlight 唤起有个 Q 弹的动效」⇒ 按 Apple 录屏**逐帧量**出来的参数实现:
+    ///   起始比最终宽 ~7%、130ms 内 ease-out 收位、并快速淡入 ✓(与我第一版"从小涨大"的方向相反 ✓)
+    /// ⚠️ 只作用于**环里那块内容**,不动玻璃 —— 原生玻璃不能被变换(材质会掉 ✗)
+    /// ⚠️ 起跳**延后一拍**(见 showPanel):提前起跳会踩 AppKit 的"Update Constraints in Window pass"
+    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一活路 ✓)
+    ///   渐入虽不动几何,这条**照旧保留** —— 它保护的是"上屏那一拍的布局",与动什么无关 ✓
+    @Published private(set) var entryFadeProgress: Double = 1
+
+    /// 入场渐入的总开关(设置 → 通用 →「唤起渐入」✓;键名仍是 `panel.summonPop`,不改 ✓)
+    /// ⚠️ 老版这里还要求"起始倍率 != 1.0"才有意义 —— 渐入没有倍率了,那个条件随之作废 ✓
+    private var summonFadeEnabled: Bool {
+        UserDefaults.standard.object(forKey: Keys.panelSummonPop) as? Bool ?? KeyDefaults.summonPop
+    }
+
+    /// **入场渐入的进度**(0 = 还没出现 · 1 = 落定)。视图拿它当 `.opacity` —— **不动任何几何** ✓
+    ///
+    /// 史(2026-10-08 一天之内):这里先后是「整块横向 1.04→1.00 的拉伸」→「带 duang 的弹簧」
+    /// →「纯 transform 的横向橡皮筋」;用户三评之后定为**渐入**:
+    ///   「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢, 比之前的两段弹簧要好」
+    /// 换掉的**硬理由**(不是审美):动几何 ⇒ 命中区(用落定尺寸)与画面(被拉伸)**不一致** ✗
+    ///   —— 9 个 App 那局最外侧那颗被推离 ≈22pt,而格距才 68pt ⇒ 想点的那颗可能正好在缝里 ✓
+    ///   渐入没有这个病:从第一帧起"看到的就是点得到的" ✓
+    var entryFade: Double { entryFadeProgress }
+
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///
     /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
@@ -1008,7 +1035,7 @@ final class PanelController: ObservableObject {
         // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
         contentEntryRise = 0   // 不再是 entryFloatDistance
         // 把**这一次用的弹簧档位**写进日志 ✓(不然试完分不清刚才那个是哪个 ✗)
-        trace("[T6] 入场:上浮(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
+        trace("[T6] 入场:渐入 \(DebugFlags.summonPopMs)ms(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 
@@ -1036,6 +1063,11 @@ final class PanelController: ObservableObject {
         // 先上屏的会是上一局画好的旧视图(环)。正常召唤仍走同步:**零延迟是常态的纪律**,
         // 只有"说话局"这个例外晚一拍 —— 那一局只是说一句话,16ms 没人感觉得到。
         // ⚠️ 散场守卫必须带:这一拍里若 dismiss 过,绝不能把已拆的窗再 orderFront 回来。
+        // ★ 渐入的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
+        var popInstant = Transaction()
+        popInstant.disablesAnimations = true
+        trayShownOnce = false        // 新一局:托盘"首次上屏"这一笔重新记(见上面那行日志 ✓)
+        withTransaction(popInstant) { entryFadeProgress = summonFadeEnabled ? 0 : 1 }
         if hintText != nil {
             DispatchQueue.main.async { [weak self, weak panel] in
                 guard let self, let panel, self.isVisible else { return }
@@ -1044,6 +1076,21 @@ final class PanelController: ObservableObject {
         } else {
             panel.orderFrontRegardless()
         }
+        // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
+        //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
+        if summonFadeEnabled {
+            // nil = 系统「减弱动态效果」开着(尊重系统 ✓)⇒ 当拍到位
+            if let anim = MotionPolicy.entrance(PanelMotion.summonFade) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isVisible else { return }
+                    withAnimation(anim) { self.entryFadeProgress = 1 }
+                }
+            } else {
+                entryFadeProgress = 1     // 系统减弱动态 ⇒ 当拍到位(不欠任何动画 ✓)
+            }
+        }
+        // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)
+
         DispatchQueue.main.async { [weak self, weak panel] in
             guard let panel else { return }
             panel.alphaValue = 1
@@ -1683,6 +1730,21 @@ final class PanelController: ObservableObject {
     /// (指针重定位、面板外点击)都必须用这个,不能用窗口 frame。
     func previewContentRect() -> NSRect? {
         guard let p = previewPanel, p.isVisible else { return nil }
+        // ★★ 2026-10-08 病例(用户:「之前修复过的有个 bug 又出现了 —— 切换到未启动环,选中一个 app 之后,
+        //   指针在**面板之外**移动 hover,也能做 app 选中」):
+        //   未启动环里托盘**没有内容** ⇒ 走 `previewFrame() == nil` 那条路 ⇒ 内容隐藏
+        //   (`alphaValue = 0` + `ignoresMouseEvents = true`,2026-09-21 为了省掉窗口排序而定 ✓)。
+        //   但它的**窗口还留在台上** ⇒ `isVisible` 仍是 true ✗ ⇒ 这个函数照样吐出一块
+        //   **看不见的地板**的矩形 ✗ ⇒ 三个消费者全中招:
+        //     · `resyncSelectionUnderPointer()` ⇒ 指针在面板之外(那扇隐藏托盘的位置)照样改选中 ✗
+        //     · 点击闸(`长条点击闸 开…点击让给托盘`)⇒ 点那块空地会把 app **启动**掉 ✗
+        //     · 面板外点击判据 ⇒ 拿它当"点在托盘里" ⇒ 该收场时不收场 ✗
+        //   真机复现(2026-10-08):托盘 window layer=100 **alpha=0.00**,日志却打
+        //   `[T6] 视图挪位后指针重定位(启动区): [3/5] JetBrains Toolbox`,松手直接把它启动了 ✗
+        //   ⇒ 收口收在**门口**(这个函数),而不是去每个调用方补一行 ——
+        //     调用方以后还会加,门口的判据只有一个 ✓(同一课:见 previewFrame 头注的"守卫住在门口")
+        if trayChrome?.isContentHidden ?? false { return nil }
+        guard p.alphaValue > 0.01, !p.ignoresMouseEvents else { return nil }   // 双保险:与上面同源 ✓
         let c = previewContentSize()
         guard c.width > 0, c.height > 0 else { return nil }
         // 内容在窗口里:水平居中、**底部对齐**(与窗口等尺寸时 = 今天的布局,一个像素不差)
@@ -1693,6 +1755,9 @@ final class PanelController: ObservableObject {
 
     /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
     private var trayOverflowLogged = false
+
+    /// 托盘本局是否已经上屏过(只为上面那行日志:区分"首次渐入"与"后续更新" ✓)
+    private var trayShownOnce = false
 
     /// 托盘正中 = 长条正中(demo 的 .switcher-wrap 是 column 居中,托盘不跟图标滑移);
     /// 超界时**只在玻璃层面**收进语境屏;视觉缝 = seam。
@@ -1816,6 +1881,14 @@ final class PanelController: ObservableObject {
         guard let previewPanel else { return }
         // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
+        // ★ 2026-10-08 可观测:托盘上屏这一拍,人眼看到的"它是不是从淡到实"取决于
+        //   ① 此刻入场进度(entryFadeProgress,0 = 全透明)② 它是不是第一次上屏。
+        //   这两件事以前只能靠盯屏猜 ⇒ 打一行(只在**真正转场**时打,不是每帧 ✓)
+        if isTraceEnabled, previewPanel.alphaValue < 0.5 || !trayShownOnce {
+            glog(String(format: "[托盘] 上屏 · 入场进度 %.2f · 首次=%@(与环同一个源 ✓)",
+                        entryFadeProgress, trayShownOnce ? "否" : "是"))
+        }
+        trayShownOnce = true
         previewPanel.alphaValue = 1
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
@@ -2126,6 +2199,15 @@ final class PanelController: ObservableObject {
         appIndex = target
         winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
         trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
+        // ★★ 2026-10-08 病例(用户实报「通过左右移动到头尾这种方式, 选中的 App **没有 live**、
+        //   不会主动接入;指针 hover 选中之后 live 才正常」):
+        //   真因:选中一变必须跟的**两笔**在这里漏了 ✗ —— `Tab`(moveApp)/指针(hoverApp)/
+        //   换窗口(moveWindow)三条路都有 `refreshSnapshotForSelection()` + `updatePreview()`,
+        //   **只有 ←/→ 这条路没有** ⇒ 静默图不换、`LivePreviewPool.sync` 不跑
+        //   ⇒ 那一组窗的**流从来没起过**(hover 那一路会补上,所以"hover 一下就好了" ✓)
+        //   ⇒ 补齐这两笔(与另外三条路同一个写法、同一本账 ✓ 以后加新的选中路径照抄这里 ✓)
+        traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+        traceCost("  ↳托盘更新") { updatePreview() }
     }
 
     private func moveWindow(_ delta: Int) {
@@ -2514,6 +2596,13 @@ final class PanelController: ObservableObject {
         // 指针从入口槽(面板)走到托盘是跨窗口的一段路,状态可能已被清掉,于是"鼠标再移动也选不中"
         // (用户实报)。这里直接把它补回来,而不是让 hover 去依赖一段可能丢失的记忆。
         guard hoverAllowedByGate(), launchables.indices.contains(i) else { return }
+        // ★★ 2026-10-08 门口收口之二(同一病例):这个函数**只有托盘那一行**在调
+        //   (环里的启动格走 `hoverApp` 的 entrySelected 分支 ✓),所以"指针真的在托盘的可见内容里"
+        //   就是它的前提 ✓ —— 而托盘内容隐藏时 `previewContentRect()` 一律 nil ✓。
+        //   病例:未启动环里托盘内容已隐藏(alpha 0),指针停在**面板之外**那扇隐藏托盘上,
+        //   它的 tracking area 照样回调 `.onHover` ⇒ 这一发把 launchIndex 改掉了 ✗
+        //   (真机日志:`[T6] 启动区 hover: [2/4] Pearcleaner`,而指针在面板之外 ✓)
+        guard let tray = previewContentRect(), tray.contains(NSEvent.mouseLocation) else { return }
         entrySelected = true
         guard launchIndex != i else { return }
         trace("[T6] 启动区 hover: [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
@@ -3264,7 +3353,14 @@ extension NSRect {
 final class ChromeWindow {
     private let panel: NSPanel
     private var placed = false              // 本局"已经在台上"(自己记账,不信 isVisible)
-    private var hidden = false              // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    private(set) var hidden = false         // 内容隐藏(用户看不见 ≠ 窗口不在台上)
+    /// ★★ 2026-10-08 加(用户实报「未启动环里指针在面板之外 hover 也能改选中」):
+    ///   "窗口在台上" ≠ "内容看得见" —— 2026-09-21 起,托盘"没内容"时不再 `orderOut`,
+    ///   而是 **alpha 0 + 忽略鼠标**(为了省掉每次 hover 的窗口排序 4–35ms ✓)。
+    ///   于是 `isVisible == true` 却什么都看不见 ⇒ 谁拿 `previewContentRect()` 算几何都会算到
+    ///   **一块看不见的地板**上 ✗(指针/点击落进那片区域照样生效 ✗)。
+    ///   ⇒ 判"在不在台上"必须问**这个**(唯一真源),不要再拿 isVisible 猜 ✓
+    var isContentHidden: Bool { hidden }
     /// 这一局是否已经收场(收场后禁止 place ✓ —— 见 `place()` 的病例)
     private var sessionEnded = true
 
@@ -3296,10 +3392,18 @@ final class ChromeWindow {
     /// 新一局开始:重新允许上屏 ✓(与 `teardown()` 配对 —— 见 `place()` 的病例)
     func beginSession() { sessionEnded = false }
 
+
     /// 内容显隐:只改图层属性(微秒级 ✓)
     func setContentHidden(_ on: Bool) {
         guard on != hidden else { return }
         hidden = on
+        // 只打"转场"那一行(调用点每帧都来,但这里被 `on != hidden` 挡着 ⇒ 一条消息只响一次 ✓)
+        // ⚠️ ChromeWindow 不是 PanelController ⇒ 用不了那边的 `trace`(那是它的私有方法)⇒
+        //    这里判同一个开关 `isTraceEnabled` 再用 glog ✓(口径一致,不多立一个开关 ✓)
+        if isTraceEnabled {
+            glog(on ? "[托盘] 内容隐藏(alpha 0 + 忽略鼠标)⇒ 从此不参与指针与点击 ✓"
+                    : "[托盘] 内容恢复可见 ⇒ 重新参与指针与点击 ✓")
+        }
         panel.alphaValue = on ? 0 : 1
         panel.ignoresMouseEvents = on
     }
