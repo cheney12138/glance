@@ -45,10 +45,6 @@ enum Keys {
     /// 翻出去/翻进来各占一半(easeIn / easeOut)⇒ 两半读起来是一次动作 ✓ 0 = 不动效(当拍换)
     static let debugRingFlipDurationMs = "debug.ringFlipDurationMs"
 
-    /// `debug.ringFlipStyle` —— 换环用什么翻法:`flip3d`(默认,真透视)/ `squash`(纯 2D 压扁,"不建 3D 上下文")/ `none`(不翻,当拍换)
-    static let debugRingFlipStyle = "debug.ringFlipStyle"
-    /// `debug.ringWidthMode` —— 玻璃长度怎么变:`follow`(默认,跟着当前环)/ `fixed`(恒等于两环的宽者 ⇒ 换环零几何变化)
-    static let debugRingWidthMode = "debug.ringWidthMode"
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
     /// 那一行在设置里摆了很多版本,却因为 App 每次启动都清掉这个 debug 键 ⇒ **永远存不住** ✗)

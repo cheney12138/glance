@@ -93,7 +93,7 @@ if sheen {
                 //   ① 翻的只有**图标条** ⇒ 用户实评「环先变形到位、然后只翻图标 ⇒ 翻了个寂寞」✗
                 //   ② `.transition` 会被系统「减弱动态效果」**自己**降级,Glance 的设置管不到 ✗
                 //   ⇒ 现在改成"**整条环(玻璃 + 图标)当一块牌翻**":角度是控制器里的参数,
-                //     挂在面板根视图上(见 body 尾部的 rotation3DEffect ✓ 与托底 PuckView 同一套哲学)
+                //     挂在**环里那块容器**上(`RingFlipEffect`,见文件尾 ✓ 与托底 PuckView 同一套哲学)
 
             // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
             // 上一轮把尺寸和形状做了、**文字漏了** —— 于是"芯片出来了, 没文案"。
@@ -154,13 +154,11 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
-        // ★★ 2026-10-08 换环翻牌:**整条环(玻璃 + 图标)当一块牌翻**,参数驱动 ——
-        //   0 → ±88° 翻出去,半途(侧立那一帧)控制器换内容 + 换宽度,再反相翻进来 ✓
-        //   ⚠️ 已知硬约束:这一转**原生玻璃的材质会掉**(由 WindowServer 在窗口几何上合成,
-        //      被转出平面就失效)⇒ 这是设计取舍,见环切方案讨论 ✓
-        .rotation3DEffect(.degrees(controller.ringFlipAngle),
-                          axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.32)
-        .opacity(1 - 0.75 * min(abs(controller.ringFlipAngle) / PanelMetrics.ringFlipLimit, 1))
+        // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
+        //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
+        //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
+        //   里那层**同时**在转 ⇒ 用户那四格消元实验(3D/2D × 长度变/不变)**全部失效** ✗✗
+        //   ⇒ 翻牌只由 `RingFlipEffect` 作用在**环里那块容器**上;玻璃/阴影/受光边在这一层保持不动 ✓
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
         //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
@@ -193,13 +191,22 @@ if sheen {
         // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
         // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
         // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),不是玻璃边
-        .background(alignment: .leading) { puck.allowsHitTesting(false) }
+        // ★ 2026-10-08(用户:「翻转的时候, 托底滑块没有动作」):
+        //   托底是**主环内容**的一部分 ⇒ 它必须跟环一起翻 ✓
+        //   翻出去:托底跟主环一起转到侧立(第一半);换环那一帧 `entrySelected` 反转 ⇒
+        //   托底按"只在主环显示"的旧规矩消失 —— 而那一刻它正好在 ±88°(一条线,看不见)✓
+        //   ⇒ 消失是无缝的,不需要额外的淡出 ✗
+        .background(alignment: .leading) {
+            puck
+                .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+                .allowsHitTesting(false)
+        }
         .padding(.leading, PanelMetrics.rowPadX)
         .padding(.trailing, PanelMetrics.rowPadX)
     }
 
     /// 翻牌的进度(0…1):只用来定"侧立时淡到多淡" ✓
-    /// (翻法本身在 `RingFlipEffect`;两个消元开关见 `DebugFlags.ringFlipStyle` ✓)
+    /// (翻法本身在 `RingFlipEffect` ✓)
     private var flipProgress: Double {
         min(abs(controller.ringFlipAngle) / PanelMetrics.ringFlipLimit, 1)
     }
@@ -597,30 +604,23 @@ final class SheenTracker {
 }
 
 
-/// 环里那块容器的"翻"法(2026-10-08 消元期)。
+/// 环里那块容器的"翻"法:绕**水平轴**转 + 一点透视(2026-10-08 定版)。
 ///
-/// 背景:换环过程中**原生玻璃会掉材质**(整块变成没材质的透明/发暗板 ✗)。两个嫌疑:
-///   ① `rotation3DEffect` 会让 SwiftUI 给这一层建 3D 上下文 —— 玻璃可能因此不被当"玻璃"合成 ✗
-///   ② 玻璃几何在变(resize)⇒ 材质重新采样期间是空的 ✗
-/// ⇒ `DebugFlags.ringFlipStyle`:`flip3d`(默认,真透视)/ `squash`(纯 2D 压扁,不建 3D 上下文)/ `none` ✓
-/// 验完按结论把这里定成一个,另一个删掉 ✓(现在留着只为把嫌疑分开 ✓)
+/// 定版过程(两轮真机截图 + 用户四格消元):
+///   · 翻的**单位**是"环里那块容器",**不是整条环** —— 原生玻璃不能被 3D 变换(一转材质就掉 ✗),
+///     也不能逐帧 resize(同样掉 ✗)⇒ 玻璃只做"长度平滑过渡",翻的是容器 ✓
+///   · 消元用的 `squash`(纯 2D)/ `none`(不翻)两条临时路**验完即删** ✓
+///     (那轮结论:掉材质既不是 3D、也不是几何变化 —— 是**同一扇窗里逐帧重绘内容**;
+///      而当时其实还残留着"容器层也在转玻璃"那一处 ✗ ⇒ 删掉后玻璃全程完好 ✓)
+/// 纯 transform(rotation + opacity)⇒ 不触发重排、不碰窗口 alpha ✓
 struct RingFlipEffect: ViewModifier {
     let angle: Double
     let progress: Double
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if DebugFlags.ringFlipStyle == "squash" {
-            // 2D:只把高度压下去(cos 曲线与真翻转的投影一致 ✓),没有任何 3D 变换
-            content
-                .scaleEffect(y: max(cos(angle * .pi / 180), 0.02), anchor: .center)
-                .opacity(1 - 0.6 * progress)
-        } else {
-            // 3D:真透视翻转(现状)
-            content
-                .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0),
-                                  anchor: .center, perspective: 0.32)
-                .opacity(1 - 0.75 * progress)
-        }
+        content
+            .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0),
+                              anchor: .center, perspective: 0.32)
+            .opacity(1 - 0.75 * progress)
     }
 }
