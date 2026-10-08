@@ -87,6 +87,22 @@ enum DebugFlags {
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
+    /// **换环翻法**(消元用):`flip3d`(默认)/ `squash`(纯 2D 压扁)/ `none`(不翻)。
+    /// 病例(2026-10-08):换环过程中**原生玻璃会掉材质**(变成一块没材质的透明/发暗板 ✗)。
+    /// 两个嫌疑:① 3D 上下文(rotation3DEffect)② 玻璃几何在变(resize)。
+    /// ⇒ 这两个开关就是为了把嫌疑分开(= 2×3 消元实验 ✓),验完按结论定版再删 ✓
+    static var ringFlipStyle: String { UserDefaults.standard.string(forKey: Keys.debugRingFlipStyle) ?? "flip3d" }
+
+    /// **玻璃长度的策略**:`follow`(默认,跟着当前环宽)/ `fixed`(恒等于两环宽者 ⇒ 换环期间几何零变化)
+    static var ringWidthMode: String { UserDefaults.standard.string(forKey: Keys.debugRingWidthMode) ?? "follow" }
+
+    /// **换环翻牌的总时长**(毫秒;默认 180 ✓ 0 = 当拍换)。
+    /// 病例(2026-10-08):翻牌以前走 `.transition` ⇒ 被系统「减弱动态效果」自己降级成淡切,
+    /// Glance 的「强制完整动效」管不到 ✗ ⇒ 改成参数驱动,顺手把手感做成可试档位 ✓
+    static var ringFlipDurationMs: Int {
+        (UserDefaults.standard.object(forKey: Keys.debugRingFlipDurationMs) as? NSNumber)?.intValue ?? 180
+    }
+
     // MARK: 启动期一次性开关
 
     /// 启动后直接打开设置面板（改设置时省去手点）。
@@ -110,6 +126,9 @@ enum DebugFlags {
         ("debug.hzProbe", hzProbe, "另开一扇临时窗口做 120Hz A/B；会遮挡屏幕左下角"),
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
+        ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
+        ("debug.ringFlipStyle", ringFlipStyle != "flip3d", "换环翻法 = \(ringFlipStyle)(默认 flip3d)"),
+        ("debug.ringWidthMode", ringWidthMode != "follow", "玻璃长度策略 = \(ringWidthMode)(默认 follow)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

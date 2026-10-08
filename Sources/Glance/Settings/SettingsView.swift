@@ -253,7 +253,7 @@ struct SettingsView: View {
                 }
                 // ★ 2026-09-22 结构整理:"高光效果"是**外观**(指针高光 + 图标明暗),不是动效 ✗
                 //   ⇒ 从"动效"挪进"外观" ✓(它的实现细节请看 SettingsRow 自己的 desc)
-                SettingsRow(title: "高光效果", desc: "指针移动时的动态高光,以及图标上的明暗对比。") {
+                SettingsRow(title: "高光效果", desc: "选中 App 周围的柔光,以及图标上的明暗对比。") {
                     BeamSwitch(isOn: $sheen)
                 }
                 SettingsRow(title: "App 间距",

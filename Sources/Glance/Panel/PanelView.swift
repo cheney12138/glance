@@ -73,7 +73,7 @@ if sheen {
                 SheenOverlay(
                     active: controller.isVisible,
                     enabled: !controller.entrySelected,
-                    pointer: { [weak controller] in controller?.pointerInContent() },
+                    center: { [weak controller] in controller?.sheenCenterInContent() },
                     tint: { [weak controller] in controller?.sheenTint },
                     owner: { [weak controller] in controller?.sheenTintOwner ?? "?" }
                 )
@@ -88,11 +88,12 @@ if sheen {
                 // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
                 // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
                 .opacity(controller.hintText == nil ? 1 : 0)
-                // 模型 C 跨段过渡:identity 换新触发 transition;方向随行进
-                // (Tab = 内容左滑、⇧Tab = 右滑、↓/↑ 跳段 = 淡切),动画事务由 setSegment 的
-                // withAnimation 提供 —— 与窗口(AppKit)那边的 0.22s easeInOut 同一根曲线
-                .id(controller.entrySelected)
-                .transition(segmentTransition)
+                // ★★ 2026-10-08 换环翻牌**不再挂在这条图标行上** ✗ ——
+                //   原来这里是 `.id(entrySelected) + .transition(SegmentFlip)`:
+                //   ① 翻的只有**图标条** ⇒ 用户实评「环先变形到位、然后只翻图标 ⇒ 翻了个寂寞」✗
+                //   ② `.transition` 会被系统「减弱动态效果」**自己**降级,Glance 的设置管不到 ✗
+                //   ⇒ 现在改成"**整条环(玻璃 + 图标)当一块牌翻**":角度是控制器里的参数,
+                //     挂在面板根视图上(见 body 尾部的 rotation3DEffect ✓ 与托底 PuckView 同一套哲学)
 
             // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
             // 上一轮把尺寸和形状做了、**文字漏了** —— 于是"芯片出来了, 没文案"。
@@ -153,6 +154,13 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
+        // ★★ 2026-10-08 换环翻牌:**整条环(玻璃 + 图标)当一块牌翻**,参数驱动 ——
+        //   0 → ±88° 翻出去,半途(侧立那一帧)控制器换内容 + 换宽度,再反相翻进来 ✓
+        //   ⚠️ 已知硬约束:这一转**原生玻璃的材质会掉**(由 WindowServer 在窗口几何上合成,
+        //      被转出平面就失效)⇒ 这是设计取舍,见环切方案讨论 ✓
+        .rotation3DEffect(.degrees(controller.ringFlipAngle),
+                          axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.32)
+        .opacity(1 - 0.75 * min(abs(controller.ringFlipAngle) / PanelMetrics.ringFlipLimit, 1))
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
         //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
@@ -165,45 +173,9 @@ if sheen {
 
     // MARK: - 图标层
 
-    /// 跨段过渡的方向(模型 C,见 `PanelController.SegmentTravel`)。
-    /// 跨段过渡 = **方向滑**(2026-09-22 用户要求:「不能做一个手机桌面左右滑动的方盒动效吗」)。
-    ///
-    /// 为什么现在能做了(以前为什么删)：
-    ///   · 2026-09-21 删过一次滑动 —— 那时滑动误伤了**托盘里的卡片**(新一组的卡片被判成插入 ⇒
-    ///     左滑入场 ✗)。本过渡只挂在**环那一条**上(`iconStrip` 的 `.id`/`.transition`),
-    ///     托盘不共用这个 modifier ⇒ 那一族误触发与它无关 ✓
-    ///   · 抖动的真源是**两个动画系统**(AppKit 动窗框 + SwiftUI 动内容)的相位差 ✗ ⇒
-    ///     现在窗框**当拍改尺寸**(`applyRingSwap(animated: false)`)、只有内容滑 ⇒ 单系统 ⇒ 抖无从产生 ✓
-    private var segmentTransition: AnyTransition {
-        // 方向(用户口径 2026-09-22):「是上下翻动的那种方盒…就是类似翻牌子一样」——
-        //   ↓ 往下翻一张(旧环**向上**转出去、新环从**下方**转进来),↑ 反向 ✓
-        // 为什么用 rotation3DEffect 而不是 .move:翻牌的关键是"绕水平轴转 + 有透视",
-        //   纯位移读起来是"推走",不是"翻过去" ✗;而且两环**高度相同**(都是 icon 高)⇒
-        //   竖向翻不会碰到任何尺寸变化 ✓(唯一会变的宽度已由窗框当拍处理 ✓)
-        switch controller.segmentTravel {
-        case .forward:
-            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)),
-                               removal:   .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)))
-        case .backward:
-            return .asymmetric(insertion: .modifier(active: SegmentFlip(angle: 88),  identity: SegmentFlip(angle: 0)),
-                               removal:   .modifier(active: SegmentFlip(angle: -88), identity: SegmentFlip(angle: 0)))
-        case .direct:    // 其余(如"名单清空"这类非用户动作):淡切,不做方向承诺
-            return .opacity
-        }
-    }
-
-    /// 旧配方(留档,别再走回去):
-    /// 用**轻推 + 淡切**(14pt 的 transform 位移)而不是整排横滑:滑动 = 内容在"正在变形的
-    /// 容器"里逐帧重排,是 v1 抖动的主源;offset 是纯 transform,不碰布局
-    private var _segmentTransitionLegacy: AnyTransition {
-        // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效,直接毙掉」。
-        // 病例:选中 app B 的**非第一个**窗口,再直接 hover 到相邻 app A
-        //       ⇒ 新一组的卡片**左滑入场** ✗(窗口集合被判成"插入" ⇒ 播放 x:±14 的位移)。
-        //       同类误触发还有:IDE 类 app 开场几帧刷新窗口列表 ⇒ 也会被判成插入。
-        // ⇒ 位移**整段删除**,只保留淡切(opacity —— 淡切不是"滑入",换内容时不产生任何横向移动)。
-        // 注:`segmentTravel`(forward/backward)因此不再被使用,留给后面的清理步骤一起收(见 docs/live-preview-设计.md)。
-        return .opacity
-    }
+    /// (2026-10-08 原 `segmentTransition` / `_segmentTransitionLegacy` 已删:
+    ///  翻牌改由 `controller.ringFlipAngle` 参数驱动,挂在整个面板根上 —— 见 body 尾部 ✓
+    ///  它们原来挂在 `iconStrip` 的 `.id() + .transition()` 上,只会翻"图标条"而且归不了 Glance 的设置 ✗)
 
     private var iconStrip: some View {
         // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),App 区两端再负 padding 收回来 ——
@@ -212,9 +184,33 @@ if sheen {
         // 会把尾格的右半格也吃掉,点阵到玻璃边变成 rowPadX+半格,比线到两边宽出一档
         // (用户实拍「左右不对称」)。右缘留白也改成 iconGap:尾部节奏三点同距
         // (App→线 = 线→点 = 点→玻璃边 = iconGap)。
+        // ★★ 2026-10-08 定版(**用户提案**):**环里加一个容器,只翻那个容器** ——
+        //   玻璃不转(转了就掉材质 ✗)、也**不逐帧改宽度**(每帧 resize 原生玻璃同样掉材质 ✗,
+        //   两轮截图都验过)⇒ 玻璃只在"看不见的那一帧"(内容侧立)变一次长度 ✓
+        //   容器里的内容由控制器在侧立那一帧换掉(看不见 ✓),所以这里只需要一块容器 ✓
+        ringRow(launch: controller.entrySelected)
+            .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+        // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
+        // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
+        // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),不是玻璃边
+        .background(alignment: .leading) { puck.allowsHitTesting(false) }
+        .padding(.leading, PanelMetrics.rowPadX)
+        .padding(.trailing, PanelMetrics.rowPadX)
+    }
+
+    /// 翻牌的进度(0…1):只用来定"侧立时淡到多淡" ✓
+    /// (翻法本身在 `RingFlipEffect`;两个消元开关见 `DebugFlags.ringFlipStyle` ✓)
+    private var flipProgress: Double {
+        min(abs(controller.ringFlipAngle) / PanelMetrics.ringFlipLimit, 1)
+    }
+
+    /// **一环的图标行**(主环 / 未启动环二选一)。
+    /// 抽出来只为翻牌:那一拍要**同时**放两块(旧环翻出去 + 新环翻进来 ✓),玻璃留在原地 ✓
+    @ViewBuilder
+    private func ringRow(launch: Bool) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: 0) {
-                if controller.entrySelected {
+                if launch {
                     // T91 ↓ 换环:这格里装的是"未启动的 App"——**完全覆盖**,不是多一行
                     ForEach(Array(controller.launchables.enumerated()), id: \.offset) { i, _ in
                         launchRingCell(i)
@@ -250,14 +246,6 @@ if sheen {
             }
             .padding(.horizontal, -PanelMetrics.iconGap / 2) // App 区首格左、末格右各收回半个间隙
         }
-        // demo 的 .puck 是 z-index:1、.app-row 是 z-index:2——托底在图标**后面**。
-        // SwiftUI 里 overlay 画在内容上面,会把选中格蒙住并吃掉点击,必须用 background。
-        // 挂在**水平 padding 之前**:托底要对齐的是第一枚图标(负 padding 后的 frame 左缘),
-        // 不是玻璃边。水平内边距收在这层:左 rowPadX;右随启动区变 —— 有尾格时 = iconGap
-        // (尾部三点同距),没有时 = rowPadX 与左缘对称
-        .background(alignment: .leading) { puck.allowsHitTesting(false) }
-        .padding(.leading, PanelMetrics.rowPadX)
-        .padding(.trailing, PanelMetrics.rowPadX)   // T91:尾格撤了 ⇒ 右缘与左缘对称
         // 主环 hover 的兜底轮询不挂在这里:TimelineView(.animation) 在静态窗口上**不跳帧**
         // (macOS 不给静止窗口排帧,"每帧"实际只是"有视图更新的那几拍"),兜不住
         // "界面静止、指针开始动"的那一刻 —— 帧拍已由控制器里的 60Hz 定时器统一驱动
@@ -340,18 +328,6 @@ if sheen {
         }
     }
 
-    /// 确认涟漪的圆心 = 选中图标的中心(含 14px 上浮,demo 取的是变换后的 rect 中心)。
-    /// X 与托盘锚点同源(`PanelLayout.iconCenterX`)
-    private var selectedIconCenter: CGPoint {
-        CGPoint(
-            x: PanelLayout.iconCenterX(
-                appIndex: controller.appIndex,
-                appCount: controller.groups.count,
-                contentWidth: controller.contentSize().width
-            ),
-            y: PanelMetrics.rowPadY + PanelMetrics.icon / 2 - PanelMetrics.iconLift
-        )
-    }
 }
 
 // MARK: - 图标格(选中 = 上浮 14 + 放大 1.14 + 提亮;未选 = 压暗去饱和)
@@ -500,11 +476,16 @@ private struct IconCell: View {
     }
 }
 
-// MARK: - 指针跟随高光(demo .panel-sheen)
+// MARK: - 选中格高光(源自 demo .panel-sheen)
 //
 // demo:`radial-gradient(220px circle at mx my, rgba(255,255,255,.30), transparent 60%)`
 //      + `mix-blend-mode: soft-light`,z 序在 `.panel-glass` 之上、`.puck`/`.app-row` 之下,
 //      `transition: background .08s linear`(只跟光,不跟手粘死)。
+//
+// ★ 2026-10-08:**圆心改成"选中那一格的中心",不再跟着指针** ✗(用户裁定 ——
+//   它读作"这个 App 被选中"的柔光,而不是一盏手电筒 ✓)。位置与颜色因此同源:
+//   都取自控制器里的"当前选中" ⇒ 指针怎么移动都不影响它 ✓
+//   (原来位置来自 `NSEvent.mouseLocation`、颜色来自选中图标 ⇒ 两个源,光晕会飘在空格子里 ✗)
 //
 // 两条原生现实决定了它不能照抄:
 // 1. **混不动**:soft-light 要采样背后的像素,而原生玻璃由 WindowServer 在进程外合成,
@@ -513,15 +494,15 @@ private struct IconCell: View {
 // 2. **不能走 SwiftUI 状态**:指针每像素一写,整个 body(含玻璃 NSViewRepresentable)重算,
 //    `updateNSView` 次次重进,拖着玻璃重渲染 —— 横扫面板一顿一顿的就是它。
 //
-// 3. **拿不到鼠标事件**:面板是 `nonactivatingPanel`,永不成 key。AppKit 的 mouseMoved
-//    只投给 key 窗口(上一版走 `addLocalMonitorForEvents(.mouseMoved)`,一个事件都收不到,
-//    光晕从来没亮过),NSTrackingArea 在 non-key 窗口上也不可靠。
+// 3. **拿不到鼠标事件**(历史上的第三关,现已用不着):面板是 `nonactivatingPanel`,永不成 key。
+//    AppKit 的 mouseMoved 只投给 key 窗口(上一版走 `addLocalMonitorForEvents(.mouseMoved)`,
+//    一个事件都收不到),NSTrackingArea 在 non-key 窗口上也不可靠。
+//    —— 这条只对"跟指针"那版要紧;圆心改成选中格之后,**根本不需要指针输入** ✓
 //
-// 解法:**不靠事件**。`TimelineView(.animation)` 每帧问一次 `NSEvent.mouseLocation`
-// (全局读数,与谁 key、有没有事件无关),`Canvas` 直接画。三个好处:
+// 解法:`TimelineView(.animation)` 每帧问一次控制器"选中格在哪",`Canvas` 直接画。三个好处:
 // ① 它是纯 SwiftUI 内容,z 序就是写在 ZStack 里的顺序,不会被玻璃的 NSView 顶掉;
 // ② 每帧只重算这一个叶子视图 —— 玻璃的 `updateNSView` 与图标一概不碰;
-// ③ 指针位置用闭包现问,不进 `@State`,指针怎么划都不产生状态变更。
+// ③ 圆心用闭包现问,不进 `@State`,指针怎么划都不产生状态变更。
 
 struct SheenOverlay: View {
     /// 面板在台上吗(不在台上就让时间轴停摆,省掉每秒 60 次空转)
@@ -529,8 +510,9 @@ struct SheenOverlay: View {
     /// 这一帧该不该画光(未启动环 = 不画 ✓)
     /// ⚠️ 它**不能**用 `if` 在调用处摘视图 —— 换环那一刻视图树一变就会触发重排 ⇒ 抖 ✗(踩过)
     let enabled: Bool
-    /// 指针在面板内容坐标里的位置(nil = 不在面板上)
-    let pointer: () -> CGPoint?
+    /// **选中格的中心**(面板内容坐标;nil = 这一帧不画 —— 没有选中 / 未启动环 ✓)
+    ///   它**与指针无关**:指针怎么移动都不改它(用户 2026-10-08 裁定 ✓)
+    let center: () -> CGPoint?
     /// ★ 光晕的**颜色** = 选中 App 图标的主色（nil ⇒ 白：图标基本是灰的 / 还没选中 ✓）
     ///   30Hz 每帧问一次 ⇒ 走 `IconTint` 的缓存查表，很便宜 ✓
     let tint: () -> NSColor?
@@ -546,7 +528,7 @@ struct SheenOverlay: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !(active && enabled))) { _ in
             Canvas { ctx, _ in
                 guard enabled else { tracker.reset(); return }   // 不画(未启动环 ✓)
-                guard let (p, alpha) = tracker.step(target: pointer()) else { return }
+                guard let (p, alpha) = tracker.step(target: center()) else { return }
                 tracker.note(tint: tint(), owner: owner())
                 let peak = (scheme == .dark ? PanelColors.sheenAlphaDark : PanelColors.sheenAlphaLight)
                     * alpha * PanelColors.sheenGain
@@ -570,7 +552,7 @@ struct SheenOverlay: View {
     }
 }
 
-/// 光晕的跟手状态:位置带滞后(只跟光,不跟手粘死),进出面板带淡入淡出。
+/// 光晕的**移动**状态:圆心换格时带一点滞后(只跟光,不跟手粘死),进出面板带淡入淡出。
 /// 故意做成**引用类型**:每帧改它不算 SwiftUI 状态变更,不会触发任何视图重算。
 final class SheenTracker {
     private var point: CGPoint?
@@ -578,7 +560,9 @@ final class SheenTracker {
     private var logged = false
     /// 上一次报过的颜色(换色时才打一行 ⇒ "光晕到底跟的谁"一眼可见 ✓)
     private var lastTintHex: String?
-    /// demo 的 `transition: background .08s linear`:60fps 下每帧追 45%,约 80ms 跟到位
+    /// demo 的 `transition: background .08s linear`:每帧追 45%,约 80ms 跟到位
+    /// (原来是"追指针";现在追的是**选中格** ⇒ 换选中时那团光会滑过去一小段,不是硬跳 ✓
+    ///  要硬跳就设 1.0 ✓)
     private let follow: CGFloat = 0.45
 
     /// 返回这一帧该画的位置与强度;nil = 不画
@@ -601,7 +585,7 @@ final class SheenTracker {
     func step(target: CGPoint?) -> (CGPoint, CGFloat)? {
         if let t = target {
             // 第一次被点亮打一行:光晕有没有被驱动起来,日志里一眼可见(只打一次)
-            if !logged, isTraceEnabled { logged = true; glog("[T6] 光晕上线:指针 \(Int(t.x)), \(Int(t.y))") }
+            if !logged, isTraceEnabled { logged = true; glog("[T6] 光晕上线:圆心 \(Int(t.x)), \(Int(t.y))(跟选中格)") }
             point = point.map { CGPoint(x: $0.x + (t.x - $0.x) * follow, y: $0.y + (t.y - $0.y) * follow) } ?? t
             intensity += (1 - intensity) * 0.35
             return (point!, intensity)
@@ -612,14 +596,31 @@ final class SheenTracker {
     }
 }
 
-/// 跨段"翻牌":绕**水平轴**转 + 一点透视 + 淡(2026-09-22 用户口径「类似翻牌子一样」)。
+
+/// 环里那块容器的"翻"法(2026-10-08 消元期)。
 ///
-/// 只做 transform(opacity/rotation)⇒ 不触发重排 ⇒ 与"单动画系统"那条纪律一致 ✓
-private struct SegmentFlip: ViewModifier {
+/// 背景:换环过程中**原生玻璃会掉材质**(整块变成没材质的透明/发暗板 ✗)。两个嫌疑:
+///   ① `rotation3DEffect` 会让 SwiftUI 给这一层建 3D 上下文 —— 玻璃可能因此不被当"玻璃"合成 ✗
+///   ② 玻璃几何在变(resize)⇒ 材质重新采样期间是空的 ✗
+/// ⇒ `DebugFlags.ringFlipStyle`:`flip3d`(默认,真透视)/ `squash`(纯 2D 压扁,不建 3D 上下文)/ `none` ✓
+/// 验完按结论把这里定成一个,另一个删掉 ✓(现在留着只为把嫌疑分开 ✓)
+struct RingFlipEffect: ViewModifier {
     let angle: Double
+    let progress: Double
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.32)
-            .opacity(angle == 0 ? 1 : 0.25)
+        if DebugFlags.ringFlipStyle == "squash" {
+            // 2D:只把高度压下去(cos 曲线与真翻转的投影一致 ✓),没有任何 3D 变换
+            content
+                .scaleEffect(y: max(cos(angle * .pi / 180), 0.02), anchor: .center)
+                .opacity(1 - 0.6 * progress)
+        } else {
+            // 3D:真透视翻转(现状)
+            content
+                .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0),
+                                  anchor: .center, perspective: 0.32)
+                .opacity(1 - 0.75 * progress)
+        }
     }
 }

@@ -208,7 +208,8 @@ struct BeamSwitch: View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(isOn ? SettingsTheme.beam : SettingsTheme.trackOff)
-                    .animation(SettingsMotion.tint, value: isOn)
+                    // ★ 2026-10-08:同上 —— 设置面板自己的动效也必须归 Glance 的开关管 ✓
+                    .animation(MotionPolicy.animation(SettingsMotion.tint), value: isOn)
                 Circle()
                     .fill(.white)
                     .frame(width: SettingsMetrics.switchKnob, height: SettingsMetrics.switchKnob)

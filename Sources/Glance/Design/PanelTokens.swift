@@ -173,6 +173,15 @@ enum PanelMetrics {
     /// 底色接管卡面,内容只留"结构"可辨(侧栏 / 终端网格 / 标签页)——"认窗"靠结构,
     /// "哪个 App"靠图标层,"哪一扇"靠标题芯片,三者都不受压色影响
     static let thumbWash: Double = 0.30
+
+    /// **换环翻牌的角度上限**(88° = 整条环翻到接近侧立)。
+    ///
+    /// ★ 2026-10-08 用户裁定:「先做 88° 的」。翻的**单位是整条环**(玻璃 + 图标同属一块牌 ✓),
+    ///   不是只翻图标 —— 旧实现把 `.transition` 挂在 iconStrip 上,于是"环先变形到位、然后只翻图标"
+    ///   ⇒ 用户实评「翻了个寂寞」✗
+    /// 90° 以上就会露背面(要 `backface-visibility` 那套),88° 刚好"侧立到看不见那一帧"：
+    ///   **换内容 + 换宽度都放在那一帧** ⇒ 长度差(缩短/拉长)由翻转自己交代 ✓ 且不新建第二块玻璃 ✓
+    static let ringFlipLimit: Double = 88
     /// 卡顶**雾檐**的渐变高度。
     /// 案底:2026-09-15 曾一路加到 78(那时渐变是可读性的**主力**,要盖过灯行并留余量);
     /// 2026-09-24 对齐「预览容器整体设计 Demo」收短到 k(26) —— 可读性主力改由红绿灯自己的
@@ -691,8 +700,10 @@ struct TrafficLights: View {
         //   蒙层语义 = macOS 的非激活窗口;hover 即选中 ⇒ 看着它的那张永远是亮的 ✓
         .saturation(dimmed ? 0 : 1)
         .opacity(dimmed ? 0.55 : 1)
-        .animation(.easeOut(duration: 0.18), value: hoveredDot != nil || !dimmed)
-        .animation(.easeOut(duration: 0.18), value: dimmed)
+        // ★ 2026-10-08:原来这两行是**裸动画** ⇒ 系统说什么就是什么,Glance 的动效设置管不着 ✗
+        //   (用户口径:「设置应该是全局的,应该应用在所有实现的动画上」✓)
+        .animation(MotionPolicy.animation(.easeOut(duration: 0.18)), value: hoveredDot != nil || !dimmed)
+        .animation(MotionPolicy.animation(.easeOut(duration: 0.18)), value: dimmed)
     }
 
     private func light(_ color: Color, _ symbol: String, _ hint: String,
@@ -746,8 +757,9 @@ struct TrafficLight: View {
                 // 未选中的蒙层在**整组**那一层(见 TrafficLights.body);这里只剩"禁用"置灰
                 .saturation(disabled ? 0 : 1)
                 .opacity(disabled ? 0.45 : 1)
-                .animation(.easeOut(duration: 0.12), value: hovering)
-                .animation(.easeOut(duration: 0.12), value: showsGlyph)
+                // ★ 同上:走 MotionPolicy(GET 放行时逐字不变 ✓ 跟随系统时降级成短淡出 ✓)
+                .animation(MotionPolicy.animation(.easeOut(duration: 0.12)), value: hovering)
+                .animation(MotionPolicy.animation(.easeOut(duration: 0.12)), value: showsGlyph)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // 焦点环全系统关闭(红绿灯永不长蓝框)
