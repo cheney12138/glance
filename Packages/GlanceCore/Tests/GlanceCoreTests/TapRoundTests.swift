@@ -217,7 +217,13 @@ final class TapRoundTests: XCTestCase {
         XCTAssertEqual(tr.resetIfStuck(now: 11.5), 0, "1s 之内不该自愈")
         let stale = tr.resetIfStuck(now: 12.5)
         XCTAssertGreaterThan(stale, 1.0, "超过 stuckLedgerAfter 必须自愈并报出卡的时长")
-        XCTAssertEqual(tr.snapshot(now: 12.5).fingerCount, 0, "自愈后账本要是干净的")
+        // 新契约(2026-10-08):自愈**只清账、不清轨迹** —— 触点还实实在在按着,
+        // 连轨迹一起清 = 把"按了很久"的证据洗掉 ⇒ 抬手的尾巴被当成轻点 ✗(病例见 ⑨)
+        XCTAssertEqual(tr.debugTracks.count, 1, "还按着的触点轨迹必须跨重置保活")
+        _ = tr.feed(frame(12.6))                             // 全离开 ⇒ 判卷(拒)⇒ 清账
+        _ = tr.judge(now: 12.6)
+        tr.endRound()
+        XCTAssertEqual(tr.snapshot(now: 12.6).fingerCount, 0, "真正收口后账本才是干净的")
     }
 
     func testStateOutsideOneToFourIsIgnored() {
@@ -438,5 +444,69 @@ final class TapRoundTests: XCTestCase {
         }
         out.append(TapRound.Frame(contacts: [], time: 0.16))   // 全部离开那一帧 = 判卷
         return out
+    }
+
+    // MARK: ⑨ 长按的尾巴不是轻点(2026-10-08 实报「三指误触」,日志 1126162–1129383)
+
+    /// 现场:三指按住 4s+ ⇒ 日志**连续 4 条**"账本 1.0s 未收口 ⇒ 强制重置",
+    /// 最后一发 `三指 180ms[state 4] 位移 norm=0.0028 → 唤起` ✗
+    /// 机制:自愈重置把"已经按了很久"连账本带轨迹一起洗 ⇒ 抬手的尾巴(落齐后 180ms/零位移)
+    ///   形状是教科书级轻点 ⇒ 误唤起。⇒ 轨迹(含落板时刻)跨重置保活 + **最老触点年龄门** ✓
+    /// ⚠️ 抬手必须落在"最后一次重置后 0.30s 内"—— 这才是现场的形状;
+    ///    离重置太远,时长门就先拒了,轮不到年龄门说话(那就不是误触 ✓)
+    func testLongPressTailAcrossSelfHealResetsIsNotATap() {
+        var tr = TapRound.Tracker()
+        var t = 0.0
+        var resets = 0
+        // 三指落齐、按住不动 3.2s+;每帧先 resetIfStuck(照 App `Press.feed` 的顺序 ✓)
+        while t < 3.24 {
+            if tr.resetIfStuck(now: t) > 0 { resets += 1 }
+            _ = tr.feed(frame(t, c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.54, 0.5)))
+            t += 0.04
+        }
+        XCTAssertGreaterThanOrEqual(resets, 2, "长按期间自愈必须反复发生(现场是 4 次)")
+        XCTAssertEqual(tr.debugTracks.count, 3, "重置再多次,还按着的触点轨迹也必须保活")
+        _ = tr.resetIfStuck(now: 3.28)
+        _ = tr.feed(frame(3.28))                             // 最后一次重置后 ~160ms 抬手(现场的形状)
+        let out = tr.judge(now: 3.28)
+        guard case let .rejected(reason) = out else { return XCTFail("长按的尾巴必须拒, 实际:\(out)") }
+        XCTAssertTrue(reason.contains("尾巴"), "理由要写明是年龄门挡的: \(reason)")
+    }
+
+    /// 四指长持同一个病:1.04s 处被重置一次,尾巴 160ms ⇒ 没有年龄门时会洗成"四指轻点" ✗
+    func testFourFingerLongHoldTailAcrossResetIsRejected() {
+        var tr = TapRound.Tracker()
+        var t = 0.0
+        while t < 1.18 {                                     // 落齐于 0;1.04s 处触发自愈重置
+            _ = tr.resetIfStuck(now: t)
+            _ = tr.feed(frame(t, c(1, 0.40, 0.4), c(2, 0.44, 0.4), c(3, 0.48, 0.4), c(4, 0.52, 0.4)))
+            t += 0.04
+        }
+        XCTAssertEqual(tr.debugTracks.count, 4, "重置后四条轨迹都要保活")
+        _ = tr.feed(frame(1.20))                             // 重置后 ~160ms 抬手
+        let out = tr.judge(now: 1.20)
+        guard case let .rejected(reason) = out else { return XCTFail("四指长持的尾巴也必须拒, 实际:\(out)") }
+        XCTAssertTrue(reason.contains("尾巴"), "理由要写明是年龄门挡的: \(reason)")
+    }
+
+    /// 掌搭着 2s(反复触发自愈重置)+ 三指快落快抬 ⇒ **照旧生效** ✓
+    /// 年龄门只数真手指,掌豁免触点不算 —— "搭掌点按"不能修没 ✗
+    /// (掌的形状选 size 5.2 / major 12:过**面积**豁免线 ⇒ isPalm ✓,但不撞"触点太大"门 ✓)
+    func testTapWithRestingPalmAcrossResetsStillFires() {
+        var tr = TapRound.Tracker()
+        var t = 0.0
+        while t < 2.0 {
+            _ = tr.resetIfStuck(now: t)
+            _ = tr.feed(frame(t, c(1, 0.30, 0.60, size: 5.2, major: 12)))
+            t += 0.04
+        }
+        // 三指快落快抬(掌始终搭着);最后连掌一起抬 —— 帧空才判卷 ✓
+        _ = tr.resetIfStuck(now: t)
+        _ = tr.feed(frame(t,        c(1, 0.30, 0.60, size: 5.2, major: 12), c(11, 0.5, 0.5), c(12, 0.52, 0.5)))
+        _ = tr.feed(frame(t + 0.04, c(1, 0.30, 0.60, size: 5.2, major: 12), c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.54, 0.5)))
+        _ = tr.feed(frame(t + 0.12, c(1, 0.30, 0.60, size: 5.2, major: 12), c(11, 0.5, 0.5), c(12, 0.52, 0.5), c(13, 0.54, 0.5)))
+        _ = tr.feed(frame(t + 0.16))
+        let out = tr.judge(now: t + 0.16)
+        guard case .fireThree = out else { return XCTFail("搭掌点按必须照旧生效, 实际:\(out)") }
     }
 }

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>换环翻牌 · 实验台 v2(整条环翻,不是只翻图标)</title>
+<style>
+  :root{
+    --icon: 44px; --gap: 10px; --r: 20px; --pad: 16px; --h: 104px;
+    --dur: 180ms; --persp: 760px; --lift: 7px;
+    --out: -88deg; --in: 88deg;   /* 88° = 掀起来;180° = 整张翻过去(右上角可切) */
+    --glass1: rgba(255,255,255,.20); --glass2: rgba(255,255,255,.10);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 70px;background:#1b1d21;color:#e6e8ea;
+       font:13px/1.6 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  h2{font-size:12.5px;margin:0 0 2px;font-weight:600}
+  .hint{color:#9aa1aa;font-size:12px;margin:0 0 12px;max-width:1120px}
+  .hint b{color:#e6e8ea}
+  .hint .bad{color:#ff9a8a}.hint .good{color:#7fd1a8}
+  kbd{font:600 11px/1 -apple-system;background:#2c3037;border:1px solid #3b414a;border-bottom-width:2px;
+      border-radius:4px;padding:1px 5px;margin:0 1px}
+
+  .bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 18px;
+       background:#242830;border:1px solid #31363f;border-radius:12px;padding:10px 14px}
+  .bar button{font:600 12px/1 -apple-system,"PingFang SC";padding:7px 13px;border-radius:8px;
+       border:1px solid #3b414a;background:#2f343c;color:#e6e8ea;cursor:pointer}
+  .bar button:hover{background:#39404a}
+  .bar label{font-size:12px;color:#9aa1aa;display:flex;align-items:center;gap:6px}
+  .bar input[type=range]{width:118px}
+  .bar b{color:#e6e8ea;min-width:56px;display:inline-block}
+
+  .board{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .case{background:#242830;border:1px solid #31363f;border-radius:14px;padding:14px 16px 16px;width:452px}
+  .case.want{border-color:#3d6b52;box-shadow:0 0 0 1px rgba(127,209,168,.25)}
+  .case .note{font-size:11.5px;color:#8b919a;margin:0 0 12px;min-height:74px}
+  .case .note b{color:#e6e8ea}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:6px;margin-bottom:6px}
+  .tag.ok{background:rgba(127,209,168,.16);color:#7fd1a8}
+  .tag.no{background:rgba(255,154,138,.14);color:#ff9a8a}
+
+  .desk{border-radius:12px;padding:26px 16px;display:flex;justify-content:center;
+        background:linear-gradient(135deg,#2b3038 0%,#3a4150 55%,#46403a 100%);
+        perspective:var(--persp);perspective-origin:50% 42%;overflow:hidden}
+
+  /* ── 环 = 一块"牌面"(玻璃 + 图标同属一个平面)──────────────── */
+  .stage{position:relative;width:100%;height:var(--h)}
+  .plane,.glass{position:absolute;top:0;left:0;right:0;margin:0 auto;width:fit-content;
+        border-radius:var(--r);padding:10px 18px 8px;
+        background:linear-gradient(180deg,var(--glass1),var(--glass2));
+        backdrop-filter:blur(26px) saturate(1.5);transform-style:preserve-3d;
+        box-shadow:0 14px 34px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.45),
+                   0 0 0 .5px rgba(255,255,255,.16);
+        backface-visibility:hidden;   /* 180° 那一档翻过去时不露镜像背面 */
+        transition:transform var(--dur) cubic-bezier(.45,.05,.55,.95), opacity var(--dur) linear}
+
+  /* A:两侧都翻,翻的是**整条环**(旧环带旧宽度、新环带新宽度 ⇒ 长度差自己就交代了) */
+  .stage.a .plane.old{z-index:3}
+  .stage.a .plane.new{z-index:2}
+  .stage.a.on .plane.old{transform:rotateX(var(--out));opacity:.03}
+  .stage.a .plane.new{transform:rotateX(var(--in));opacity:0}
+  .stage.a.on .plane.new{transform:rotateX(0deg);opacity:1}
+
+  /* B(现状的错法):玻璃**当拍**就变成新宽度,然后只有图标那层翻 ✗ */
+  .stage.b .glass{z-index:1;transition:width 0ms}
+  .stage.b .inner{position:absolute;top:0;left:0;right:0;margin:0 auto;
+        display:flex;align-items:flex-start;justify-content:center;transform-style:preserve-3d;
+        backface-visibility:hidden;
+        transition:transform var(--dur) cubic-bezier(.45,.05,.55,.95), opacity var(--dur) linear}
+  .stage.b .inner.old{z-index:3}
+  .stage.b.on .inner.old{transform:rotateX(var(--out));opacity:.05}
+  .stage.b .inner.new{transform:rotateX(var(--in));opacity:0}
+  .stage.b.on .inner.new{transform:rotateX(0deg);opacity:1}
+  .stage.b .inner{padding:10px 0 0}
+
+  /* C(上一轮那版,可对照):只有旧环翻,新环被露出来 */
+  .stage.c .plane.old{z-index:3}
+  .stage.c .plane.new{z-index:2;transform:none;opacity:1}
+  .stage.c.on .plane.old{transform:rotateX(var(--out));opacity:0}
+
+  /* ── 图标 ── */
+  .ring{display:flex;align-items:flex-start;gap:var(--gap);transform-style:preserve-3d}
+  .cell{width:var(--icon);display:flex;flex-direction:column;align-items:center;position:relative}
+  .art{width:var(--icon);height:var(--icon);border-radius:13px;display:flex;align-items:center;justify-content:center;
+       font-size:21px;font-weight:600;color:#fff;box-shadow:0 3px 8px rgba(0,0,0,.30)}
+  .cell.sel .art{transform:translateY(calc(-1 * var(--lift))) scale(1.14);
+       box-shadow:0 8px 18px rgba(0,0,0,.42), 0 0 0 2.5px rgba(255,255,255,.85)}
+  .cell.launch{height:var(--icon);justify-content:center}
+  .cell.launch .art{width:calc(var(--icon) * .76);height:calc(var(--icon) * .76);font-size:16px;border-radius:10px}
+  .cell.launch .ghost{position:absolute;inset:0;border-radius:13px;background:rgba(255,255,255,.30);
+       box-shadow:inset 0 0 0 .5px rgba(255,255,255,.42), 0 3px 8px rgba(0,0,0,.18)}
+  body.unify .cell.launch .ghost{display:none}
+  body.unify .cell.launch .art{width:var(--icon);height:var(--icon);font-size:21px;border-radius:13px}
+  .tally{display:flex;gap:3px;height:8px;margin-top:3px;align-items:center}
+  .tally i{width:4px;height:4px;border-radius:50%;background:rgba(255,255,255,.55);display:block}
+  .tally i.bar{width:9px;height:2.5px;border-radius:2px}
+  .seghead{text-align:center;font-size:10.5px;color:rgba(255,255,255,.62);
+           margin-top:6px;white-space:nowrap}
+
+  .qa{margin:26px 0 0;background:#242830;border:1px solid #31363f;border-radius:14px;padding:14px 18px;max-width:1120px}
+  .qa h2{margin:0 0 8px}
+  .qa ol{margin:0;padding-left:20px;font-size:12.5px;color:#b9c0c8}
+  .qa li{margin:6px 0}
+  .qa b{color:#e6e8ea}
+  .qa code{background:#2c3037;border-radius:4px;padding:1px 5px;font-size:11.5px;color:#9fd0b0}
+</style>
+</head>
+<body>
+<h1>换环翻牌 · 实验台 v2</h1>
+<p class="hint">
+  <b>你要的(①的行为 + 整条环翻):换环那一下,把「已启动的那条环」当成一张牌整块翻过去,「未启动的环」同时翻进来 ✓</b><br>
+  你说的现状 ✗ = 玻璃<b>先</b>当拍变成新宽度,<b>然后只有图标那一层翻</b> ⇒ 环早就不是原来那条了,翻的是"图标" ⇒ <span class="bad">翻了个寂寞</span> ✓<br>
+  <b>长度差(缩短/拉长)不用单独做动画</b>:旧环带着旧宽度翻出去、新环带着新宽度翻进来,长度差在翻转里<u>自己就交代了</u>;
+  真机上窗框本来就开着"两环更宽者"的宽度 ⇒ 全程<u>没有 AppKit 改尺寸</u> ⇒ 也就没有"抖"的风险 ✓<br>
+  按 <kbd>↓</kbd>/<kbd>↑</kbd>,或点按钮;时长拉到 <b>500ms 以上</b>看半途那一帧。
+</p>
+
+<div class="bar">
+  <button id="play">↓ 翻到未启动环(缩短)</button>
+  <button id="back">↑ 翻回主环(拉长)</button>
+  <label>时长 <input type="range" id="dur" min="80" max="800" step="20" value="180"><b id="durv">180ms</b></label>
+  <label>透视 <input type="range" id="persp" min="240" max="1800" step="20" value="760"><b id="perspv">760px</b></label>
+  <label><input type="checkbox" id="auto"> 自动循环</label>
+  <label><input type="checkbox" id="unify"> 未启动环也平铺(样式统一)</label>
+</div>
+
+<div class="board">
+  <div class="case want">
+    <span class="tag ok">要的就是这个</span>
+    <h2>A:整条环翻(玻璃 + 图标同属一块牌)</h2>
+    <p class="note">旧环 → 新环<b>两侧都在翻</b>,各带各的宽度 ⇒ 读到的是「<b>整条环翻过去、顺手变短了</b>」✓<br>
+      <span style="color:#7fd1a8">长度不一致在这版里不是问题 ✓ —— 它就是"牌面不一样宽"</span></p>
+    <div class="desk"><div class="stage a" id="a"></div></div>
+  </div>
+
+  <div class="case">
+    <span class="tag no">你说的现状</span>
+    <h2>B:玻璃先变形到位,然后只翻图标 ✗</h2>
+    <p class="note">玻璃宽度<b>当拍</b>已是新环的宽度 ⇒ 翻的时候"环"早就不是原来那条了,
+      所以只看见图标在翻 ⇒ <b>翻了个寂寞</b> ✗</p>
+    <div class="desk"><div class="stage b" id="b"></div></div>
+  </div>
+
+  <div class="case">
+    <span class="tag" style="background:rgba(255,255,255,.08);color:#b9c0c8">上一轮那版(已否)</span>
+    <h2>C:只有旧环翻,新环被露出来</h2>
+    <p class="note">留在这里只做对照 —— 你现在要的是 A</p>
+    <div class="desk"><div class="stage c" id="c"></div></div>
+  </div>
+</div>
+
+<div class="qa">
+  <h2>再拍四句就动手</h2>
+  <ol>
+    <li><b>确认翻的单位</b>:A ✓ 整条环(玻璃 + 图标一起翻)—— 对吧?</li>
+    <li><b>翻多少</b>:<label><input type="radio" name="meta" value="88" checked> <b>88°</b>(掀起来就回来,幅度小、快)</label>
+      &nbsp;<label><input type="radio" name="meta" value="180"> <b>180°</b>(整张牌翻过去,更"老虎机")</label></li>
+    <li><b>方向</b>:<kbd>↓</kbd> 去未启动时,旧环是<b>往上翻</b>还是<b>往下翻</b>?(现在代码里是"旧环往上、新环从下往上进来";<kbd>↑</kbd> 返回时反向 ✓)</li>
+    <li><b>下面那块托盘(窗口卡)怎么办</b>:现在是<b>当拍换</b>(不参与翻牌)✓ 要不要也跟一环翻/淡?</li>
+  </ol>
+  <p style="font-size:12px;color:#8b919a;margin:10px 0 0">
+    样式统一那条仍然算数:整条环翻的时候,两环会短暂同屏 ⇒ 未启动环的「幽灵格子 + 图标 0.76」
+    与主环「裸图标铺满」的差别会被看见 ⇒ 勾上面的开关对照后选一个 ✓
+    <br>另:这一版翻牌仍<b>必须写成参数驱动</b>(不能用 <code>.transition</code> —— 系统「减弱动态效果」会把它降级,而 Glance 的设置管不到 ✓)
+  </p>
+</div>
+
+<script>
+const MAIN = [
+  ["Ghostty","#223046","G"],["Code","#2f6fd0","</>"],["Chrome","#e8e8e8","◍"],
+  ["Safari","#1f7fe0","◈"],["微信","#25c55a","✆"],["Finder","#3f8ef0","☺"],["CatPaw","#1aead2","🐾"],
+];
+const LAUNCH = [["网易云","#e5342c","♪"],["Pear","#c8d94a","🍐"],["zoom","#2d8cff","z"],
+                ["DataGrip","#7b3ff0","◆"],["M","#2f6fd0","m"],["活动","#123a24","∿"]];
+
+function cell(a, i, launch){
+  if (launch) return `<div class="cell launch"><div class="ghost"></div>
+      <div class="art" style="background:${a[1]}">${a[2]}</div></div>`;
+  const tally = (i % 3 === 0) ? '<i></i><i></i>' : (i % 4 === 0 ? '<i class="bar"></i>' : '<i></i>');
+  return `<div class="cell${i === 0 ? " sel" : ""}"><div class="art" style="background:${a[1]}">${a[2]}</div>
+          <div class="tally">${tally}</div></div>`;
+}
+const ring  = (list, launch) => `<div class="ring">${list.map((a,i)=>cell(a,i,launch)).join("")}</div>`;
+const head  = `<div class="seghead">未启动的 App · ↑ 返回 / Tab 继续</div>`;
+const newBody = () => ring(LAUNCH, true) + head;
+
+document.getElementById("a").innerHTML =
+  `<div class="plane old">${ring(MAIN,false)}</div><div class="plane new">${newBody()}</div>`;
+document.getElementById("c").innerHTML =
+  `<div class="plane new">${newBody()}</div><div class="plane old">${ring(MAIN,false)}</div>`;
+document.getElementById("b").innerHTML =
+  `<div class="glass" id="bglass"></div>
+   <div class="inner old">${ring(MAIN,false)}</div>
+   <div class="inner new">${newBody()}</div>`;
+
+const stages = [...document.querySelectorAll(".stage")];
+let on = false;
+
+// B 组专用:玻璃宽度**当拍**变成新环的宽度(这正是"现状"的错法)
+function fitB(){
+  const g = document.getElementById("bglass");
+  const src = document.querySelector(on ? "#b .inner.new .ring" : "#b .inner.old .ring");
+  const w = Math.max(src.scrollWidth, 2 * 18 + 60);
+  g.style.width = (w + 36) + "px";
+  g.style.height = "var(--h)";
+}
+function setAll(next){
+  on = next;
+  stages.forEach(s => s.classList.toggle("on", on));
+  fitB();
+}
+document.getElementById("play").onclick = () => setAll(true);
+document.getElementById("back").onclick = () => setAll(false);
+
+document.getElementById("dur").oninput = e => {
+  document.documentElement.style.setProperty("--dur", e.target.value + "ms");
+  document.getElementById("durv").textContent = e.target.value + "ms";
+};
+document.getElementById("persp").oninput = e => {
+  document.documentElement.style.setProperty("--persp", e.target.value + "px");
+  document.getElementById("perspv").textContent = e.target.value + "px";
+};
+document.getElementById("unify").onchange = e => {
+  document.body.classList.toggle("unify", e.target.checked);
+  fitB();
+};
+document.querySelectorAll('input[name=meta]').forEach(r => r.onchange = e => {
+  const full = e.target.value === "180";
+  document.documentElement.style.setProperty("--out", full ? "-180deg" : "-88deg");
+  document.documentElement.style.setProperty("--in",  full ?  "180deg" :  "88deg");
+});
+
+let timer = null;
+document.getElementById("auto").onchange = e => {
+  clearInterval(timer);
+  if (e.target.checked) timer = setInterval(() => setAll(!on), 1200);
+};
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { setAll(true);  e.preventDefault(); }
+  if (e.key === "ArrowUp")   { setAll(false); e.preventDefault(); }
+});
+fitB();
+</script>
+</body>
+</html>

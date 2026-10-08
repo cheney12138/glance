@@ -83,24 +83,22 @@ final class PanelController: ObservableObject {
     //  后浮"。当晚用户拍板把遮罩改成容器自己的静态雾檐(PanelColors.thumbHaze)——不再有
     //  任何图像派生的座 ⇒ 订阅与 SeatImageCache 一并退役,后浮从根上不存在 ✓。)
 
-    /// 指针在「面板内容坐标」(PanelView 里那个 ZStack 的坐标系,原点左上、y 向下)里的位置。
+    /// **光晕的圆心 = 选中那一格的中心**(面板内容坐标 —— 与视图里那个 `Canvas` 同一个坐标系 ✓)。
     ///
-    /// 光晕每帧问一次这里 —— **不走鼠标事件**:面板是 nonactivating,永不成 key,
-    /// AppKit 的 mouseMoved 只投给 key 窗口,监听/追踪区都收不到(上一版光晕从来没亮过就是这原因)。
-    /// `NSEvent.mouseLocation` 是全局读数,与 key、与有没有事件都无关。
-    /// 返回 nil = 指针不在面板上(或面板正在退场)
-    func pointerInContent() -> CGPoint? {
-        guard let panel, isVisible, !panel.ignoresMouseEvents else { return nil }
-        let size = contentSize()
-        guard size.width > 0, size.height > 0 else { return nil }
-        // 窗口坐标 y 向上;内容区在窗口里还要扣掉四周的阴影呼吸区
-        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let p = CGPoint(
-            x: local.x - PanelMetrics.shadowPadStrip,
-            y: panel.frame.height - local.y - PanelMetrics.shadowPadStrip
-        )
-        guard p.x >= 0, p.y >= 0, p.x <= size.width, p.y <= size.height else { return nil }
-        return p
+    /// ★ 2026-10-08 用户裁定:「高光不该跟着指针跑 —— 只按取色算法晕染**当前选中的 App**,
+    ///   指针怎么移动都不影响它」✓(实拍:那团光出现在指针所在的空格子里,而不是选中图标周围 ✗)
+    ///   ⇒ 位置与颜色由此**同源**:都取自"当前选中"这一件事 ✓
+    ///   (原来位置走 `NSEvent.mouseLocation`、颜色走 `sheenTint` —— 两个源,所以会各跑各的 ✗)
+    ///
+    /// X 与托盘锚点/确认涟漪同源(`PanelLayout.iconCenterX`)—— 三处各算一遍必然有一处歪着 ✓;
+    /// y = 选中图标(含 14pt 上浮)的中心,与涟漪那条口径一字不差 ✓
+    /// 视图每 30Hz 问一次 ⇒ 必须便宜:这里只有一次算术(没有事件、没有查询 ✓)
+    func sheenCenterInContent() -> CGPoint? {
+        guard isVisible, !entrySelected, groups.indices.contains(appIndex) else { return nil }
+        guard ringFlipAngle == 0 else { return nil }      // 翻牌期间不画:圆心正在变宽,画了会飘 ✗
+        let x = PanelLayout.iconCenterX(appIndex: appIndex, appCount: groups.count,
+                                        contentWidth: contentSize().width)
+        return CGPoint(x: x, y: PanelMetrics.rowPadY + PanelMetrics.icon / 2 - PanelMetrics.iconLift)
     }
 
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
@@ -153,6 +151,23 @@ final class PanelController: ObservableObject {
     /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
     @Published private(set) var segmentTravel: SegmentTravel = .direct
 
+    /// **整条环的翻牌角度**(0 = 正对;±`PanelMetrics.ringFlipLimit` = 侧立)。
+    ///
+    /// ★ 2026-10-08 用户口径:「换环要**整条环**翻(玻璃 + 图标一起),不是只翻图标」+「先做 88°」。
+    ///   为什么自己做而不用 `.transition`:系统「减弱动态效果」开着时 SwiftUI 会**自己**把过渡
+    ///   降级成淡入淡出,而 `\.accessibilityReduceMotion` 是**只读**的、覆盖不了 ✗
+    ///   ⇒ 用户实报「Glance 里开了强制完整动效,换环的翻牌还是只剩环变形」✗
+    ///   ⇒ 改成参数驱动(与托底 PuckView 同一套哲学):**设置说什么就是什么** ✓
+    @Published private(set) var ringFlipAngle: Double = 0
+
+    /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
+    /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
+    @Published private(set) var ringFlipTarget = false
+    /// 每次换环 +1;收尾回调靠它判过期(又按了一次 ⇒ 旧回调丢弃 ✓)
+    private var ringFlipToken = 0
+    /// 已经走完"侧立那一拍"的 token(兜底定时与完成回调谁先到都只算一次 ✓)
+    private var ringFlipMidDone = -1
+
     /// "换环进行中"的窗口(2026-09-22):托盘内容在换环那一拍要**当拍**换(与环的翻牌同步 ✓),
     /// 而 hover 换组时要**滑**(用户实报「hover app 托盘只会闪现, 没有滑动了」✓)。
     /// 用时间窗而不是开关:换环是同步一瞬间的事,没有"结束"回调可挂 ✓
@@ -201,6 +216,8 @@ final class PanelController: ObservableObject {
     /// 这里只做几何 + 等值预判 —— 每帧都进 hoverApp 会把 bumpIdle 的闲置计时天天清零,
     /// "指针停在面板上 = 永不闲置"是顺手改出来的语义,不是设计(见 bumpIdle)。
     func pollRingHover() {
+        // ★ 换环翻牌期间指针轮询跳过:此刻"哪一环"还在切换中,算出来的格子属于旧环 ✗
+        guard ringFlipAngle == 0 else { return }
         guard isVisible, hintText == nil,
               let panel, panel.isVisible, !panel.ignoresMouseEvents,
               let glass = panelContentRect() else { return }
@@ -361,6 +378,7 @@ final class PanelController: ObservableObject {
     func handle(_ action: HotkeyTapCenter.Action) {
         bumpIdle()
         noteKeyboardAction()   // 键盘发言:此后指针的旧位移不再有优先权(谁后动听谁)
+        finishRingFlip()       // ★ 翻牌还没落地就来新输入 ⇒ 先把这一发收尾,动作再照常执行 ✓
         switch action {
         case .begin: begin(reverse: false)
         case .beginReverse: begin(reverse: true)
@@ -1177,6 +1195,10 @@ final class PanelController: ObservableObject {
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——
         // 不拦的话枚举回来会把面板在放弃之后又冒出来
         beginGeneration &+= 1
+        // 换环翻牌:散场时作废"侧立那一拍"的回调并把角度归零
+        // (不作废 ⇒ 它会在下一局开始后突然把环换掉 ✗;角度不归零 ⇒ 下次唤起是歪的 ✗)
+        ringFlipToken += 1
+        ringFlipAngle = 0
         removeOutsideClickMonitor()
         entrySelected = false
         launchIndex = nil
@@ -1277,7 +1299,12 @@ final class PanelController: ObservableObject {
         // 开局就能算(纯算术,按键那一刻只是查表)。用户裁定:「肯定计算两套尺寸效果会更好」——
         // "少的后面全空着"与"多的把图标挤小"两条路都不接受。
         // 数量少时**靠左**(与主环第一格对齐 ⇒ 读作"环短了"),格子尺寸与间距一个都不动。
-        let w = ringContentWidth(launch: entrySelected)
+        // ⚠️ 宽度**不许逐帧改**:原生玻璃每帧 resize 一样会掉材质(实测 ✗)
+        //   ⇒ 它只在"换环那一帧"(内容侧立、看不见)变**一次** ✓
+        //   `debug.ringWidthMode = fixed` 时干脆**一辈子不变**(恒等于两环的宽者)⇒ 消元用 ✓
+        let w = DebugFlags.ringWidthMode == "fixed"
+            ? ringWindowWidth()
+            : ringContentWidth(launch: entrySelected)
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
         return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
     }
@@ -1807,6 +1834,8 @@ final class PanelController: ObservableObject {
     /// 升级成每帧兜底后必须自己会走多行网格(行距 = 卡高 + 行隙,行内左对齐,
     /// 与 thumbGrid 的 VStack/HStack 同一分布)。
     private func resyncSelectionUnderPointer() {
+        // ★ 换环翻牌期间指针轮询跳过:此刻"哪一环"还在切换中,算出来的格子属于旧环 ✗
+        guard ringFlipAngle == 0 else { return }
         guard isVisible else { return }
         samplePointer()                                        // 托盘帧拍每帧路过:顺手采样指针位移
         guard pointerMayTakeOver() else { return }             // 键盘后动中,指针停着不许抢(与 hover 同一道闸)
@@ -2309,33 +2338,95 @@ final class PanelController: ObservableObject {
     /// `forward`/`backward` = Tab/⇧Tab 沿环走(内容横滑,行进感);`direct` = ↓/↑ 跳段(淡切)。
     enum SegmentTravel { case forward, backward, direct }
 
-    /// 跨段过渡的时长。窗口(AppKit)与内容(SwiftUI)用**同一根曲线同一段时长**,
-    /// 两边才会读成一次变形而不是两层各动各的。系统"减弱动态效果"时 MotionPolicy 给 nil ⇒ 双边都瞬时。
-    /// (0.22 → 0.18:双系统相位差的表现随帧数走,短一点抖动窗口就小 —— 2026-09-18 抖动病例)
-    private static var segmentAnimation: Animation? {
-        // 🔬 消元开关:确认"换段动画"是不是那个把托盘卡片动画着挪位置的元凶。
-        //   `defaults write com.cheney12138.macswitcher debug.noSegmentAnim -bool true`
-        if DebugFlags.noSegmentAnim { return nil }
-        return MotionPolicy.animation(.easeInOut(duration: 0.18))
+    /// 换环翻牌的**一半时长**(翻出去 / 翻进来各一半,合计 = `debug.ringFlipDurationMs` 默认 180ms ✓)
+    private static var flipHalfSeconds: Double { max(0.03, Double(DebugFlags.ringFlipDurationMs) / 2000) }
+    /// 整段时长(给"换环进行中"那个时间窗用 ✓)
+    private static var flipSeconds: Double { 2 * flipHalfSeconds }
+
+    private static func flipAnimation(_ full: Animation) -> Animation? {
+        if DebugFlags.noSegmentAnim { return nil }        // 消元开关:关掉换环动效(当拍换)
+        return MotionPolicy.animation(full, reduced: flipHalfSeconds)
     }
 
-    /// 段切换的唯一入口(模型 C):状态翻转走 withAnimation(SwiftUI 侧玻璃/内容跟着变形),
-    /// 窗框走 applyRingSwap(animated:) 同一根曲线 —— 内容与玻璃一次变形完成。
+    /// **侧立那一拍**:换内容 + 换长度都放在这里(各只做一次 ✓)。
+    ///
+    /// 为什么必须挤在这一帧(两轮截图验过的两条硬约束):
+    ///   ① 玻璃**不能转**(一转材质就掉 ✗);② 玻璃**不能逐帧 resize**(每帧改宽度同样掉材质 ✗)
+    ///   ⇒ 唯一能改宽度的时刻:内容侧立(看不见)的那一帧 ✓ 长度差因此由"翻转中途顺手变短/变长"交代 ✓
+    private func ringFlipSwitch(token: Int) {
+        guard ringFlipToken == token, ringFlipMidDone != token else { return }
+        ringFlipMidDone = token
+        traceCost("翻牌换环那一帧") {
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) {
+                entrySelected = ringFlipTarget
+                // 反相:新环从**另一侧**翻进来(与旧 asymmetric transition 的方向一字不差 ✓)
+                ringFlipAngle = ringFlipAngle > 0 ? -PanelMetrics.ringFlipLimit : PanelMetrics.ringFlipLimit
+            }
+            applyRingSwap(animated: false)      // 内容 + 宽度**同一拍**(实验台 ⑤)✓
+        }
+        trace("[翻牌] 换环那一帧 · 现在是\(entrySelected ? "未启动环" : "主环") · 玻璃宽 \(Int(contentSize().width))pt")
+        withAnimation(Self.flipAnimation(.easeOut(duration: Self.flipHalfSeconds))) {
+            ringFlipAngle = 0
+        }
+    }
+
+    /// **翻牌还没落地就来新输入 ⇒ 先把这一发当拍收尾**,动作再照常执行 ✓
+    ///   ① 不许吞输入(本仓纪律:"意图已被接受就必须执行" ✓);
+    ///   ② 连按 ↓↑ 不会半路换错内容(收尾 + 随后开新一发;过期回调由 token 丢弃 ✓);
+    ///   ③ 输入"先到"、画面"还没到"时,判定一律按**目标环**(按了 ↓ 就是想去未启动 ✓)
+    func finishRingFlip() {
+        guard ringFlipAngle != 0 else { return }
+        ringFlipToken += 1
+        ringFlipMidDone = ringFlipToken
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { entrySelected = ringFlipTarget }
+        ringFlipAngle = 0
+        applyRingSwap(animated: false)
+    }
+
+    /// 段切换的唯一入口。
+    ///
+    /// ★★ 2026-10-08 定版(**用户裁定 A**):**玻璃不参与翻转**。
+    ///   硬约束:原生玻璃一旦被 3D 变换,材质就掉(变一块暗板,角度回 0 才长回来 ✗)——
+    ///   SwiftUI 的 `.rotation3DEffect` 与"在 AppKit 层转整个窗口内容层"两种实现都验过,一样掉 ✗;
+    ///   它由 WindowServer 按窗口几何合成,转出平面即失效 ✓
+    ///   ⇒ "整条环翻过去"与"材质不掉"在这个材质上天然冲突 ⇒ 用户选 A:
+    ///     翻的只有**环里的内容**(两块牌面同时演 ✓),玻璃只做**平滑变宽/变窄**,
+    ///     两环长度差由玻璃自己交代 ✓ 材质全程完好 ✓
+    ///   窗框仍然**一动不动**(一局的窗框按"两环更宽者"开 ✓)⇒ 没有双动画系统 ⇒ 不抖 ✓
     private func setSegment(_ toLaunch: Bool, travel: SegmentTravel, launchIndex target: Int?) {
         segmentTravel = travel
-        ringSwapUntil = CFAbsoluteTimeGetCurrent() + 0.35   // 这一拍托盘内容当拍换(见 isRingSwapInFlight)
-        // ★★ 2026-09-22 用户实报:「上下切换的时候, 环有抖动。应该是变形导致的, 直接 3/4 唤起打开是没问题的」
-        //   —— 说的就是**双动画系统的相位差**(见 applyRingSwap 里那段"已知成本"的注释):
-        //      AppKit 动窗框(0.18s easeInOut)+ SwiftUI 动内容,两条时间线不可能逐帧对齐 ⇒ 抖 ✗。
-        //   既然用户早定过「任何场景都不要的动效 = 直接毙掉」(换段横向位移就是这么砍的),这里同办:
-        //   **换环不补间、当拍到位** —— 窗框瞬时改尺寸(与"关闭要已经没了"同一纪律 ✓)、内容瞬时换 ✓
-        //   ⇒ 相位差这个东西**从构造上就不存在了** ✓(不是"压小",是"没有" ✓)
-        //   注:入场(唤起那一刻)的上浮照旧(carried by contentEntryRise ✓),换环不是入场 ✓
-        withAnimation(Self.segmentAnimation) {   // 内容滑(单系统 ✓)
-            entrySelected = toLaunch
-            launchIndex = target
+        // 已经是那一环、也没有正翻着它 ⇒ 只更新段内选中,不翻牌 ✓
+        if entrySelected == toLaunch, ringFlipTarget == toLaunch {
+            if toLaunch, let t = target { launchIndex = t }
+            return
         }
-        applyRingSwap(animated: false)           // 窗框当拍改尺寸(不补间 ⇒ 没有相位差 ⇒ 不抖 ✓)
+        ringFlipTarget = toLaunch
+        if toLaunch, let t = target { launchIndex = t }    // 段内选中先记下(进段前不可见 ⇒ 无观感影响 ✓)
+        ringFlipToken += 1
+        let token = ringFlipToken
+        // 托盘(窗口卡/启动行)在换环这一拍**当拍换** ⇒ 窗口窗开到整段翻完 ✓(见 isRingSwapInFlight)
+        ringSwapUntil = CFAbsoluteTimeGetCurrent() + Self.flipSeconds + 0.2
+        let sign: Double = (travel == .forward) ? 1 : -1   // ↓ 往上翻;↑/反向 ⇒ 反着翻 ✓
+        if DebugFlags.ringFlipStyle == "none" {              // 消元:不翻,当拍换(用来判"翻牌是不是元凶" ✓)
+            entrySelected = toLaunch
+            ringFlipAngle = 0
+            applyRingSwap(animated: false)
+            trace("[翻牌] style=none ⇒ 当拍换(不翻)")
+            return
+        }
+        trace("[翻牌] \(toLaunch ? "主环 → 未启动环" : "未启动环 → 主环") · 88°×2 · 每半 \(Int(Self.flipHalfSeconds * 1000))ms")
+        // ① 环里那块容器翻出去(玻璃不动 ✓)
+        withAnimation(Self.flipAnimation(.easeIn(duration: Self.flipHalfSeconds))) {
+            ringFlipAngle = sign * PanelMetrics.ringFlipLimit
+        }
+        // ② 侧立那一拍:换内容 + 换长度(看不见 ✓),再反相翻进来
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.flipHalfSeconds) { [weak self] in
+            self?.ringFlipSwitch(token: token)
+        }
     }
 
     private func applyRingSwap(animated: Bool = false) {
@@ -2937,6 +3028,7 @@ final class PanelController: ObservableObject {
     /// 新顺序:先 `orderOut`(啪一下就没 —— 与"取消淡出"那次的用户口径一致 ✓),**之后再聚焦** ✓
     /// 代价:旧 App 会露出来几十毫秒 —— 那正是原生切换器的观感,也是用户要的"跟手" ✓
     func confirmSelection() {
+        finishRingFlip()   // 同上:点击/回车都可能在翻牌途中到(判定按目标环 ✓)
         // 启动区(方案 E):入口槽选中 = 没有可生效之物(它在等用户进到某格),no-op;
         // 启动图标选中 = **启动并激活**,面板即关(与「确认」的"生效即散场"同款)。
         // 启动失败的兜底在 DockAppsProvider.launch 的日志里 —— 面板已经关了,不回头等

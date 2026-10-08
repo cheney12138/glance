@@ -71,6 +71,22 @@ enum MotionPolicy {
     /// 只影响动效,不影响任何状态与逻辑。
     static var summonQuiet = false
 
+    /// **框架自己那套降级,我们覆盖不了**(2026-10-08 消元结论,值得记牢)。
+    ///
+    /// 用户实报:「Glance 里已打开**强制完整动效**,但换环的翻牌只在系统动效开着时才演,
+    ///   把系统动效关掉就只剩环变形了」⇒ 设置只生效了一部分 ✗
+    /// 消元:全仓读系统 reduce-motion 的只有本文件(`systemReduced`),而当时它是**放行**的
+    ///   (alwaysAnimate=1 ⇒ `reduced`=false ⇒ `animation()` 给的是完整 easeInOut ✓)
+    ///   ⇒ 丢的那一半**不归我们的代码管** ✓ —— 它在框架里:SwiftUI 遇到系统「减弱动态效果」
+    ///   会自己把**过渡(transition)**降级成淡入淡出(Apple 的指引正是"别位移,改淡");
+    ///   而**参数动画**(`.animation(_, value:)` / `withAnimation` 改一个数)不受影响 ✓
+    ///   —— 证据就在用户同一句话里:同一次 `withAnimation` 里,环变形(参数 ✓)还在演,
+    ///      翻牌(`.transition` ✗)没了 ✓✓
+    /// 试着"把决定写回环境值" ⇒ **编译不过**:`\.accessibilityReduceMotion` 是**只读**的
+    ///   (`KeyPath` 不是 `WritableKeyPath`)⇒ 框架这一层没有 API 能覆盖 ✗
+    /// ⇒ 结论:**凡是"设置必须管得住"的动效,不许用 `.transition`,要写成参数驱动的** ✓
+    ///   (PuckView 的托底早就是这么做的那一套 ✓ 见那里"参数归零"的注释)
+
     /// 取动效:正常给弹簧;降级给一记短淡出(不位移、也不硬跳)
     static func animation(_ full: Animation, reduced reducedDuration: Double = 0.16) -> Animation? {
         if summonQuiet { return nil }            // 唤起静音期:瞬时到位(见 summonQuiet 的注释)
