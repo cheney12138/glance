@@ -1066,6 +1066,7 @@ final class PanelController: ObservableObject {
         // ★ 渐入的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
         var popInstant = Transaction()
         popInstant.disablesAnimations = true
+        trayShownOnce = false        // 新一局:托盘"首次上屏"这一笔重新记(见上面那行日志 ✓)
         withTransaction(popInstant) { entryFadeProgress = summonFadeEnabled ? 0 : 1 }
         if hintText != nil {
             DispatchQueue.main.async { [weak self, weak panel] in
@@ -1755,6 +1756,9 @@ final class PanelController: ObservableObject {
     /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
     private var trayOverflowLogged = false
 
+    /// 托盘本局是否已经上屏过(只为上面那行日志:区分"首次渐入"与"后续更新" ✓)
+    private var trayShownOnce = false
+
     /// 托盘正中 = 长条正中(demo 的 .switcher-wrap 是 column 居中,托盘不跟图标滑移);
     /// 超界时**只在玻璃层面**收进语境屏;视觉缝 = seam。
     ///
@@ -1877,6 +1881,14 @@ final class PanelController: ObservableObject {
         guard let previewPanel else { return }
         // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
         // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
+        // ★ 2026-10-08 可观测:托盘上屏这一拍,人眼看到的"它是不是从淡到实"取决于
+        //   ① 此刻入场进度(entryFadeProgress,0 = 全透明)② 它是不是第一次上屏。
+        //   这两件事以前只能靠盯屏猜 ⇒ 打一行(只在**真正转场**时打,不是每帧 ✓)
+        if isTraceEnabled, previewPanel.alphaValue < 0.5 || !trayShownOnce {
+            glog(String(format: "[托盘] 上屏 · 入场进度 %.2f · 首次=%@(与环同一个源 ✓)",
+                        entryFadeProgress, trayShownOnce ? "否" : "是"))
+        }
+        trayShownOnce = true
         previewPanel.alphaValue = 1
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
@@ -3379,6 +3391,7 @@ final class ChromeWindow {
 
     /// 新一局开始:重新允许上屏 ✓(与 `teardown()` 配对 —— 见 `place()` 的病例)
     func beginSession() { sessionEnded = false }
+
 
     /// 内容显隐:只改图层属性(微秒级 ✓)
     func setContentHidden(_ on: Bool) {

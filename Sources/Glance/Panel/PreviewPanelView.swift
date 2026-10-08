@@ -53,6 +53,12 @@ struct PreviewPanelView: View {
             // 其余(hover 换组 / 键盘换格)⇒ 保留短弹簧 ⇒ 内容**滑**过去而不是闪现 ✓
             if controller.isRingSwapInFlight { t.animation = nil }
         }
+        // ★★ 2026-10-08(用户:「**预览容器没有渐入**, 跟环有点脱节, 稍微一点点」):
+        //   环在入场时是整块渐入(`PanelController.entryFade` ⇒ PanelView 的 `.opacity`)✓,
+        //   而托盘是**另一扇窗**,它上屏时直接 `alphaValue = 1` ⇒ 内容"啪"一下就到位 ✗
+        //   ⇒ 让它跟环用**同一个进度**(不是各写一套时长:同一个源 ⇒ 永远同步 ✓)
+        //   两个窗,一个源 —— 这是"两套东西必须同源"的老规矩在这条路上的又一次应用 ✓
+        .opacity(controller.entryFade)
         // ★★ 2026-09-21 用户裁定:「把背景的圆角矩形撤掉 —— 就是最外面那一层,只要单个卡片容器和下面的芯片」
         // 原状:托盘 = 一大块圆角玻璃(GlassBackground + 圆角裁剪 + 受光边/内阴影 + tray 阴影),
         //   卡片与芯片都画在这块玻璃上 ⇒ 换组时"玻璃不动、里面的东西动"看得特别清楚 ✗
