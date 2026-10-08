@@ -44,6 +44,10 @@ enum Keys {
     /// `debug.ringFlipDurationMs` —— 换环翻牌的**总时长**(毫秒;默认 180 = 与原来那段同长 ✓)
     /// 翻出去/翻进来各占一半(easeIn / easeOut)⇒ 两半读起来是一次动作 ✓ 0 = 不动效(当拍换)
     static let debugRingFlipDurationMs = "debug.ringFlipDurationMs"
+    /// `panel.summonPop` —— 唤起时"轻轻收一下"(Spotlight 那种:略大 → 落定 ✓)
+    static let panelSummonPop = "panel.summonPop"
+    /// `debug.summonPop` —— 唤起轻弹的**起始倍率**(默认 1.04 = 先大 4%;1.0 = 关)
+    static let debugSummonPop = "debug.summonPop"
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:
@@ -182,6 +186,7 @@ extension Keys {
 enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true
+    static let summonPop = true
     /// 展示 Dock 常驻应用。**开**:未启动的 App 也能在环尾找到 ✓
     static let showLaunchables = true
     /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓

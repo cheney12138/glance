@@ -164,6 +164,23 @@ final class PanelController: ObservableObject {
     /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
     @Published private(set) var ringFlipTarget = false
 
+    /// **唤起轻弹的进度**(0 = 起点(略大),1 = 落定)。
+    ///
+    /// ★ 2026-10-08:用户提「Spotlight 唤起有个 Q 弹的动效」⇒ 按 Apple 录屏**逐帧量**出来的参数实现:
+    ///   起始比最终宽 ~7%、130ms 内 ease-out 收位、并快速淡入 ✓(与我第一版"从小涨大"的方向相反 ✓)
+    /// ⚠️ 只作用于**环里那块内容**,不动玻璃 —— 原生玻璃不能被变换(材质会掉 ✗)
+    /// ⚠️ 起跳**延后一拍**(见 showPanel):提前起跳会踩 AppKit 的"Update Constraints in Window pass"
+    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一还没试过的活路 ✓)
+    @Published private(set) var entryPop: Double = 1
+
+    private var summonPopEnabled: Bool {
+        let on = UserDefaults.standard.object(forKey: Keys.panelSummonPop) as? Bool ?? KeyDefaults.summonPop
+        return on && abs(DebugFlags.summonPop - 1.0) > 0.001
+    }
+
+    /// 视图用的缩放:**1.04 → 1.0**(起始略大,收到位 ✓ —— 与 Apple 实测同向 ✓)
+    var entryPopScale: Double { 1 + (DebugFlags.summonPop - 1) * (1 - entryPop) }
+
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///
     /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
@@ -1037,6 +1054,10 @@ final class PanelController: ObservableObject {
         // 先上屏的会是上一局画好的旧视图(环)。正常召唤仍走同步:**零延迟是常态的纪律**,
         // 只有"说话局"这个例外晚一拍 —— 那一局只是说一句话,16ms 没人感觉得到。
         // ⚠️ 散场守卫必须带:这一拍里若 dismiss 过,绝不能把已拆的窗再 orderFront 回来。
+        // ★ 唤起轻弹的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
+        var popInstant = Transaction()
+        popInstant.disablesAnimations = true
+        withTransaction(popInstant) { entryPop = summonPopEnabled ? 0 : 1 }
         if hintText != nil {
             DispatchQueue.main.async { [weak self, weak panel] in
                 guard let self, let panel, self.isVisible else { return }
@@ -1044,6 +1065,14 @@ final class PanelController: ObservableObject {
             }
         } else {
             panel.orderFrontRegardless()
+        }
+        // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
+        //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
+        if summonPopEnabled {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isVisible else { return }
+                withAnimation(MotionPolicy.entrance(PanelMotion.summonPop)) { self.entryPop = 1 }
+            }
         }
         // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)
 

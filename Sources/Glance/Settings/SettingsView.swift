@@ -83,6 +83,7 @@ struct SettingsView: View {
     @AppStorage(Keys.panelPinOnRelease) private var pinPanel = KeyDefaults.pinOnRelease
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
     @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = KeyDefaults.alwaysAnimate
+    @AppStorage(Keys.panelSummonPop) private var summonPop = KeyDefaults.summonPop
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
@@ -396,6 +397,9 @@ struct SettingsView: View {
                 }
                 SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
+                }
+                SettingsRow(title: "唤起轻弹", desc: "面板出现时轻轻收一下。", hairline: false) {
+                    BeamSwitch(isOn: $summonPop)
                 }
             }
         }

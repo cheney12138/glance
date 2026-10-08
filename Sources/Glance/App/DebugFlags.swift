@@ -87,6 +87,12 @@ enum DebugFlags {
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
+    /// **唤起轻弹的起始倍率**(默认 **1.04** = 先大 4% 再收到位)。
+    /// 数来自 Apple 真机实测(录屏逐帧量:宽 1392→1299 = 起始宽 ~7%、130ms 内 ease-out 收位 ✓)
+    static var summonPop: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugSummonPop) as? NSNumber)?.doubleValue ?? 1.04
+    }
+
     /// **换环翻牌的总时长**(毫秒;默认 180 ✓ 0 = 当拍换)。
     /// 病例(2026-10-08):翻牌以前走 `.transition` ⇒ 被系统「减弱动态效果」自己降级成淡切,
     /// Glance 的「强制完整动效」管不到 ✗ ⇒ 改成参数驱动,顺手把手感做成可试档位 ✓
@@ -118,6 +124,7 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
+        ("debug.summonPop", summonPop != 1.04, "唤起轻弹起始倍率 = \(summonPop)(默认 1.04)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

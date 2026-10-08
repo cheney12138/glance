@@ -93,6 +93,10 @@ enum MotionPolicy {
         return reduced ? .easeOut(duration: reducedDuration) : full
     }
 
+    /// **入口专用**动效:不受"唤起静音期"压制(轻弹本身就是"唤起这个动作"的表情 ✓),
+    /// 但仍尊重系统减弱动态效果(降级 ⇒ 不弹 ✓)
+    static func entrance(_ full: Animation) -> Animation? { reduced ? nil : full }
+
     static var describe: String {
         if alwaysAnimate {
             return systemReduced ? "完整动效(本 App 已放行;系统「减弱动态效果」开着)" : "完整动效"
@@ -200,6 +204,10 @@ enum PanelMotion {
 
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
+
+    /// **唤起轻弹**(2026-10-08,按 Apple 录屏实测):130ms · **ease-out**(先快后缓 ✓)。
+    /// 观感是"略大 → 一下收到位",不是"从小涨大" ✓(量出来的方向就是这样 ✓)
+    static let summonPop = Animation.easeOut(duration: 0.13)
 
 }
 

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>唤起轻弹 · 实验台(四种弹法,先看再定)</title>
+<style>
+  :root{
+    --icon: 46px; --gap: 11px; --r: 20px;
+    --glass1: rgba(255,255,255,.22); --glass2: rgba(255,255,255,.10);
+    --pop-dur: 240ms;                 /* 时长(ms) */
+    --pop-scale: 0.97;                /* 缩放起点 */
+    --pop-y: 6px;                     /* 位移起点 */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 26px 70px;background:#1b1d21;color:#e6e8ea;
+       font:13px/1.6 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+  h1{font-size:15px;margin:0 0 4px}
+  h2{font-size:12.5px;margin:0 0 2px;font-weight:600}
+  .hint{color:#9aa1aa;font-size:12px;margin:0 0 12px;max-width:1120px}
+  .hint b{color:#e6e8ea}
+  .bad{color:#ff9a8a}.good{color:#7fd1a8}
+  kbd{font:600 11px/1 -apple-system;background:#2c3037;border:1px solid #3b414a;border-bottom-width:2px;
+      border-radius:4px;padding:1px 5px;margin:0 1px}
+
+  .bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 18px;
+       background:#242830;border:1px solid #31363f;border-radius:12px;padding:10px 14px}
+  .bar button{font:600 12px/1 -apple-system,"PingFang SC";padding:8px 14px;border-radius:8px;
+       border:1px solid #3b414a;background:#2f343c;color:#e6e8ea;cursor:pointer}
+  .bar button:hover{background:#39404a}
+  .bar label{font-size:12px;color:#9aa1aa;display:flex;align-items:center;gap:6px}
+  .bar input[type=range]{width:120px}
+  .bar b{color:#e6e8ea;min-width:58px;display:inline-block}
+
+  .board{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .case{background:#242830;border:1px solid #31363f;border-radius:14px;padding:14px 16px 16px;width:392px}
+  .case.best{border-color:#3d6b52;box-shadow:0 0 0 1px rgba(127,209,168,.22)}
+  .case .note{font-size:11.5px;color:#8b919a;margin:0 0 12px;min-height:56px}
+  .case .note b{color:#e6e8ea}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:6px;margin-bottom:6px}
+  .tag.ok{background:rgba(127,209,168,.16);color:#7fd1a8}
+  .tag.mid{background:rgba(255,255,255,.08);color:#b9c0c8}
+
+  .desk{border-radius:12px;height:132px;display:flex;align-items:center;justify-content:center;
+        background:linear-gradient(135deg,#2b3038 0%,#3a4150 55%,#46403a 100%);overflow:hidden}
+
+  /* 面板(玻璃 + 图标):transform 挂在 .pop 上 —— 与真机一样"只动内容/整块,不动窗" */
+  .pop{transform-origin:50% 50%;will-change:transform}
+  .panel{border-radius:var(--r);padding:12px 16px 10px;display:flex;align-items:center;
+         background:linear-gradient(180deg,var(--glass1),var(--glass2));
+         backdrop-filter:blur(22px) saturate(1.5);
+         box-shadow:0 14px 32px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.45),
+                    0 0 0 .5px rgba(255,255,255,.16)}
+  .ring{display:flex;gap:var(--gap)}
+  .cell{width:var(--icon);height:var(--icon);border-radius:12px;display:flex;align-items:center;
+        justify-content:center;font-size:21px;font-weight:600;color:#fff;box-shadow:0 3px 8px rgba(0,0,0,.3)}
+  .cell.sel{outline:2.5px solid rgba(255,255,255,.85);outline-offset:0}
+
+  .qa{margin:26px 0 0;background:#242830;border:1px solid #31363f;border-radius:14px;padding:14px 18px;max-width:1120px}
+  .qa h2{margin:0 0 8px}
+  .qa ol{margin:0;padding-left:20px;font-size:12.5px;color:#b9c0c8}
+  .qa li{margin:5px 0}
+  .qa b{color:#e6e8ea}
+  .qa code{background:#2c3037;border-radius:4px;padding:1px 5px;font-size:11.5px;color:#9fd0b0}
+</style>
+</head>
+<body>
+<h1>唤起轻弹 · 实验台</h1>
+<p class="hint">
+  <b>要定的是:面板出现那一下"弹什么、弹多少"。</b>四种弹法并排,点 <b>▶ 一起弹</b> 就是同时播,方便横向比 ✓<br>
+  真机情况先说清:<b>缩放</b>与<b>位移</b>两版我都做了,<span class="bad">两版都一唤起就闪退</span>(AppKit 布局递归 ✗);
+  而现在这个稿子里的弹法本身**都能实现**,差别只在"起跳时机"(见最下面那段) ✓
+  下面的滑杆改的是**真实参数**,你调到满意的数我就照抄进代码 ✓
+</p>
+
+<div class="bar">
+  <button id="playAll">▶ 一起弹</button>
+  <label>幅度(缩放)<input type="range" id="s" min="0.90" max="1.00" step="0.005" value="0.97"><b id="sv">0.97</b></label>
+  <label>起点位移<input type="range" id="y" min="0" max="16" step="1" value="6"><b id="yv">6pt</b></label>
+  <label>时长<input type="range" id="d" min="120" max="520" step="20" value="240"><b id="dv">240ms</b></label>
+  <label><input type="checkbox" id="auto"> 自动循环(1.6s)</label>
+</div>
+
+<div class="board">
+  <div class="case">
+    <span class="tag mid">对照</span>
+    <h2>① 现状:直接出现(不动效)</h2>
+    <p class="note">你们 v1.12 的裁定:「⌘Tab 是效率动作,面板要<b>已经在</b>」<br>拿它当基准,看另外三种值不值得 ✓</p>
+    <div class="desk"><div class="pop" data-mode="none"><div class="panel"><div class="ring"></div></div></div></div>
+  </div>
+
+  <div class="case">
+    <span class="tag mid">我试的第 1 版(真机闪退 ✗)</span>
+    <h2>② 缩放:97% → 100%</h2>
+    <p class="note">最像 Spotlight:整块"胀"出来一下<br>轻微过冲读作 <b>Q 弹</b> ✓</p>
+    <div class="desk"><div class="pop" data-mode="scale"><div class="panel"><div class="ring"></div></div></div></div>
+  </div>
+
+  <div class="case">
+    <span class="tag mid">我试的第 2 版(真机闪退 ✗)</span>
+    <h2>③ 位移:从下方 +6pt 浮上来</h2>
+    <p class="note">不缩放、只挪位置 ⇒ 观感更"轻";<br>少了"胀"的那一下,弹感弱一档</p>
+    <div class="desk"><div class="pop" data-mode="lift"><div class="panel"><div class="ring"></div></div></div></div>
+  </div>
+
+  <div class="case best">
+    <span class="tag ok">推荐(如果你要 Q 弹)</span>
+    <h2>④ 缩放 + 位移(一起)</h2>
+    <p class="note">"从下浮上来 + 同时轻轻胀开" —— 最接近 Spotlight 那一下,<br>而且幅度可以压得很小(不抢戏 ✓)</p>
+    <div class="desk"><div class="pop" data-mode="both"><div class="panel"><div class="ring"></div></div></div></div>
+  </div>
+</div>
+
+<div class="qa">
+  <h2>看的时候请回我三句</h2>
+  <ol>
+    <li><b>要哪种</b>:① 不动 / ② 缩放 / ③ 位移 / <b>④ 缩放+位移</b>(我把你在滑杆上停的数抄进代码 ✓)</li>
+    <li><b>幅度</b>:上面滑杆的"缩放起点 / 起点位移"停在多少?(嫌小就往 0.94 / 10pt 拉 ✓)</li>
+    <li><b>时长</b>:多少 ms?(120 更快、520 更慢 —— 真机上越快越像"已经在"✓)</li>
+  </ol>
+  <p style="font-size:12px;color:#8b919a;margin:10px 0 0">
+    真机为什么那两版会崩、稿子还能做:崩溃不是"弹法"的问题,是<b>起跳时机</b> ✗ ——
+    现在代码是"上屏那一拍立刻起跳",而那一拍正压在 AppKit 的
+    <code>orderFront → layoutSubtreeIfNeeded → displayIfNeeded</code> 里 ⇒ 触发
+    "Update Constraints in Window pass" 递归 ⇒ SIGABRT ✓。
+    下一版我会把起跳<b>推后一拍</b>(约 16–30ms,肉眼几乎看不出),躲开那个窗口再试 ——
+    判据用崩溃报告数(0 增 = 成了 ✓),不靠肉眼 ✓
+  </p>
+</div>
+
+<script>
+const ICONS = [["G","#223046"],["</>","#2f6fd0"],["◍","#e8e8e8"],["◈","#1f7fe0"],
+               ["✆","#25c55a"],["☺","#3f8ef0"],["🐾","#1aead2"]];
+document.querySelectorAll(".ring").forEach(r => {
+  r.innerHTML = ICONS.map(([t,c],i) =>
+    `<div class="cell${i===0?" sel":""}" style="background:${c}">${t}</div>`).join("");
+});
+
+const $ = id => document.getElementById(id);
+const state = { s: 0.97, y: 6, d: 240 };
+function syncLabels(){
+  $("sv").textContent = state.s.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+  $("yv").textContent = state.y + "pt";
+  $("dv").textContent = state.d + "ms";
+}
+["s","y","d"].forEach(k => $(k).oninput = e => {
+  state[k] = parseFloat(e.target.value);
+  syncLabels();
+});
+
+// 用 WAAPI 播(与真机弹簧等效:出去快、回来带一点过冲 ⇒ 读作 Q 弹 ✓)
+function frames(mode){
+  const s0 = state.s, y0 = state.y;
+  switch (mode) {
+    case "scale":
+      return [{transform:`scale(${s0})`},
+              {transform:`scale(${(1 + (1 - s0) * 0.55).toFixed(4)})`, offset:.55},
+              {transform:"scale(1)"}];
+    case "lift":
+      return [{transform:`translateY(${y0}px)`},
+              {transform:`translateY(${(-y0 * 0.18).toFixed(2)}px)`, offset:.55},
+              {transform:"translateY(0)"}];
+    case "both":
+      return [{transform:`translateY(${y0}px) scale(${s0})`},
+              {transform:`translateY(${(-y0 * 0.18).toFixed(2)}px) scale(${(1 + (1 - s0) * 0.55).toFixed(4)})`, offset:.55},
+              {transform:"translateY(0) scale(1)"}];
+    default:
+      return [{transform:"none"},{transform:"none"}];
+  }
+}
+function playOne(el){
+  const mode = el.dataset.mode;
+  if (mode === "none") {                       // ① 对照组:当拍出现(闪一下再回来,表示"没有动效")
+    el.animate([{opacity:0},{opacity:1}], {duration:60, easing:"linear"});
+    return;
+  }
+  el.animate(frames(mode), {duration: state.d, easing:"cubic-bezier(.22,.9,.24,1)", fill:"none"});
+}
+function playAll(){ document.querySelectorAll(".pop").forEach(playOne); }
+$("playAll").onclick = playAll;
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown" || e.key === " " || e.key === "Enter") { playAll(); e.preventDefault(); }
+});
+let timer = null;
+$("auto").onchange = e => {
+  clearInterval(timer);
+  if (e.target.checked) { playAll(); timer = setInterval(playAll, 1600); }
+};
+syncLabels();
+setTimeout(playAll, 350);
+</script>
+</body>
+</html>

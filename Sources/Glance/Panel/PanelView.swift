@@ -188,6 +188,12 @@ if sheen {
         //   容器里的内容由控制器在侧立那一帧换掉(看不见 ✓),所以这里只需要一块容器 ✓
         ringRow(launch: controller.entrySelected)
             .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+            // ★ 唤起轻弹(2026-10-08):纯 2D 缩放,作用于**环里那块内容**,玻璃不动 ✓
+            //   参数按 Apple 录屏逐帧量:起始略大(默认 1.04)→ 130ms ease-out 收到位 ✓
+            //   ⚠️ 起跳**延后一拍**(见 PanelController.showPanel):提前起跳会踩 AppKit 的
+            //     "Update Constraints in Window pass" 递归 ⇒ 一唤起就 SIGABRT ✗
+            //     (缩放/位移两版都验过;延后一拍是最后一条活路 —— 还崩就按 v1.12 收场,别再试 ✗)
+            .scaleEffect(controller.entryPopScale, anchor: .center)
             // ★★ 2026-10-08 病例(**别再试了**):这里**不许做"唤起入场动效"** ✗
             //   用户提「Spotlight 唤起有个 Q 弹的动效, Glance 是直接打在屏幕上的, 能借鉴吗」⇒
             //   我做了两版(内容 `scaleEffect` / 内容 `offset` + 弹簧),**两版都一唤起就闪退** ✗:
