@@ -163,6 +163,16 @@ final class PanelController: ObservableObject {
     /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
     /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
     @Published private(set) var ringFlipTarget = false
+    /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
+    ///
+    /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
+    /// ⚠️ 曾经以为"逐帧改玻璃宽度会掉材质" ✗ —— 那是**假结论**:当时容器层还挂着
+    ///   `rotation3DEffect`,玻璃一直在被转 ✗(见 PanelView 尾部那段注释)。
+    ///   残留删掉之后,逐帧改宽度是安全的 ✓
+    /// ⚠️ 它只在翻牌期间有意义:`contentSize()` 在"角度为 0"时一律以 `entrySelected` 为准
+    ///   (唯一真源 ⇒ 万一哪里漏了同步,静止态也自愈 ✓)
+    @Published private(set) var ringWidthBlend: Double = 0
+
     /// 每次换环 +1;收尾回调靠它判过期(又按了一次 ⇒ 旧回调丢弃 ✓)
     private var ringFlipToken = 0
     /// 已经走完"侧立那一拍"的 token(兜底定时与完成回调谁先到都只算一次 ✓)
@@ -1199,6 +1209,7 @@ final class PanelController: ObservableObject {
         // (不作废 ⇒ 它会在下一局开始后突然把环换掉 ✗;角度不归零 ⇒ 下次唤起是歪的 ✗)
         ringFlipToken += 1
         ringFlipAngle = 0
+        ringWidthBlend = 0
         removeOutsideClickMonitor()
         entrySelected = false
         launchIndex = nil
@@ -1245,8 +1256,19 @@ final class PanelController: ObservableObject {
         //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
         trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
         // 环与托盘**并进同一次 flush**(见 ChromeWindow.teardown 的病例 ✓)
-        panel?.disableScreenUpdatesUntilFlush()
+        // ⚠️ 2026-10-08 拿掉 `disableScreenUpdatesUntilFlush()`:
+        //   它当初是为了"环与托同批消失"(消掉 16ms 的残留 ✓),但它把这次 orderOut 压到
+        //   "下一次 flush" —— 那一刻若没有 flush,环就可能**留在屏上**,而 `isVisible` 已经是 false ✗
+        //   (用户实报的症状正好是"环盖着一切、切谁都像没反应" ✓)。两扇窗在同一个 runloop 里
+        //   连着 orderOut 本来就会被合成器并进一批 ⇒ 保留那点收益不值这个风险 ✓
         panel?.orderOut(nil)
+        // 🔬 2026-10-08(用户实报「开了 Glance 设置面板之后, 切换选中唤不起任何窗」):
+        //   日志里每一发 `[T7] 已聚焦` 都**成功** ⇒ 嫌疑在"环没被真正收走"这一侧 ✗
+        //   ★ 这里原本**只有托盘有兜底**(见下面 0.25s 那一发),**主面板没有** ✗ ——
+        //     而 `disableScreenUpdatesUntilFlush()` 会把这次 orderOut 压到"下一次 flush",
+        //     那一刻若没有 flush,环就可能留在屏上(层级 .popUpMenu ⇒ 盖住所有普通窗 ✗)
+        //     ⇒ 症状正好是"切谁都没反应、设置窗也出不来" ✓
+        glog("[窗口] 收场后 环 isVisible=\(panel?.isVisible ?? false) alpha=\(panel?.alphaValue ?? -1)")
         // ★ 2026-09-21 修我自己引入的 bug:标记必须与 orderOut **成对**清掉。
         //   病例(用户实报「本次不显示预览窗了」):第一次收场把托盘 orderOut 了,而标记没清 ✗
         //   ⇒ 之后每一局都以为"它已经在台上" ⇒ **再也不 orderFront** ⇒ 托盘永不出现 ✓。
@@ -1254,9 +1276,16 @@ final class PanelController: ObservableObject {
         trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
         // ★ 兜底:0.25s 后再确认一次"托盘窗真下去了" —— 未知的迟到路径也不至于留窗 ✓
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, !self.isVisible, self.previewPanel?.isVisible == true else { return }
-            glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
-            self.previewPanel?.orderOut(nil)
+            guard let self, !self.isVisible else { return }
+            if self.previewPanel?.isVisible == true {
+                glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
+                self.previewPanel?.orderOut(nil)
+            }
+            // ★ 2026-10-08:**主面板也要这条兜底**(它与托盘是同一族病,之前只补了托盘 ✗)
+            if self.panel?.isVisible == true {
+                glog("[T6] ⚠️ 收场后主面板还在台上 ⇒ 强制收掉(兜底)")
+                self.panel?.orderOut(nil)
+            }
         }
         panel?.ignoresMouseEvents = false
         previewPanel?.ignoresMouseEvents = false
@@ -1299,12 +1328,16 @@ final class PanelController: ObservableObject {
         // 开局就能算(纯算术,按键那一刻只是查表)。用户裁定:「肯定计算两套尺寸效果会更好」——
         // "少的后面全空着"与"多的把图标挤小"两条路都不接受。
         // 数量少时**靠左**(与主环第一格对齐 ⇒ 读作"环短了"),格子尺寸与间距一个都不动。
-        // ⚠️ 宽度**不许逐帧改**:原生玻璃每帧 resize 一样会掉材质(实测 ✗)
-        //   ⇒ 它只在"换环那一帧"(内容侧立、看不见)变**一次** ✓
-        //   `debug.ringWidthMode = fixed` 时干脆**一辈子不变**(恒等于两环的宽者)⇒ 消元用 ✓
-        let w = DebugFlags.ringWidthMode == "fixed"
-            ? ringWindowWidth()
-            : ringContentWidth(launch: entrySelected)
+        // ★ 2026-10-08:翻牌期间玻璃长度按 `ringWidthBlend` 在"两环"之间**平滑插值**
+        //   (用户实报「直接缩短了,没有动画」✗)⇒ 长度差由翻转自己交代 ✓
+        //   静止时一律以 `entrySelected` 为准(唯一真源 ✓ 漏同步也自愈 ✓)
+        let w: CGFloat
+        if ringFlipAngle != 0 {
+            let wm = ringContentWidth(launch: false), wl = ringContentWidth(launch: true)
+            w = wm + (wl - wm) * CGFloat(ringWidthBlend)
+        } else {
+            w = ringContentWidth(launch: entrySelected)
+        }
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
         return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
     }
@@ -1572,7 +1605,7 @@ final class PanelController: ObservableObject {
     private func buildPreviewPanelIfNeeded() {
         guard previewPanel == nil else { return }
         previewPanel = makeChromePanel(keyable: false)
-        if let previewPanel { trayChrome = ChromeWindow(previewPanel) }
+        if let previewPanel { trayChrome = ChromeWindow(previewPanel, role: "托") }
         // 托盘低一层:它向下的阴影尾会伸进长条的呼吸区,demo 里长条(后一个兄弟)盖住托盘阴影,
         // 托盘在上就会把那层灰纱糊到长条玻璃顶上——"黑影"换个地方复活
         // (2026-09-19 Bug2 期间做过"翻到长条前面"的判别实验,已还原:点击死区由
@@ -2382,7 +2415,10 @@ final class PanelController: ObservableObject {
         ringFlipMidDone = ringFlipToken
         var instant = Transaction()
         instant.disablesAnimations = true
-        withTransaction(instant) { entrySelected = ringFlipTarget }
+        withTransaction(instant) {
+            entrySelected = ringFlipTarget
+            ringWidthBlend = ringFlipTarget ? 1 : 0      // 长度当拍落到目标(与内容同一帧 ✓)
+        }
         ringFlipAngle = 0
         applyRingSwap(animated: false)
     }
@@ -2411,17 +2447,14 @@ final class PanelController: ObservableObject {
         // 托盘(窗口卡/启动行)在换环这一拍**当拍换** ⇒ 窗口窗开到整段翻完 ✓(见 isRingSwapInFlight)
         ringSwapUntil = CFAbsoluteTimeGetCurrent() + Self.flipSeconds + 0.2
         let sign: Double = (travel == .forward) ? 1 : -1   // ↓ 往上翻;↑/反向 ⇒ 反着翻 ✓
-        if DebugFlags.ringFlipStyle == "none" {              // 消元:不翻,当拍换(用来判"翻牌是不是元凶" ✓)
-            entrySelected = toLaunch
-            ringFlipAngle = 0
-            applyRingSwap(animated: false)
-            trace("[翻牌] style=none ⇒ 当拍换(不翻)")
-            return
-        }
         trace("[翻牌] \(toLaunch ? "主环 → 未启动环" : "未启动环 → 主环") · 88°×2 · 每半 \(Int(Self.flipHalfSeconds * 1000))ms")
         // ① 环里那块容器翻出去(玻璃不动 ✓)
         withAnimation(Self.flipAnimation(.easeIn(duration: Self.flipHalfSeconds))) {
             ringFlipAngle = sign * PanelMetrics.ringFlipLimit
+        }
+        // ② 玻璃长度**整段平滑**过去(easeInOut 铺满翻转;用户在换环那一下看得出"顺手变短/变长" ✓)
+        withAnimation(Self.flipAnimation(.easeInOut(duration: Self.flipSeconds))) {
+            ringWidthBlend = toLaunch ? 1 : 0
         }
         // ② 侧立那一拍:换内容 + 换长度(看不见 ✓),再反相翻进来
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.flipHalfSeconds) { [weak self] in
@@ -3235,7 +3268,13 @@ final class ChromeWindow {
     /// 这一局是否已经收场(收场后禁止 place ✓ —— 见 `place()` 的病例)
     private var sessionEnded = true
 
-    init(_ panel: NSPanel) { self.panel = panel }
+    /// 角色名(只给日志/判据用):"环" / "托"
+    private let role: String
+
+    init(_ panel: NSPanel, role: String = "窗") {
+        self.panel = panel
+        self.role = role
+    }
 
     /// 确保在台上 + 内容可见。**幂等**:重复调用不产生任何窗口排序 ✓
     ///
@@ -3276,8 +3315,13 @@ final class ChromeWindow {
         //   环与托盘是**两扇窗**,两次 `orderOut` = **两次独立提交** ⇒ 合成器可能有一帧
         //   只收走了环 ✗(16ms 的残留,肉眼刚好看得见)。
         //   `disableScreenUpdatesUntilFlush()` 把这次改动**并进下一次 flush** ⇒ 与环同批消失 ✓
-        panel.disableScreenUpdatesUntilFlush()
-        panel.orderOut(nil)
+        panel.orderOut(nil)   // ⚠️ 不再 disableScreenUpdatesUntilFlush(见 teardownPanel 的病例 ✓)
+        // 🔬 2026-10-08 诊断(用户实报「开了 Glance 设置面板之后, 切换选中唤不起任何窗」):
+        //   日志里每一发 `[T7] 已聚焦` 都是**成功**的 ⇒ 嫌疑落在"环/托没被真正收走"这一侧 ✗
+        //   这一行就是判据:**收场之后 `isVisible` 必须是 false**(true = orderOut 没生效/被延后 ✓)
+        //   `disableScreenUpdatesUntilFlush()` 会把这次改动压到"下一次 flush"——
+        //   若那一刻根本没有 flush,窗口就可能留在屏上 ✗(本行专为验它)
+        glog("[窗口] 收场后 \(role) isVisible=\(panel.isVisible) alpha=\(panel.alphaValue)")
     }
 }
 
