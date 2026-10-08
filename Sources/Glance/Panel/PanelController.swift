@@ -178,19 +178,20 @@ final class PanelController: ObservableObject {
         return on && abs(DebugFlags.summonPop - 1.0) > 0.001
     }
 
-    /// **视图专用的内容尺寸**(宽度带弹性 ✓)—— 与 `contentSize()` 分开,是为了让命中/几何那本账
-    /// 始终按"落定后的尺寸"算 ✓(弹的这 130ms 里指针几何不该跟着抖 ✓)
+    /// **唤起轻弹的横向拉伸系数**(只给视图做 transform 用 ✓)。
     ///
-    /// ★★ 2026-10-08 第二版(用户:「我想要的是从左右像拉一根弹簧一样, duang一下的回弹」):
-    ///   第一版做的是**整体缩放**(`scaleEffect` 等比)⇒ 读成"解锁后 App 入场的景深效果" ✗
-    ///   现在只改**宽度**:两端像橡皮筋一样被拉开 → 弹簧收到位 ✓
-    ///   ⇒ 图标**不变形**(它们是居中排的 ✓),只有玻璃的两端飞出去 ✓ = 拉弹簧的感觉 ✓
-    ///   起手方向按 Apple 录屏实测:**略宽 → 收到位** ✓;回弹由 `debug.summonPopBounce` 控制 ✓
-    var displayContentSize: NSSize {
-        let base = contentSize()
-        guard summonPopEnabled else { return base }
-        let factor = 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
-        return NSSize(width: base.width * factor, height: base.height)   // ★ 高度不动 ✓
+    /// ★★ 2026-10-08 第三版(用户:「从左右像拉一根弹簧一样, duang一下的回弹」):
+    ///   第一版**等比缩放** ⇒ 用户读成"解锁后 App 入场的景深效果" ✗
+    ///   第二版改成"逐帧改宽度" ⇒ **一唤起就 SIGABRT** ✗✗
+    ///     —— 逐帧改 frame = **逐帧布局** ⇒ AppKit "Update Constraints in Window pass" 递归 ✓
+    ///     —— 而等比 `scaleEffect` 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓✓
+    ///   ⇒ 现在:纯 **transform**(`scaleEffect(x:y:)`)⇒ 只拉宽度、高度 1:1 ✓ 不触发布局 ✓
+    ///   起手略宽(默认 1.04×)→ 弹簧**收到位**;回弹力度 = `debug.summonPopBounce` ✓
+    ///   ⚠️ 代价:拉伸是"整块"的 ⇒ 图标跟着**横向轻微变形**(幅度越大越明显);
+    ///      "只拉玻璃、图标不变形" = 逐帧改布局 = 上面那条死路 ✗ ⇒ 幅度别开太大 ✓
+    var entryPopStretch: Double {
+        guard summonPopEnabled else { return 1 }
+        return 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
     }
 
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
