@@ -446,6 +446,7 @@ final class HotkeyTapCenter {
         // 三指拖移被系统消费的签名(合成拖动就是"按住左键移动" ✓)。真轻点不产生
         // 任何鼠标事件 ⇒ 不会误记 ✓。方法内部自带手指数门禁,平时零开销 ✓
         ThreeFingerTap.shared.noteMouseDownWhileTouching()
+        ThreeFingerTap.shared.reviveIfFramesDead()   // 点击无帧 = 投递死亡铁证 ⇒ 当场重挂 ✓
         if event.flags.contains(.maskCommand), state != .navigating {
             onCmdClick?(event.location)
         }

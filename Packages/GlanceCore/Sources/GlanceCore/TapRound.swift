@@ -30,7 +30,8 @@ import Foundation
 ///
 /// | 字段 | 活多久 |
 /// |---|---|
-/// | 轨迹 `live` / `maxLive` / 位移 / state 账 / 掌账 | **一轮**（第一根手指落板 → 全部离开） |
+/// | 轨迹 `live` / `maxLive` / 位移 / state 账 / 掌账 | **一轮**（第一根手指落板 → 全部离开）——但**自愈重置不清轨迹**（触点还实实在在按着 ⇒ 账可重开、触点不许"变年轻"，见 `Track.landedAt` 的病例 ✓） |
+/// | 触点落板时刻 `Track.landedAt` | **跨重置**（真实落板 → 全部离开；判"长按的尾巴"要用 ✓） |
 /// | 上次帧时刻 `lastFrameAt` | 跨轮（判"丢帧"要看真实间隔 ✓） |
 /// | 已生效 `fired` | 一轮 |
 public enum TapRound {
@@ -162,6 +163,9 @@ public enum TapRound {
         public var releaseSpan: Double = 0
         /// 量尺：本轮有几个触点是"续接"来的（id 换过号）—— 正是不续接就会误判的那种局
         public var carriedContacts: Int = 0
+        /// 还在账上的**最老真手指触点**的年龄（掌豁免不算 ✓）。
+        /// 自愈重置洗不掉它（`Track.landedAt` 跨重置保活 ✓）—— "长按的尾巴"门就量它 ✓
+        public var maxContactAge: Double = 0
         public init() {}
     }
 
@@ -184,7 +188,15 @@ public enum TapRound {
         var lastNorm: Point
         var lastAbs: Point
         var lastSeen: Double
-        /// 掌缘轨迹:算位移(掌动了就是真滑 ✓),但**不计入手指数** ✗
+        /// 这只触点的**真实落板时刻** —— 跨"账本自愈重置"也要活下来 ✗不许洗
+        ///
+        /// 病例(2026-10-08 用户实报「三指误触」,日志 1126162–1129383):
+        ///   三指**长按** 4s ⇒ 自愈重置每秒把账本清一次 ⇒ 下一帧原地开新轮 ⇒
+        ///   抬手时"最后一段 180ms/零位移"被当成干净轻点 ⇒ 误唤起 ✗
+        ///   (判卷的时长门量"落齐后",而落齐时刻随重置重掐 ⇒ 长按的尾巴永远年轻 ✗)
+        /// ⇒ 账可重开,但触点的**年龄**必须累计:判卷有"最老触点年龄门"守着(见 `judge`)✓
+        var landedAt: Double
+        /// 掌缘轨迹:算位移(掌动了就是真滑 ✓),但**不计入手指数** ✗(也不算年龄 ✓)
         var isPalm: Bool
     }
 
@@ -223,10 +235,15 @@ public enum TapRound {
         ///
         /// 实锤（2026-09-20）：掌缘搭在板上打字 ⇒ 收口帧永远等不来 ⇒ 一条按压持续 **49 分钟**
         /// （`[5049394ms] 5 指(豁免掌 1) 2941951ms … size=4.6 → 不动作`）⇒ 之后所有触摸全被吸进同一条账本。
+        ///
+        /// ⚠️ 但**只清账、不清轨迹**（`keepTracks: true`，2026-10-08 病例）：
+        ///   重置之所以发生，往往是因为触点**还实实在在按着**（长按/搭掌）——
+        ///   连轨迹一起清 = 把"已经按了很久"的证据一起洗掉 ⇒ 抬手时最后一段被当成干净轻点 ✗
+        ///   （`Track.landedAt` 上挂着完整病例 ✓）。轨迹保活后：账重开、触点年龄照算 ✓
         public mutating func resetIfStuck(now: Double) -> Double {
             guard active, now - beganAt > policy.stuckLedgerAfter else { return 0 }
             let stale = now - beganAt
-            clearRound()
+            clearRound(keepTracks: true)
             return stale
         }
 
@@ -236,8 +253,13 @@ public enum TapRound {
             lastFrameAt = 0
         }
 
-        private mutating func clearRound() {
-            live.removeAll()
+        /// `keepTracks: true` = 自愈重置专用：触点还按着 ⇒ 轨迹（含落板时刻/位移基线）保活，
+        /// 只把"这一轮"的判决性账本归零。正常收口（`endRound`）永远全清 ✓
+        private mutating func clearRound(keepTracks: Bool = false) {
+            if !keepTracks {
+                live.removeAll()
+                lastTouching = 0
+            }
             maxTracks = 0
             beganAt = 0
             countedSince = 0
@@ -253,7 +275,6 @@ public enum TapRound {
             carried = 0
             maxNormMove = 0
             maxAbsMove = 0
-            lastTouching = 0
         }
 
         // MARK: 喂帧
@@ -278,7 +299,11 @@ public enum TapRound {
             }
 
             if !active {                                   // 轮起点：清上一轮的一切 ✓
-                clearRound()
+                // `keepTracks: true` 是**双形态**的:
+                //   · 正常起点 —— `endRound` 已把轨迹清空 ⇒ 与全清等价 ✓
+                //   · 自愈重置后的"原地重开" —— 触点还按着、轨迹刚被保下 ⇒
+                //     只换新账、不动轨迹(连同 `landedAt` 一起清 = 把长按洗成轻点 ✗ 病例在 `resetIfStuck`)
+                clearRound(keepTracks: true)
                 active = true
                 beganAt = now
             }
@@ -301,7 +326,7 @@ public enum TapRound {
                 if idx == nil {
                     live.append(Track(id: c.id, baseNorm: c.normalized, baseAbs: c.absolute,
                                       lastNorm: c.normalized, lastAbs: c.absolute, lastSeen: now,
-                                      isPalm: palm))
+                                      landedAt: now, isPalm: palm))
                     idx = live.count - 1
                 }
                 let i0 = idx!
@@ -416,6 +441,19 @@ public enum TapRound {
             if dragEvidence, !wide {
                 return .rejected("按压期间出现过鼠标按下(三指拖移被系统消费的签名)⇒ 让给系统,不动作")
             }
+            // ★ 最老触点年龄门(2026-10-08 病例,日志 1126162–1129383):
+            //   三指**长按** 4s ⇒ 自愈重置每秒把账本洗一次 ⇒ 抬手时"最后一段 180ms/零位移"
+            //   形状是教科书级轻点 ⇒ 误唤起 ✗。轨迹(含落板时刻)跨重置保活之后,
+            //   "本该生效"的局里若最老触点比"点按窗口 + 落齐散差裕量"还老 ⇒
+            //   那是长按的**尾巴**,不是轻点 ✗
+            //   放在滑动/证据门**之后**:只有"本该生效"的局才被它拦下 ✓;
+            //   合法局全在 ≤0.30s(宽限 0.50s)窗口内 —— `pressHoldRange` 分支当前不可达,
+            //   不存在合法的长按局 ✓;掌豁免触点不算年龄(搭掌点按是既有手势 ✗不能修没)
+            let ageCeiling = (wide ? policy.dragGraceDuration : policy.maxDuration) + 0.3
+            if snap.maxContactAge > ageCeiling {
+                return .rejected(String(format: "%d 指 最老触点已在板 %.1fs(>%.1fs ⇒ 长按的尾巴,不是轻点)",
+                                        snap.fingerCount, snap.maxContactAge, ageCeiling))
+            }
             if snap.held > (wide ? policy.dragGraceDuration : policy.maxDuration) {
                 guard snap.fingerCount == 4, policy.pressHoldRange.contains(snap.held) else {
                     return .rejected(String(format: "%d 指 %.0fms(超出点按 %.0fms 且不在按住的 %.2f–%.2fs 窗口)⇒ 不动作",
@@ -451,6 +489,7 @@ public enum TapRound {
             s.sawFrameGap = sawFrameGap
             s.releaseSpan = firstLiftAt > 0 ? now - firstLiftAt : 0
             s.carriedContacts = carried
+            s.maxContactAge = live.filter { !$0.isPalm }.map { now - $0.landedAt }.max() ?? 0
             return s
         }
 

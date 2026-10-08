@@ -180,6 +180,18 @@ final class ThreeFingerTap {
         guard age > Double(idleMin) * 60 else { return }
         attachDevices(reason: String(format: "久闲 %.0f 分钟后自愈", age / 60))
     }
+
+    /// **点击但久无触摸帧 ⇒ 投递死亡铁证,当场重挂**(2026-10-08,放假合盖十几天后再哑)。
+    /// 依据:在触控板上物理点击**不可能**没有触点帧(手指必须先接触)⇒
+    /// 点击事件到了、帧却 2s 以上没来 = 投递死了 ✓(睡醒重挂都没救回来的那种 ✗)。
+    /// 误伤防护:鼠标设备也吐帧 ⇒ 用鼠标时 `lastFrameAt` 本来就一直新,不会触发 ✓;
+    /// 30s 内最多重挂一次(外接鼠标/盒盖机型的"本来就没帧"场景不刷屏 ✓)。
+    /// 在 `HotkeyTap.handleMouse` 里挂(点击必过 ✓ 挂载亚毫秒级 ✓)
+    func reviveIfFramesDead() {
+        let silence = CFAbsoluteTimeGetCurrent() - lastFrameAt
+        guard silence > 2.0, CFAbsoluteTimeGetCurrent() - lastAttachAt > 30 else { return }
+        attachDevices(reason: String(format: "点击但 %.0fs 无帧(投递死亡)", silence))
+    }
     /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
     /// 判卷逻辑越来越长,再跟"读 C 结构体 + 回调线程纪律"搅在一起,每次动都会伤到别的)
     private var press = Press()
@@ -291,10 +303,12 @@ final class ThreeFingerTap {
     /// MultitouchSupport 的四个函数类型(类型作用域 ✓ —— 属性要用到它们,不能留在函数里 ✗)
     private typealias CreateList = @convention(c) () -> CFMutableArray?
     private typealias Register = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
+    private typealias Unregister = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
     private typealias StartDevice = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
     private typealias StopDevice = @convention(c) (UnsafeMutableRawPointer) -> Void
 
-    private static var symbols: (list: CreateList, register: Register, start: StartDevice, stop: StopDevice?)?
+    private static var symbols: (list: CreateList, register: Register, unregister: Unregister?,
+                                 start: StartDevice, stop: StopDevice?)?
 
     private static func loadFramework() -> Bool {
         guard symbols == nil else { return true }
@@ -308,6 +322,7 @@ final class ThreeFingerTap {
         }
         symbols = (unsafeBitCast(symList, to: CreateList.self),
                    unsafeBitCast(symRegister, to: Register.self),
+                   dlsym(lib, "MTUnregisterContactFrameCallback").map { unsafeBitCast($0, to: Unregister.self) },
                    unsafeBitCast(symStart, to: StartDevice.self),
                    dlsym(lib, "MTDeviceStop").map { unsafeBitCast($0, to: StopDevice.self) })
         return true
@@ -321,18 +336,36 @@ final class ThreeFingerTap {
     /// ⇒ 睡醒后 Multitouch 的回调常常就死了 ⇒ **一帧都不来** ⇒ 账本自愈**永远不会触发** ✗
     /// ⇒ 三指/四指彻底静默,而 ⌘Tab 走 Carbon 热键(另一套机制)⇒ 照常 ✓ 现象与之一字不差 ✓
     /// 所以:睡醒 / 屏参数变化 / **久闲后的第一次唤起** 都重挂一遍 ✓(重挂幂等、很便宜 ✓)
+    ///
+    /// ★★ 2026-10-08 病例(放假合盖十几天,三指/四指又哑):采样抓到 **16 条** `mt_ThreadedMTEntry` ——
+    ///   原来"重挂" = `stop + register + start`,**从不注销回调** ⇒ 每次睡醒/屏参数变化
+    ///   就多生一条设备线程 ✗;而且合盖多日之后,旧的注册在 multitouchd 那边已成死挂,
+    ///   光 register 不 unregister ⇒ **一帧都不来**(睡醒后的日志里"已挂载"照打、
+    ///   触点判定 0 行 = 投递全灭 ✓)。
+    ///   ⇒ 重挂改成**先拆后挂**:旧把手逐个 `MTUnregisterContactFrameCallback + MTDeviceStop`,
+    ///   再从新列表注册启动 —— 线程不堆积 ✓ 死挂清掉重来 ✓
+    private var attachedDevices: [UnsafeMutableRawPointer] = []
+
     private func attachDevices(reason: String) {
-        guard let sym = Self.symbols, let devices = sym.list() else { return }
+        guard let sym = Self.symbols else { return }
+        // 先拆(上一轮的把手还活着 —— 它们的列表从未释放,指针有效 ✓)
+        let detached = attachedDevices.count
+        for p in attachedDevices {
+            sym.unregister?(p, Self.contactFrame)
+            sym.stop?(p)
+        }
+        attachedDevices.removeAll()
+        guard let devices = sym.list() else { return }
         let count = CFArrayGetCount(devices)
         for i in 0..<count {
             guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
             let p = UnsafeMutableRawPointer(mutating: raw)
-            sym.stop?(p)                              // 先停(若符号在)—— 避免重复注册后帧送两遍 ✗
             sym.register(p, Self.contactFrame)
             sym.start(p, 0)
+            attachedDevices.append(p)
         }
         lastAttachAt = CFAbsoluteTimeGetCurrent()
-        glog("[指点按] 已挂载 \(count) 个设备(\(reason))· 三指=\(enabled ? "开" : "关")"
+        glog("[指点按] 挂载 \(count) 个设备(\(reason),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
              + " · 四指=\(enabledFour ? "开" : "关")")
     }
 
