@@ -87,20 +87,6 @@ enum DebugFlags {
     /// 关掉换组时的分段动效（用来确认某个抖动是不是动效造成的）。
     static var noSegmentAnim: Bool { UserDefaults.standard.bool(forKey: Keys.debugNoSegmentAnim) }
 
-    /// **唤起轻弹的起始宽度倍率**(默认 **1.04** = 先宽 4%,再弹簧收到位 ✓)。
-    /// 数来自 Apple 真机实测(录屏逐帧量:宽 1392→1299 = 起始宽 ~7%、130ms 内 ease-out 收位 ✓)
-    /// **唤起轻弹的时长**(毫秒;默认 130 = Apple 实测 ✓;调大只是给"看清玻璃材质"用 ✓)
-    /// **唤起轻弹的力度**(阻尼系数 · 默认 0.62):越小回弹越明显(1.0 = 不弹,纯收缩 ✓)。
-    /// 用户 2026-10-08:「不如 spotlight q弹呢, 没有 duang 一下的感觉」——
-    /// 那版是 `easeOut` 纯单调收缩 ⇒ 没有回弹 ✓ 现在换成弹簧 + 这个力度档 ✓
-    /// **入场轻弹的风格**(默认 spring = 现状 ✓)。四档见 `SummonPopStyle`:
-    ///   off    瞬间到位(回到 2026-09-17 你那句「直接一步到位」的口径 ✓)
-    ///   pop    横向"收"到位,不回弹(easeOut)
-    ///   spring 横向"收"到位,**带回弹**(现状)
-    ///   fade   不动几何:整块从淡到实 —— 命中区不移动 ✓
-    static var summonPopStyle: String {
-        UserDefaults.standard.string(forKey: Keys.debugSummonPopStyle) ?? "spring"
-    }
 
     /// **亮棱强度** —— 原生实测峰比内部 **+0.22**(扫描:α0.45⇒+0.185 · 0.55⇒+0.226 · 0.80⇒+0.339)
     /// ⇒ 与原生**等值**的那一档是 **0.55**;但用户三评「现在又有点太白」⇒ 默认取 **0.48**(≈+0.19)✓
@@ -120,17 +106,11 @@ enum DebugFlags {
         (UserDefaults.standard.string(forKey: Keys.debugGlassStyleLight) ?? "clear")
     }
 
-    static var summonPopBounce: Double {
-        (UserDefaults.standard.object(forKey: Keys.debugSummonPopBounce) as? NSNumber)?.doubleValue ?? 0.62
-    }
 
     static var summonPopMs: Int {
-        (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 130
+        (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
     }
 
-    static var summonPop: Double {
-        (UserDefaults.standard.object(forKey: Keys.debugSummonPop) as? NSNumber)?.doubleValue ?? 1.04
-    }
 
     /// **换环翻牌的总时长**(毫秒;默认 180 ✓ 0 = 当拍换)。
     /// 病例(2026-10-08):翻牌以前走 `.transition` ⇒ 被系统「减弱动态效果」自己降级成淡切,
@@ -163,13 +143,10 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
-        ("debug.summonPop", summonPop != 1.04, "唤起轻弹起始倍率 = \(summonPop)(默认 1.04)"),
-        ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
+        ("debug.summonPopMs", summonPopMs != 120, "入场渐入时长 = \(summonPopMs)ms(默认 120)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
-        (Keys.debugSummonPopStyle, summonPopStyle != "spring", "入场轻弹风格 = \(summonPopStyle)"),
         ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
-        ("debug.summonPopBounce", summonPopBounce != 0.62, "唤起轻弹力度(阻尼) = \(summonPopBounce)(默认 0.62)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

@@ -44,14 +44,13 @@ enum Keys {
     /// `debug.ringFlipDurationMs` —— 换环翻牌的**总时长**(毫秒;默认 180 = 与原来那段同长 ✓)
     /// 翻出去/翻进来各占一半(easeIn / easeOut)⇒ 两半读起来是一次动作 ✓ 0 = 不动效(当拍换)
     static let debugRingFlipDurationMs = "debug.ringFlipDurationMs"
-    /// `panel.summonPop` —— 唤起时"轻轻收一下"(Spotlight 那种:略大 → 落定 ✓)
+    /// `panel.summonPop` —— 唤起时**整块渐入**(键名不改 ✓;2026-10-08 从"轻轻收一下"改成渐入:
+    /// 用户「要 fade 吧……**没有任何的弹动**呢, 比之前的两段弹簧要好」✓)
     static let panelSummonPop = "panel.summonPop"
-    /// `debug.summonPop` —— 唤起轻弹的**起始倍率**(默认 1.04 = 先大 4%;1.0 = 关)
-    static let debugSummonPop = "debug.summonPop"
-    /// `debug.summonPopMs` —— 唤起轻弹的**时长**(毫秒;默认 130,按 Apple 录屏实测 ✓)
+    /// `debug.summonPopMs` —— 渐入的**时长**(毫秒;默认 **120** ✓)
+    /// ⚠️ 老键 `debug.summonPop`(起始倍率)与 `debug.summonPopBounce`(阻尼)**已作废** ——
+    ///   渐入不动几何,那两个旋钮没有意义了(键常量一并删掉,别留"写了没用"的假旋钮 ✓)
     static let debugSummonPopMs = "debug.summonPopMs"
-    /// `debug.summonPopBounce` —— 唤起轻弹的**力度**(阻尼系数:1.0 = 不弹 · 0.45 = 很弹;默认 0.62)
-    static let debugSummonPopBounce = "debug.summonPopBounce"
     /// 🔬 `debug.glassStyleLight` —— **临时**档位:浅色外观下玻璃用 `clear`(默认)还是 `regular`。
     /// 用户 2026-10-08 口径:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」
     /// ⇒ 拿它做 A/B,量完就删(仓库规矩:验完的开关不留代码 ✓)
@@ -61,7 +60,6 @@ enum Keys {
     /// 亮棱的强度(0 = 不画 ✓)。原生剖面:峰比内部 **+0.22** ✓
     static let debugGlassRimAlpha = "debug.glassRimAlpha"
     /// 入场轻弹的**风格**:off(瞬间到位)/ pop(横向收·不回弹)/ spring(横向收·带回弹)/ fade(不动几何,整块淡入)
-    static let debugSummonPopStyle = "debug.summonPopStyle"
 
     static let debugPinPanelOnRelease = "debug.pinPanelOnRelease"
     /// 「保持面板打开」的正式键(2026-09-22 从 `debug.pinPanelOnRelease` 提升而来:

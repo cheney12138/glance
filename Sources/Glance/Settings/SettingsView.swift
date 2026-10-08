@@ -398,7 +398,7 @@ struct SettingsView: View {
                 SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
                 }
-                SettingsRow(title: "唤起轻弹", desc: "面板出现时轻轻收一下。", hairline: false) {
+                SettingsRow(title: "唤起渐入", desc: "面板出现时从淡到实。", hairline: false) {
                     BeamSwitch(isOn: $summonPop)
                 }
             }

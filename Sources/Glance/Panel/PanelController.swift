@@ -164,48 +164,31 @@ final class PanelController: ObservableObject {
     /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
     @Published private(set) var ringFlipTarget = false
 
-    /// **唤起轻弹的进度**(0 = 起点(略大),1 = 落定)。
+    /// **入场渐入的进度**(0 = 还没出现,1 = 落定)。
     ///
     /// ★ 2026-10-08:用户提「Spotlight 唤起有个 Q 弹的动效」⇒ 按 Apple 录屏**逐帧量**出来的参数实现:
     ///   起始比最终宽 ~7%、130ms 内 ease-out 收位、并快速淡入 ✓(与我第一版"从小涨大"的方向相反 ✓)
     /// ⚠️ 只作用于**环里那块内容**,不动玻璃 —— 原生玻璃不能被变换(材质会掉 ✗)
     /// ⚠️ 起跳**延后一拍**(见 showPanel):提前起跳会踩 AppKit 的"Update Constraints in Window pass"
-    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一还没试过的活路 ✓)
-    @Published private(set) var entryPop: Double = 1
+    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一活路 ✓)
+    ///   渐入虽不动几何,这条**照旧保留** —— 它保护的是"上屏那一拍的布局",与动什么无关 ✓
+    @Published private(set) var entryFadeProgress: Double = 1
 
-    private var summonPopEnabled: Bool {
-        let on = UserDefaults.standard.object(forKey: Keys.panelSummonPop) as? Bool ?? KeyDefaults.summonPop
-        return on && abs(DebugFlags.summonPop - 1.0) > 0.001
+    /// 入场渐入的总开关(设置 → 通用 →「唤起渐入」✓;键名仍是 `panel.summonPop`,不改 ✓)
+    /// ⚠️ 老版这里还要求"起始倍率 != 1.0"才有意义 —— 渐入没有倍率了,那个条件随之作废 ✓
+    private var summonFadeEnabled: Bool {
+        UserDefaults.standard.object(forKey: Keys.panelSummonPop) as? Bool ?? KeyDefaults.summonPop
     }
 
-    /// **唤起轻弹的横向拉伸系数**(只给视图做 transform 用 ✓)。
+    /// **入场渐入的进度**(0 = 还没出现 · 1 = 落定)。视图拿它当 `.opacity` —— **不动任何几何** ✓
     ///
-    /// ★★ 2026-10-08 第三版(用户:「从左右像拉一根弹簧一样, duang一下的回弹」):
-    ///   第一版**等比缩放** ⇒ 用户读成"解锁后 App 入场的景深效果" ✗
-    ///   第二版改成"逐帧改宽度" ⇒ **一唤起就 SIGABRT** ✗✗
-    ///     —— 逐帧改 frame = **逐帧布局** ⇒ AppKit "Update Constraints in Window pass" 递归 ✓
-    ///     —— 而等比 `scaleEffect` 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓✓
-    ///   ⇒ 现在:纯 **transform**(`scaleEffect(x:y:)`)⇒ 只拉宽度、高度 1:1 ✓ 不触发布局 ✓
-    ///   起手略宽(默认 1.04×)→ 弹簧**收到位**;回弹力度 = `debug.summonPopBounce` ✓
-    ///   ⚠️ 代价:拉伸是"整块"的 ⇒ 图标跟着**横向轻微变形**(幅度越大越明显);
-    ///      "只拉玻璃、图标不变形" = 逐帧改布局 = 上面那条死路 ✗ ⇒ 幅度别开太大 ✓
-    var entryPopStretch: Double {
-        guard summonPopEnabled else { return 1 }
-        // ⚠️ 只有 pop / spring 这两档会**动几何** —— 而动几何有代价:
-        //   命中区用的是落定尺寸(`contentSize()`),画面却是拉伸的 ⇒
-        //   这 130ms 里"看到的图标"与"点得到的格子"不是同一处 ✗
-        //   (9 个 App 那一局,起点 1.04× ⇒ 最外侧那颗被推离 **≈22pt**,接近半个图标宽)
-        switch PanelMotion.summonPopStyle {
-        case .pop, .spring: return 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
-        case .off, .fade:   return 1
-        }
-    }
-
-    /// fade 档:**不动几何**,整块从淡到实(命中区全程不动 ✓)
-    var entryPopOpacity: Double {
-        guard summonPopEnabled, PanelMotion.summonPopStyle == .fade else { return 1 }
-        return entryPop
-    }
+    /// 史(2026-10-08 一天之内):这里先后是「整块横向 1.04→1.00 的拉伸」→「带 duang 的弹簧」
+    /// →「纯 transform 的横向橡皮筋」;用户三评之后定为**渐入**:
+    ///   「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢, 比之前的两段弹簧要好」
+    /// 换掉的**硬理由**(不是审美):动几何 ⇒ 命中区(用落定尺寸)与画面(被拉伸)**不一致** ✗
+    ///   —— 9 个 App 那局最外侧那颗被推离 ≈22pt,而格距才 68pt ⇒ 想点的那颗可能正好在缝里 ✓
+    ///   渐入没有这个病:从第一帧起"看到的就是点得到的" ✓
+    var entryFade: Double { entryFadeProgress }
 
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///
@@ -1052,7 +1035,7 @@ final class PanelController: ObservableObject {
         // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
         contentEntryRise = 0   // 不再是 entryFloatDistance
         // 把**这一次用的弹簧档位**写进日志 ✓(不然试完分不清刚才那个是哪个 ✗)
-        trace("[T6] 入场:轻弹风格 \(PanelMotion.summonPopStyle.rawValue)(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
+        trace("[T6] 入场:渐入 \(DebugFlags.summonPopMs)ms(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 
@@ -1080,10 +1063,10 @@ final class PanelController: ObservableObject {
         // 先上屏的会是上一局画好的旧视图(环)。正常召唤仍走同步:**零延迟是常态的纪律**,
         // 只有"说话局"这个例外晚一拍 —— 那一局只是说一句话,16ms 没人感觉得到。
         // ⚠️ 散场守卫必须带:这一拍里若 dismiss 过,绝不能把已拆的窗再 orderFront 回来。
-        // ★ 唤起轻弹的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
+        // ★ 渐入的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
         var popInstant = Transaction()
         popInstant.disablesAnimations = true
-        withTransaction(popInstant) { entryPop = summonPopEnabled ? 0 : 1 }
+        withTransaction(popInstant) { entryFadeProgress = summonFadeEnabled ? 0 : 1 }
         if hintText != nil {
             DispatchQueue.main.async { [weak self, weak panel] in
                 guard let self, let panel, self.isVisible else { return }
@@ -1094,15 +1077,15 @@ final class PanelController: ObservableObject {
         }
         // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
         //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
-        if summonPopEnabled {
-            // 两处 nil 都归"当拍到位":① off 档没有曲线;② 系统「减弱动态效果」开(尊重系统 ✓)
-            if let raw = PanelMotion.summonPopForStyle, let anim = MotionPolicy.entrance(raw) {
+        if summonFadeEnabled {
+            // nil = 系统「减弱动态效果」开着(尊重系统 ✓)⇒ 当拍到位
+            if let anim = MotionPolicy.entrance(PanelMotion.summonFade) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.isVisible else { return }
-                    withAnimation(anim) { self.entryPop = 1 }
+                    withAnimation(anim) { self.entryFadeProgress = 1 }
                 }
             } else {
-                entryPop = 1          // off:当拍就到位(不欠任何动画)
+                entryFadeProgress = 1     // 系统减弱动态 ⇒ 当拍到位(不欠任何动画 ✓)
             }
         }
         // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)

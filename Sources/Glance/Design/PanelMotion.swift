@@ -205,35 +205,23 @@ enum PanelMotion {
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 
-    /// **唤起轻弹**(2026-10-08):**弹簧**(带过冲 ⇒ 那一下"duang" ✓)。
-    /// 起点方向按 Apple 录屏实测:略大 → 收到位 ✓(不是"从小涨大" ✓)
-    /// 时长 = `debug.summonPopMs`(默认 130)· 力度 = `debug.summonPopBounce`(阻尼,默认 0.62 ✓)
-    /// ⚠️ 第一版用的是 `easeOut` ⇒ **单调收缩、没有回弹** ⇒ 用户实评「没有 duang 一下的感觉」✗
-    /// 入场轻弹的**四档**(用户 2026-10-08:「抛开 spotlight 这个弹窗参考……你有什么建议吗」)
-    enum SummonPopStyle: String {
-        case off        // 瞬间到位
-        case pop        // 横向收,不回弹
-        case spring     // 横向收 + 回弹(现状)
-        case fade       // 不动几何:整块淡入
-    }
-
-    static var summonPopStyle: SummonPopStyle {
-        SummonPopStyle(rawValue: DebugFlags.summonPopStyle) ?? .spring
-    }
-
-    /// 该风格用什么曲线(off 不用动画 ⇒ nil)
-    static var summonPopForStyle: Animation? {
-        switch summonPopStyle {
-        case .off:    return nil
-        case .pop:    return .easeOut(duration: max(0.05, Double(DebugFlags.summonPopMs) / 1000))
-        case .spring: return summonPop
-        case .fade:   return .easeOut(duration: 0.12)
-        }
-    }
-
-    static var summonPop: Animation {
-        .spring(response: max(0.05, Double(DebugFlags.summonPopMs) / 1000),
-                dampingFraction: min(max(DebugFlags.summonPopBounce, 0.3), 1.0))
+    /// **入场渐入**(2026-10-08 定版):整块(含玻璃那个 NSView,同一合成层)从淡到实 ✓
+    ///
+    /// 用户口径:「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢,
+    ///   比之前的两段弹簧要好」+ 追问「还是说, fade 是实现的有 bug, 误打误撞?」
+    /// ⇒ **不是 bug**:放慢到 6s 连拍 20 张:玻璃本体 0.168→0.231、图标带 0.252→0.444、
+    ///   整块均值 0.217→0.348 —— 三条**单调、平滑、且同步** ✓
+    ///   (假渐入的典型症状是"玻璃先到、内容后到" ✗,那样两条曲线会分家 ✓)
+    ///
+    /// 为什么它比"整块横向收"更适合这个工具(讨论留下的硬理由):
+    ///   · 动几何那几档(横向 1.04→1.00,还试过带回弹)在这 100 多毫秒里
+    ///     **画面与命中区不一致** ✗ —— 命中判据用落定尺寸,画面却被拉伸 ⇒
+    ///     9 个 App 那局最外侧那颗被推离 **≈22pt**(格距才 68pt);带回弹还要走两遍 ✗
+    ///   · 渐入**不动几何** ⇒ 从第一帧起"看到的就是点得到的" ✓
+    ///
+    /// 时长 = `debug.summonPopMs`(默认 **120** ✓);设置里的总开关仍是 `panel.summonPop`(键名不改 ✓)
+    static var summonFade: Animation {
+        .easeOut(duration: max(0.05, Double(DebugFlags.summonPopMs) / 1000))
     }
 
 }

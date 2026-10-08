@@ -174,13 +174,14 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
-        // ★ 唤起轻弹 = **横向橡皮筋**(2026-10-08 第三版):只拉**宽度**,高度不变 ✓
+        // 〔史〕唤起轻弹第三版曾在此拉宽度 —— 已定版为渐入(见下方 .opacity)✓ 留档:
         //   ⚠️⚠️ 必须用 **transform**(`scaleEffect(x:y:)`),不许逐帧改 `frame` ✗ ——
         //     第二版把弹写成"宽度每帧变一次" ⇒ 那是**逐帧布局** ⇒ 一唤起就踩
         //     "Update Constraints in Window pass" 递归 ⇒ SIGABRT ✗(真机复现 ✓)
         //     而等比 scaleEffect 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓
-        .scaleEffect(x: controller.entryPopStretch, y: 1, anchor: .center)
-        .opacity(controller.entryPopOpacity)      // fade 档用(其余档恒为 1 ✓ 零成本)
+        // ★ 入场 = **整块渐入**(2026-10-08 定版):只动不透明度,**不动几何** ✓
+        //   理由:动几何会让"画面"与"命中区"在这 100 多毫秒里不一致 ✗(见 PanelController.entryFade)
+        .opacity(controller.entryFade)
         // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
         //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
@@ -215,7 +216,7 @@ if sheen {
         //   容器里的内容由控制器在侧立那一帧换掉(看不见 ✓),所以这里只需要一块容器 ✓
         ringRow(launch: controller.entrySelected)
             .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
-            // ★ 唤起轻弹(2026-10-08):纯 2D 缩放,作用于**环里那块内容**,玻璃不动 ✓
+            // 〔史〕唤起轻弹曾在此做 2D 缩放 —— 已定版为渐入(见下方 .opacity)✓ 留档:
             //   参数按 Apple 录屏逐帧量:起始略大(默认 1.04)→ 130ms ease-out 收到位 ✓
             //   ⚠️ 起跳**延后一拍**(见 PanelController.showPanel):提前起跳会踩 AppKit 的
             //     "Update Constraints in Window pass" 递归 ⇒ 一唤起就 SIGABRT ✗
