@@ -680,10 +680,17 @@ struct GlassRim: View {
     let cornerRadius: CGFloat
 
     var body: some View {
+        // 用户三评(2026-10-08):「你明显**断层**了, 不是那种玻璃反光透亮的边缘效果……
+        //   你看下之前给你的截图, 原生的那个亮边的效果。现在又有点**太白**了」
+        // ⇒ 两条都记下:① 三圈**离散**叠出来就是断层(1.2/2.6/3.0pt 的三级台阶 ✗);
+        //              ② 7pt 宽的亮带**白面积太大** ⇒ 读成"太白"✗
+        // ⇒ 把原生的亮边放大 6× 再看了一眼:它是 **~1pt 的细软线(峰 +0.22),2px 内就消下去** ✓
+        //   ⇒ 收细:主亮边 1.0pt(模糊 0.45)+ 紧邻一道**很弱**的余晖(α 0.12,只用来防止"硬切")
+        //     + 内侧一道暗落。总宽 ~2.5pt(改前 ~7pt)✓ ⇒ 断层与"太白"一起消 ✓
         ZStack {
-            ring(inset: 3.0, width: 2.4, color: PanelColors.glassRimInner, blur: 1.4)
-            ring(inset: 2.0, width: 2.6, color: PanelColors.glassRimMid, blur: 1.6)
-            ring(inset: 0.6, width: 1.2, color: PanelColors.glassRimGlow, blur: 0.5)
+            ring(inset: 2.6, width: 1.6, color: PanelColors.glassRimInner, blur: 0.9)
+            ring(inset: 1.6, width: 1.4, color: PanelColors.glassRimMid, blur: 0.9)
+            ring(inset: 0.5, width: 1.0, color: PanelColors.glassRimGlow, blur: 0.45)
         }
         .allowsHitTesting(false)
     }

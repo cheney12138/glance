@@ -93,9 +93,11 @@ enum DebugFlags {
     /// **唤起轻弹的力度**(阻尼系数 · 默认 0.62):越小回弹越明显(1.0 = 不弹,纯收缩 ✓)。
     /// 用户 2026-10-08:「不如 spotlight q弹呢, 没有 duang 一下的感觉」——
     /// 那版是 `easeOut` 纯单调收缩 ⇒ 没有回弹 ✓ 现在换成弹簧 + 这个力度档 ✓
-    /// **亮棱强度** · 默认 0.55 —— 目标:峰比内部 **+0.22**(原生实测 ✓)
+    /// **亮棱强度** —— 原生实测峰比内部 **+0.22**(扫描:α0.45⇒+0.185 · 0.55⇒+0.226 · 0.80⇒+0.339)
+    /// ⇒ 与原生**等值**的那一档是 **0.55**;但用户三评「现在又有点太白」⇒ 默认取 **0.48**(≈+0.19)✓
+    /// 想回到"与原生一模一样"就写 0.55;想更淡写 0.35 ✓
     static var glassRimAlpha: Double {
-        (UserDefaults.standard.object(forKey: Keys.debugGlassRimAlpha) as? NSNumber)?.doubleValue ?? 0.55
+        (UserDefaults.standard.object(forKey: Keys.debugGlassRimAlpha) as? NSNumber)?.doubleValue ?? 0.48
     }
 
     /// **玻璃纱**(浅色)的不透明度 · 默认 **0.04** —— 量出来的甜点:
@@ -156,7 +158,7 @@ enum DebugFlags {
         ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
-        ("debug.glassRimAlpha", glassRimAlpha != 0.55, "亮棱 α = \(glassRimAlpha)(默认 0.55)"),
+        ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
         ("debug.summonPopBounce", summonPopBounce != 0.62, "唤起轻弹力度(阻尼) = \(summonPopBounce)(默认 0.62)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]

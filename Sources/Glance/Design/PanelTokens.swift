@@ -369,7 +369,9 @@ enum PanelColors {
     /// 上一稿我按外观把它做成"浅色给暗发丝" ✗ ⇒ 暗底上那道棱也没了(实测贴边 0.428 < 内部 0.446 ✗)。
     /// ⇒ 亮棱**一律白**;浅色那边**另加**一道内侧暗落(原生浅底实测 −0.03 ✓),两条并存 ✓
     static var glassRimMid: Color {
-        dynamic(white(DebugFlags.glassRimAlpha * 0.42), white(DebugFlags.glassRimAlpha * 0.42))
+        // α 0.42 → **0.12**:它只是"主亮边旁边那一点余晖",太强就变成一条白带 ✗
+        // (用户三评:亮边做成 7pt 宽的白带 ⇒ 「现在又有点太白了」✗)
+        dynamic(white(DebugFlags.glassRimAlpha * 0.12), white(DebugFlags.glassRimAlpha * 0.12))
     }
     static var glassRimGlow: Color {
         dynamic(white(DebugFlags.glassRimAlpha), white(DebugFlags.glassRimAlpha))
@@ -381,7 +383,7 @@ enum PanelColors {
     static var glassRimInner: Color {
         let k = DebugFlags.glassRimAlpha / 0.55
         return dynamic(NSColor.black.withAlphaComponent(0.015 * k),
-                       NSColor.black.withAlphaComponent(0.22 * k))
+                       NSColor.black.withAlphaComponent(0.10 * k))
     }
     /// **玻璃纱**(2026-10-08,用户:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」)。
     ///
