@@ -191,7 +191,20 @@ final class PanelController: ObservableObject {
     ///      "只拉玻璃、图标不变形" = 逐帧改布局 = 上面那条死路 ✗ ⇒ 幅度别开太大 ✓
     var entryPopStretch: Double {
         guard summonPopEnabled else { return 1 }
-        return 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
+        // ⚠️ 只有 pop / spring 这两档会**动几何** —— 而动几何有代价:
+        //   命中区用的是落定尺寸(`contentSize()`),画面却是拉伸的 ⇒
+        //   这 130ms 里"看到的图标"与"点得到的格子"不是同一处 ✗
+        //   (9 个 App 那一局,起点 1.04× ⇒ 最外侧那颗被推离 **≈22pt**,接近半个图标宽)
+        switch PanelMotion.summonPopStyle {
+        case .pop, .spring: return 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
+        case .off, .fade:   return 1
+        }
+    }
+
+    /// fade 档:**不动几何**,整块从淡到实(命中区全程不动 ✓)
+    var entryPopOpacity: Double {
+        guard summonPopEnabled, PanelMotion.summonPopStyle == .fade else { return 1 }
+        return entryPop
     }
 
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
@@ -1039,7 +1052,7 @@ final class PanelController: ObservableObject {
         // 今晚从 0.16 → 0.11 → 0.08 → 0.03 一路提速都收不到"够快",答案是这段动画**根本不该有**。
         contentEntryRise = 0   // 不再是 entryFloatDistance
         // 把**这一次用的弹簧档位**写进日志 ✓(不然试完分不清刚才那个是哪个 ✗)
-        trace("[T6] 入场:上浮(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
+        trace("[T6] 入场:轻弹风格 \(PanelMotion.summonPopStyle.rawValue)(弹簧档 \(PanelMotion.entranceGearName))" + (willSlide
             ? " + 从上一格滑过来(托底 \(lastLandedIndex! + 1) → \(appIndex + 1))"
             : ""))
 
@@ -1082,9 +1095,14 @@ final class PanelController: ObservableObject {
         // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
         //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
         if summonPopEnabled {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.isVisible else { return }
-                withAnimation(MotionPolicy.entrance(PanelMotion.summonPop)) { self.entryPop = 1 }
+            // 两处 nil 都归"当拍到位":① off 档没有曲线;② 系统「减弱动态效果」开(尊重系统 ✓)
+            if let raw = PanelMotion.summonPopForStyle, let anim = MotionPolicy.entrance(raw) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isVisible else { return }
+                    withAnimation(anim) { self.entryPop = 1 }
+                }
+            } else {
+                entryPop = 1          // off:当拍就到位(不欠任何动画)
             }
         }
         // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)

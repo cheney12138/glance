@@ -180,6 +180,7 @@ if sheen {
         //     "Update Constraints in Window pass" 递归 ⇒ SIGABRT ✗(真机复现 ✓)
         //     而等比 scaleEffect 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓
         .scaleEffect(x: controller.entryPopStretch, y: 1, anchor: .center)
+        .opacity(controller.entryPopOpacity)      // fade 档用(其余档恒为 1 ✓ 零成本)
         // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
         //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`

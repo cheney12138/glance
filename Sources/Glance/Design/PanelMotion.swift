@@ -209,6 +209,28 @@ enum PanelMotion {
     /// 起点方向按 Apple 录屏实测:略大 → 收到位 ✓(不是"从小涨大" ✓)
     /// 时长 = `debug.summonPopMs`(默认 130)· 力度 = `debug.summonPopBounce`(阻尼,默认 0.62 ✓)
     /// ⚠️ 第一版用的是 `easeOut` ⇒ **单调收缩、没有回弹** ⇒ 用户实评「没有 duang 一下的感觉」✗
+    /// 入场轻弹的**四档**(用户 2026-10-08:「抛开 spotlight 这个弹窗参考……你有什么建议吗」)
+    enum SummonPopStyle: String {
+        case off        // 瞬间到位
+        case pop        // 横向收,不回弹
+        case spring     // 横向收 + 回弹(现状)
+        case fade       // 不动几何:整块淡入
+    }
+
+    static var summonPopStyle: SummonPopStyle {
+        SummonPopStyle(rawValue: DebugFlags.summonPopStyle) ?? .spring
+    }
+
+    /// 该风格用什么曲线(off 不用动画 ⇒ nil)
+    static var summonPopForStyle: Animation? {
+        switch summonPopStyle {
+        case .off:    return nil
+        case .pop:    return .easeOut(duration: max(0.05, Double(DebugFlags.summonPopMs) / 1000))
+        case .spring: return summonPop
+        case .fade:   return .easeOut(duration: 0.12)
+        }
+    }
+
     static var summonPop: Animation {
         .spring(response: max(0.05, Double(DebugFlags.summonPopMs) / 1000),
                 dampingFraction: min(max(DebugFlags.summonPopBounce, 0.3), 1.0))

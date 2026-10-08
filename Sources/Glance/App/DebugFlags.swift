@@ -93,6 +93,15 @@ enum DebugFlags {
     /// **唤起轻弹的力度**(阻尼系数 · 默认 0.62):越小回弹越明显(1.0 = 不弹,纯收缩 ✓)。
     /// 用户 2026-10-08:「不如 spotlight q弹呢, 没有 duang 一下的感觉」——
     /// 那版是 `easeOut` 纯单调收缩 ⇒ 没有回弹 ✓ 现在换成弹簧 + 这个力度档 ✓
+    /// **入场轻弹的风格**(默认 spring = 现状 ✓)。四档见 `SummonPopStyle`:
+    ///   off    瞬间到位(回到 2026-09-17 你那句「直接一步到位」的口径 ✓)
+    ///   pop    横向"收"到位,不回弹(easeOut)
+    ///   spring 横向"收"到位,**带回弹**(现状)
+    ///   fade   不动几何:整块从淡到实 —— 命中区不移动 ✓
+    static var summonPopStyle: String {
+        UserDefaults.standard.string(forKey: Keys.debugSummonPopStyle) ?? "spring"
+    }
+
     /// **亮棱强度** —— 原生实测峰比内部 **+0.22**(扫描:α0.45⇒+0.185 · 0.55⇒+0.226 · 0.80⇒+0.339)
     /// ⇒ 与原生**等值**的那一档是 **0.55**;但用户三评「现在又有点太白」⇒ 默认取 **0.48**(≈+0.19)✓
     /// 想回到"与原生一模一样"就写 0.55;想更淡写 0.35 ✓
@@ -158,6 +167,7 @@ enum DebugFlags {
         ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
+        (Keys.debugSummonPopStyle, summonPopStyle != "spring", "入场轻弹风格 = \(summonPopStyle)"),
         ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
         ("debug.summonPopBounce", summonPopBounce != 0.62, "唤起轻弹力度(阻尼) = \(summonPopBounce)(默认 0.62)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
