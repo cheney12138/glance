@@ -205,9 +205,14 @@ enum PanelMotion {
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 
-    /// **唤起轻弹**(2026-10-08,按 Apple 录屏实测):130ms · **ease-out**(先快后缓 ✓)。
-    /// 观感是"略大 → 一下收到位",不是"从小涨大" ✓(量出来的方向就是这样 ✓)
-    static var summonPop: Animation { .easeOut(duration: max(0.02, Double(DebugFlags.summonPopMs) / 1000)) }
+    /// **唤起轻弹**(2026-10-08):**弹簧**(带过冲 ⇒ 那一下"duang" ✓)。
+    /// 起点方向按 Apple 录屏实测:略大 → 收到位 ✓(不是"从小涨大" ✓)
+    /// 时长 = `debug.summonPopMs`(默认 130)· 力度 = `debug.summonPopBounce`(阻尼,默认 0.62 ✓)
+    /// ⚠️ 第一版用的是 `easeOut` ⇒ **单调收缩、没有回弹** ⇒ 用户实评「没有 duang 一下的感觉」✗
+    static var summonPop: Animation {
+        .spring(response: max(0.05, Double(DebugFlags.summonPopMs) / 1000),
+                dampingFraction: min(max(DebugFlags.summonPopBounce, 0.3), 1.0))
+    }
 
 }
 

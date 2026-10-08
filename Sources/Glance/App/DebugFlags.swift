@@ -90,6 +90,13 @@ enum DebugFlags {
     /// **唤起轻弹的起始倍率**(默认 **1.04** = 先大 4% 再收到位)。
     /// 数来自 Apple 真机实测(录屏逐帧量:宽 1392→1299 = 起始宽 ~7%、130ms 内 ease-out 收位 ✓)
     /// **唤起轻弹的时长**(毫秒;默认 130 = Apple 实测 ✓;调大只是给"看清玻璃材质"用 ✓)
+    /// **唤起轻弹的力度**(阻尼系数 · 默认 0.62):越小回弹越明显(1.0 = 不弹,纯收缩 ✓)。
+    /// 用户 2026-10-08:「不如 spotlight q弹呢, 没有 duang 一下的感觉」——
+    /// 那版是 `easeOut` 纯单调收缩 ⇒ 没有回弹 ✓ 现在换成弹簧 + 这个力度档 ✓
+    static var summonPopBounce: Double {
+        (UserDefaults.standard.object(forKey: Keys.debugSummonPopBounce) as? NSNumber)?.doubleValue ?? 0.62
+    }
+
     static var summonPopMs: Int {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 130
     }
@@ -131,6 +138,7 @@ enum DebugFlags {
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
         ("debug.summonPop", summonPop != 1.04, "唤起轻弹起始倍率 = \(summonPop)(默认 1.04)"),
         ("debug.summonPopMs", summonPopMs != 130, "唤起轻弹时长 = \(summonPopMs)ms(默认 130)"),
+        ("debug.summonPopBounce", summonPopBounce != 0.62, "唤起轻弹力度(阻尼) = \(summonPopBounce)(默认 0.62)"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

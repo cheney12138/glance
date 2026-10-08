@@ -382,6 +382,15 @@ final class TapRoundTests: XCTestCase {
         guard case .rejected = out else { return XCTFail("长拖不进宽门, 实际:\(out)") }
     }
 
+    /// ★ 2026-10-08 病例(用户「三指误触稳定复现」,日志 55.0/55.4/58.4s):
+    ///   误触的真身就是**三指拖移本身** —— held 405ms / 位移 12pt,而且"刚拖完 + 有证据"两条都成立
+    ///   ⇒ 旧宽门把**时长也放宽**(0.50s)⇒ 一路放行 ✗;语义收窄后(宽限只管"糙点"位移、
+    ///   不管"长按"时长)⇒ 必拒 ✓(老病例的 305ms 仍在 0.33s 上限之内 ⇒ 那一条不受影响 ✓)
+    func testGraceDoesNotAdmitThreeFingerDragTail() {
+        let out = run(heldThree(t0: 0, until: 0.405), dragEvidence: true, postDragGrace: true)
+        guard case .rejected = out else { return XCTFail("三指拖移的尾巴不许进宽门, 实际:\(out)") }
+    }
+
     /// 宽门也不放大位移:norm 0.6 > 0.25 ⇒ 照旧让给系统 ✓
     func testGraceDoesNotAdmitBigMove() {
         var frames = threeFingers(t0: 0)
