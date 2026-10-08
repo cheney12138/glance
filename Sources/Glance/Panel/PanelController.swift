@@ -178,8 +178,20 @@ final class PanelController: ObservableObject {
         return on && abs(DebugFlags.summonPop - 1.0) > 0.001
     }
 
-    /// 视图用的缩放:**1.04 → 1.0**(起始略大,收到位 ✓ —— 与 Apple 实测同向 ✓)
-    var entryPopScale: Double { 1 + (DebugFlags.summonPop - 1) * (1 - entryPop) }
+    /// **视图专用的内容尺寸**(宽度带弹性 ✓)—— 与 `contentSize()` 分开,是为了让命中/几何那本账
+    /// 始终按"落定后的尺寸"算 ✓(弹的这 130ms 里指针几何不该跟着抖 ✓)
+    ///
+    /// ★★ 2026-10-08 第二版(用户:「我想要的是从左右像拉一根弹簧一样, duang一下的回弹」):
+    ///   第一版做的是**整体缩放**(`scaleEffect` 等比)⇒ 读成"解锁后 App 入场的景深效果" ✗
+    ///   现在只改**宽度**:两端像橡皮筋一样被拉开 → 弹簧收到位 ✓
+    ///   ⇒ 图标**不变形**(它们是居中排的 ✓),只有玻璃的两端飞出去 ✓ = 拉弹簧的感觉 ✓
+    ///   起手方向按 Apple 录屏实测:**略宽 → 收到位** ✓;回弹由 `debug.summonPopBounce` 控制 ✓
+    var displayContentSize: NSSize {
+        let base = contentSize()
+        guard summonPopEnabled else { return base }
+        let factor = 1 + (DebugFlags.summonPop - 1) * (1 - entryPop)
+        return NSSize(width: base.width * factor, height: base.height)   // ★ 高度不动 ✓
+    }
 
     /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///

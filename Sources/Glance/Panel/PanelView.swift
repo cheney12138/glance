@@ -109,7 +109,7 @@ if sheen {
                     .allowsHitTesting(false)
             }
         }
-        .frame(width: controller.contentSize().width, height: controller.contentSize().height)
+        .frame(width: controller.displayContentSize.width, height: controller.displayContentSize.height)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
         // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
         // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
@@ -154,11 +154,9 @@ if sheen {
         // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
         // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
         .elevation(controller.hintText == nil ? .strip : .puck)
-        // ★ 唤起轻弹(2026-10-08):挂在**整块面板**上(玻璃 + 图标一起缩放 ✓)——
-        //   用户口径:「轻弹的只是环里面的 app, 不是整个环诶」⇒ 要整块弹 ✓
-        //   ⚠️ 这一条正是"原生玻璃能不能被 2D 缩放"的**干净测试**:
-        //     前两次"掉材质"的结论都被残留的 3D 旋转污染过 ✗ ⇒ 这次只缩放、不旋转 ✓
-        .scaleEffect(controller.entryPopScale, anchor: .center)
+        // ★ 唤起轻弹 = **横向橡皮筋**(2026-10-08 第二版):宽度由 `displayContentSize` 弹簧驱动,
+        //   高度不动、图标不变形 ⇒ 观感是"两端被拉开 → duang 收到位" ✓
+        //   (第一版是等比 `scaleEffect` ⇒ 用户实评"像解锁后 app 入场的景深效果" ✗ 已撤 ✓)
         // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
         //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
