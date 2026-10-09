@@ -814,13 +814,22 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
 
     /// 批量枚举(一个批次共用一次)。SCShareableContent 是几十毫秒的全局调用,不能每条流各来一次。
     private func window(_ wid: CGWindowID) async -> SCWindow? {
-        if CFAbsoluteTimeGetCurrent() - winCacheAt < 2.0, let w = winCache[wid] { return w }
+        // ⚠️ `winCache/winCacheAt` 也住在池队列上(2026-10-09 那条崩溃的同一类 ✗):
+        //    本函数由 `Task`(协作线程)调用 ⇒ 读写都圈进队列;**`await` 留在圈外** ✓
+        let cached: SCWindow? = queue.sync {
+            CFAbsoluteTimeGetCurrent() - winCacheAt < 2.0 ? winCache[wid] : nil
+        }
+        if let cached { return cached }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
             return nil
         }
-        winCacheAt = CFAbsoluteTimeGetCurrent()
-        for w in content.windows { winCache[w.windowID] = w }
-        return winCache[wid]
+        var hit: SCWindow?
+        queue.sync {
+            winCacheAt = CFAbsoluteTimeGetCurrent()
+            for w in content.windows { winCache[w.windowID] = w }
+            hit = winCache[wid]
+        }
+        return hit
     }
 
     private func start(_ wid: CGWindowID, box cardBox: CGSize?, fps: Int) {
@@ -838,10 +847,17 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             //   (2026-09-22 用户实报的"两块内容挤在一张卡 + 一块黑"就是它 ⇒ 两条路一起关 ✓)
             if #available(macOS 14.2, *) { cfg.includeChildWindows = false }
             // I3:尺寸**首启冻结** —— 窗口后来变形也不改(改了就是"画面忽然缩放",病例 A3)
-            let size: CGSize
-            if let f = self.frozenSize[wid] {
-                size = f
-            } else {
+            // ⚠️⚠️ 2026-10-09 崩溃病例(用户报「闪退了」· 报告 `Glance-2026-10-09-123701.ips`):
+            //   `frozenSize` 原来就在这里**直接读写** ✗ —— 而这段跑在 `Task {}` 的**协作线程**上
+            //   ( `start` 是在**池队列**上调的 ✓ —— 这块的老规矩就是"共享字典只在池队列上动" ✓
+            //     `handles` 就是这么处理的 ✓,唯独漏了它 ✗)。
+            //   触发:两个窗口的流一起起(日志:`起流池 += … 池内=5`)⇒ 两条协作线程同时写同一个字典 ✗
+            //   ⇒ 崩溃报告铁证:线程 13(`com.apple.root.user-initiated-qos.cooperative`)
+            //     `Dictionary.subscript.setter → _NativeDictionary.setValue → _copyOrMoveAndResize`
+            //     ⇒ `EXC_BAD_ACCESS / SIGSEGV`(pointer authentication failure)✓
+            //   ⇒ 把它也圈进池队列:`queue.sync` **只包读写、不包 await** ✓
+            let size: CGSize = self.queue.sync {
+                if let f = self.frozenSize[wid] { return f }
                 let scale = PanelScreen.scale
                 // ★★ 2026-09-24 A 修:「同一把尺子」要连**输入**一起同源 ——
                 //   盒子由调用方按 `record.bounds`(CGWindowList 口径,与卡片盒同一份账 ✓)算好传入;
@@ -851,9 +867,10 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 let pt = cardBox ?? PanelMetrics.thumbSize(
                     real: win.frame.size,
                     aspect: win.frame.width / max(win.frame.height, 1))
-                size = CGSize(width: (pt.width * scale).rounded(),
-                              height: (pt.height * scale).rounded())
-                self.frozenSize[wid] = size
+                let v = CGSize(width: (pt.width * scale).rounded(),
+                               height: (pt.height * scale).rounded())
+                self.frozenSize[wid] = v
+                return v
             }
             cfg.width = max(2, Int(size.width)); cfg.height = max(2, Int(size.height))
             cfg.minimumFrameInterval = CMTime(value: 1, timescale: Int32(max(1, fps)))
@@ -870,8 +887,10 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                     self.startedAt[wid] = CFAbsoluteTimeGetCurrent()
                 }
                 try await s.startCapture()
+                // ⚠️ 读 `handles` 也要在池队列上(与上面那条同一个病例 ✓ 2026-10-09)
+                let poolCount = self.queue.sync { self.handles.count }
                 glog(String(format: "[直播] 起流池 += wid=%u %dx%d @%dfps 池内=%d",
-                            wid, Int(size.width), Int(size.height), fps, self.handles.count))
+                            wid, Int(size.width), Int(size.height), fps, poolCount))
             } catch {
                 glog("[直播] 起流失败 wid=\(wid): \(error.localizedDescription)")
             }
