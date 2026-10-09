@@ -107,6 +107,12 @@ enum DebugFlags {
     }
 
 
+    /// **主线程看门狗**(默认关 ✓)。开:卡死时**后台线程**会写出
+    /// `[卡死] 主线程 ≥Ns 没心跳(后台线程仍在跑)⇒ 立刻 sample <pid> 抓现场 ✓`
+    /// 见 `Diagnostics/FrameProbe.swift` 尾部的实现与病例
+    /// (2026-10-08 那次卡死既没有崩溃报告、也没有 spin 报告、trace 还是块缓冲 ⇒ 现场只能当场记 ✓)
+    static var mainThreadWatchdog: Bool { UserDefaults.standard.bool(forKey: Keys.debugMainThreadWatchdog) }
+
     static var summonPopMs: Int {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
     }
@@ -143,6 +149,7 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
+        (Keys.debugMainThreadWatchdog, mainThreadWatchdog, "主线程看门狗(卡死才有输出)"),
         ("debug.summonPopMs", summonPopMs != 120, "入场渐入时长 = \(summonPopMs)ms(默认 120)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),

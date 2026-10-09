@@ -51,6 +51,10 @@ enum Keys {
     /// ⚠️ 老键 `debug.summonPop`(起始倍率)与 `debug.summonPopBounce`(阻尼)**已作废** ——
     ///   渐入不动几何,那两个旋钮没有意义了(键常量一并删掉,别留"写了没用"的假旋钮 ✓)
     static let debugSummonPopMs = "debug.summonPopMs"
+    /// `debug.mainThreadWatchdog` —— 主线程看门狗(默认 **关** ✓):卡死时由**后台线程**写一行日志 ✓
+    /// (2026-10-08 病例:那次卡死既没有崩溃报告、也没有 spin 报告,trace 又是块缓冲 ⇒
+    ///  文件里最后一行可能比真实卡死时刻早几分钟 ✗ ⇒ 现场必须在**还活着**的时候记下来 ✓)
+    static let debugMainThreadWatchdog = "debug.mainThreadWatchdog"
     /// 🔬 `debug.glassStyleLight` —— **临时**档位:浅色外观下玻璃用 `clear`(默认)还是 `regular`。
     /// 用户 2026-10-08 口径:「玻璃还是没有 macOS 原生自然, 背景是白色的时候可见性差一点」
     /// ⇒ 拿它做 A/B,量完就删(仓库规矩:验完的开关不留代码 ✓)

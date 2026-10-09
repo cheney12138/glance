@@ -233,3 +233,55 @@ final class HzCompare {
         glog("[Hz] 结论: \(a.isEmpty || b.isEmpty ? "样本不足" : "见上两行")")
     }
 }
+
+
+/// 主线程心跳(只在主线程写,看门狗只读 ⇒ 一个 Int 的读写,不需要锁 ✓ 只用于"进没进"判断)
+nonisolated(unsafe) private var heartbeat = 0
+/// 已经就"这一次卡死"报过没(报一次就够,别刷屏 ✓)
+nonisolated(unsafe) private var reportedStall = false
+
+final class MainThreadWatchdog {
+    static let shared = MainThreadWatchdog()
+    private var ticking = false
+
+    /// 起(幂等 ✓)。`stallSeconds` 之内没心跳就报一次 ✓
+    func start(stallSeconds: Double = 4) {
+        guard DebugFlags.mainThreadWatchdog, !ticking else { return }
+        ticking = true
+        // ① 主线程心跳:1s 一次(主线程一卡,这个定时器就停 ⇒ 心跳停 = 信号 ✓)
+        let t = Timer(timeInterval: 1, repeats: true) { _ in heartbeat &+= 1 }
+        RunLoop.main.add(t, forMode: .common)
+        glog("[诊断] 主线程看门狗:开(每秒一次心跳、不落盘;连续 \(Int(stallSeconds))s 没心跳才写一行 ✓)")
+        // ② 看门狗线程:自己跑,主线程卡死也与它无关 ✓
+        let thread = Thread {
+            var last = heartbeat
+            var still = 0.0
+            while true {
+                Thread.sleep(forTimeInterval: 1)
+                if heartbeat == last {
+                    still += 1
+                    if still >= stallSeconds, !reportedStall {
+                        reportedStall = true
+                        let pid = ProcessInfo.processInfo.processIdentifier
+                        // ⚠️ 这一行**必须**走 glog:后台线程写文件不受主线程卡死影响 ✓
+                        glog(String(format: "[卡死] 主线程 ≥%.0fs 没心跳(后台线程仍在跑)⇒ "
+                                    + "立刻 `sample %d 3 -file /tmp/glance-hang.txt` 抓现场 ✓", still, pid))
+                        // 落一个标记文件(万一日志通道也不通,至少有东西可查 ✓)
+                        try? "\(Date()) 主线程卡住 \(still)s · pid \(pid)"
+                            .write(toFile: "/tmp/glance-hang-marker.txt", atomically: true, encoding: .utf8)
+                    }
+                } else {
+                    if still >= stallSeconds {
+                        glog("[卡死] 主线程恢复(卡了约 \(Int(still))s)✓")
+                        reportedStall = false
+                    }
+                    last = heartbeat
+                    still = 0
+                }
+            }
+        }
+        thread.name = "glance-main-watchdog"
+        thread.stackSize = 256 * 1024
+        thread.start()
+    }
+}

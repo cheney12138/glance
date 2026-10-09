@@ -290,6 +290,9 @@ final class ThreeFingerTap {
 
         /// 标记"本轮已生效"(按压触发那条路用;抬手不再按点按重复计)
         mutating func markFired() { tracker.markFired() }
+
+        /// 本轮有没有出现过触点(掌也算)—— 空帧不判卷要看它 ✓(见 contactFrame 里那段病例)
+        var roundHadFingers: Bool { tracker.roundHadFingers }
     }
     func start() {
         guard !started else { return }   // 幂等:载库只做一次 ✓
@@ -515,6 +518,14 @@ final class ThreeFingerTap {
         //   (用户实报「你治好什么了, 手势不生效了... 确实不会误触了」——
         //    "不误触"是因为**什么都不触发** ✗,日志:开火 0 / 不动作 0 / 账本 1.0s 未收口)
         //   ⇒ 恢复"抬手帧当场判" ✓;单指误触由**起点清 id**那条真修复挡着 ✓
+        // ★★ 空帧不判卷(2026-10-08 病例):这块触控板**无人触碰时也在持续喂空帧**(~120 帧/秒)✗
+        //   ⇒ 每帧都判卷的话:① 日志被 `触点过轻(… 0 指)` 刷满(实测 6828 行 ✗,而 print 是主线程);
+        //     ② 那些"0 指"的结论还会让人误读成"手在板上但被挡了" ✗
+        //   ⇒ 本轮**一根手指都没出现过**(空帧 / 只有掌搭着)⇒ 结束这一轮,不判、也不写账 ✓
+        guard tap.press.roundHadFingers else {
+            tap.press.endRound()
+            return 0
+        }
         let states = tap.press.statesSeen.sorted().map(String.init).joined(separator: "/")
         let evidence = tap.dragEvidencePending()
         // 拖后宽限:按压起点 = 此刻 − 整轮时长;鼠标刚抬起 + 本轮被系统抢过(证据)⇒ 宽门 ✓

@@ -137,6 +137,19 @@ public enum TapRound {
         ///   (实测手指上限 10.4 ✓ 掌心下限 17.1 ✓ ⇒ 14 落在两簇正中间,两侧各留 ~3pt 余量 ✓)
         ///   档位:`debug.tapMaxMajor`(设 0 = 关掉这条门 ✓)
         public var maxMajor: Float = 14
+        /// **背景接触**(= 掌)的判据:比本轮"最后一个手指"早超过这个时间才落板的触点 ⇒
+        /// 不算手指、也不阻止收口 ✓
+        ///
+        /// ★★ 2026-10-08 病例(用户:「手掌误触放在触摸板上, 然后三指点按唤起的是**四指**的未启动环,
+        ///   手掌离开之后三指再点还是唤不起, 像有个 CD」):
+        ///   日志里同一段动作,形状**一模一样**(size 0.7–0.9 · major 8–12),结论却在 **4 / 2 / 3 指**
+        ///   之间来回跳 ✗ —— 说明 size/major 这两把尺子在这台机器上**分不开掌和指** ✓:
+        ///     真·指尖   major 8.1–10.4(2026-09-24 样本)
+        ///     这次的掌   major **8–12** ✗✗(同簇!)· 而 `maxMajor = 14` 的线穿在掌心里 ⇒ 放过 ✗
+        ///   而**时间**分得开:掌是"先在、后走",三根手指是"一起落、一起走" ✓
+        ///   (本仓早就认过这半个道理:见下面 ⑦"掌先落的不计时" ✓ —— 这次把"不计时"扩成"不计指" ✓)
+        ///   取 0.3s 的理由:与他们已有的"落齐后 ≤300ms"同一把尺子 ✓(一根手指落齐很少超过 40ms ✓)
+        public var backgroundSlack: Double = 0.3
         /// 续接窗口：旧轨迹失联多久之内，新 id 可以认领它
         public var carryWindow: Double = 0.06
         /// 续接半径（归一化距离）：新 id 离旧轨迹多近才算同一根手指（≈ 屏宽的 5%）
@@ -264,6 +277,7 @@ public enum TapRound {
             beganAt = 0
             countedSince = 0
             sawRealTouch = false
+            roundHadFingers = false
             active = false
             fired = false
             palmCount = 0
@@ -290,7 +304,8 @@ public enum TapRound {
             let seen = frame.contacts.filter { $0.state >= 1 && $0.state <= 4 }
             for c in seen { statesSeen.insert(c.state) }
             let palmTouching = seen.filter { isPalm($0) }.count
-            let touching = seen.count - palmTouching
+            // ⚠️ "此刻在板上的手指数"要等**认领轨迹之后**才算得准(背景接触要看轨迹年龄 ✓)
+            //   ⇒ 这一段只算掌,手指簇在 ④ 之后补(见 `touching` 的第二次定义 ✓)
 
             // ③ 板上一点东西都没有（手指与掌都没有）⇒ 这一轮结束（账本**留着**，等调用方判卷 ✓）
             guard !seen.isEmpty else {
@@ -324,9 +339,12 @@ public enum TapRound {
                     idx = ti
                 }
                 if idx == nil {
+                    // 新轨迹:落板时刻优先沿用登记簿(2s 内的才算同一根,见 bornAt 的病例 ✓)
+                    let born = bornAt[c.id].flatMap { now - $0 <= 2.0 ? $0 : nil } ?? now
+                    bornAt[c.id] = born
                     live.append(Track(id: c.id, baseNorm: c.normalized, baseAbs: c.absolute,
                                       lastNorm: c.normalized, lastAbs: c.absolute, lastSeen: now,
-                                      landedAt: now, isPalm: palm))
+                                      landedAt: born, isPalm: palm))
                     idx = live.count - 1
                 }
                 let i0 = idx!
@@ -343,6 +361,22 @@ public enum TapRound {
                 let da = dist(live[i0].baseAbs, c.absolute)
                 maxNormMove = max(maxNormMove, Float(dn))
                 maxAbsMove = max(maxAbsMove, Float(da))
+            }
+
+            // ④b **手指簇**才算手指 —— 两个排除:① 掌(形状判出的大块 · 见 `isPalm`);
+            //    ② **背景接触**(比"最近落板的那根手指"早 >0.3s 就在板上 · 见 `Policy.backgroundSlack` 的病例)
+            //    ⚠️ 口径必须是**当帧触点**(`seen`)+ **落板登记簿**(`bornAt`):
+            //      用 `live` 会带上"刚抬起、还在剪枝窗口里"的那一根 ⇒ `touching` 不下降
+            //      ⇒ `firstLiftAt` 永不置位 ⇒ "慢抬手"那道门失守 ✗(2026-10-09 单测当场抓到 ✓)
+            let touching = seen.filter { !isPalm($0) && !isBackground(id: $0.id, now: now) }.count
+            if touching > 0 { roundHadFingers = true }
+            // ④c 手指簇走光了、而板上**还有东西**(掌还搭着)⇒ 这一轮到此为止,交调用方判卷 ✓
+            //    否则收口帧永远等不来(掌不走 ⇒ `seen.isEmpty` 不成立 ✗)⇒ 每 1s 一次强制重置 ✗,
+            //    下一轮还会一直挂在这一轮上 ✗ —— 用户实感就是「像有个 CD」✓
+            //    (只认"本轮真的有过手指"的场合 ⇒ 掌干搭着不会每帧判卷刷屏 ✓)
+            if touching == 0, maxTracks > 0 {
+                active = false
+                return 0
             }
 
             // ⑤b 剪枝:失联超过 carryWindow ⇒ 这条轨迹**不再算存活** ✓
@@ -378,6 +412,30 @@ public enum TapRound {
 
         /// 上一帧的真手指数（判"有人抬手"要跟它比 ✓）
         private var lastTouching = 0
+
+        /// **落板时刻登记簿**(id → 落板时间)。与 `live` 分开、**跨轮保活** ✓
+        ///
+        /// 为什么要它:`endRound()` 会把轨迹全清(测试证明"跨轮保活轨迹"会破坏不变量 ✗),
+        /// 可是掌的年龄要**跨过一轮**才判得出来("比最近的手指早 0.3s 以上" ✓)—— 掌还在板上,
+        /// 下一轮它又会"变年轻"、又被数成手指 ✗(就是用户那个"三指变四指" ✓)。
+        /// ⇒ 单独记一份:轨迹可以清,但这根手指**什么时候落板的**不许忘 ✓
+        /// 只留 2s 内的(硬件会回收 id ✗ ⇒ 太老的一律当作新落板 ✓)
+        private var bornAt: [Int32: Double] = [:]
+
+        /// 这一条是"背景接触"(掌)吗 —— 唯一一份口径,见 `Policy.backgroundSlack` 的病例 ✓
+        /// 判据:它的落板时刻(`bornAt`,跨轮保活 ✓)比"此刻板上最新落板的那根非掌触点"早 > 0.3s ✓
+        private func isBackground(id: Int32, now: Double) -> Bool {
+            guard let born = bornAt[id] else { return false }        // 登记簿里没有 = 刚落的 ✓
+            let newest = live.filter { !$0.isPalm }
+                .map { bornAt[$0.id] ?? $0.landedAt }.max() ?? 0
+            guard newest > 0 else { return false }
+            return newest - born > policy.backgroundSlack
+        }
+
+        /// 本轮**有没有出现过手指**(掌不算)。给"空帧不判卷"用:
+        /// 这台触控板在没人碰的时候**也会持续喂空帧**(实测 ~120 帧/秒)⇒ 若每帧都判卷,
+        /// 日志会被 `触点过轻(… 0 指)` 刷满(2026-10-08 量到 6828 行 ✗),而且结论毫无意义 ✓
+        public private(set) var roundHadFingers = false
 
         // MARK: 判卷
 
@@ -486,7 +544,8 @@ public enum TapRound {
 
         public func snapshot(now: Double) -> Snapshot {
             var s = Snapshot()
-            s.fingerCount = max(maxTracks, live.filter { !$0.isPalm }.count)
+            // ⚠️ 手指簇口径(见 Policy.backgroundSlack):掌不算手指 —— 这一行决定判卷走哪条路 ✓
+            s.fingerCount = max(maxTracks, live.filter { !$0.isPalm && !isBackground(id: $0.id, now: now) }.count)
             s.held = now - (countedSince > 0 ? countedSince : beganAt)
             s.heldTotal = now - beganAt
             s.normalizedMove = maxNormMove
@@ -498,7 +557,8 @@ public enum TapRound {
             s.sawFrameGap = sawFrameGap
             s.releaseSpan = firstLiftAt > 0 ? now - firstLiftAt : 0
             s.carriedContacts = carried
-            s.maxContactAge = live.filter { !$0.isPalm }.map { now - $0.landedAt }.max() ?? 0
+            s.maxContactAge = live.filter { !$0.isPalm && !isBackground(id: $0.id, now: now) }
+                .map { now - $0.landedAt }.max() ?? 0
             return s
         }
 
