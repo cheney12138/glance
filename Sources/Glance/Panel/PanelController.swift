@@ -614,6 +614,25 @@ final class PanelController: ObservableObject {
         }
     }
 
+    /// 启动区名单(候选 + 在跑)的**后台刷新**(病例与实测账见 `DockAppsProvider.candidateCache`
+    /// 与 `runningCache` 两段):这两块实测在"后台枚举并发跑着"的那一拍要 15–22ms ✗,
+    /// 而单独量每个调用只要 ~1.5ms ✓ ⇒ 不猜谁对,直接让它们**让开关键路径** ✓
+    /// (唤起那拍只读缓存;重活在后台做、下一局生效 —— "在跑的"另有工作区通知 ⇒ 及时 ✓)
+    private var launchCandidatesRefreshing = false
+    private func refreshLaunchCandidatesSoon() {
+        guard !launchCandidatesRefreshing else { return }
+        launchCandidatesRefreshing = true
+        Task.detached(priority: .utility) { [weak self] in
+            let list = DockAppsProvider.computeCandidates()
+            let running = DockAppsProvider.computeRunningSet()
+            await MainActor.run {
+                DockAppsProvider.storeCandidates(list)
+                DockAppsProvider.storeRunningSet(running)
+                self?.launchCandidatesRefreshing = false
+            }
+        }
+    }
+
     /// - Parameter stale: true = 这一趟画的是**上一局的名单**(枚举还没回来)
     private func finishBegin(_ raw: [AppGroup], generation: Int, beganAt: CFAbsoluteTime,
                              reverse: Bool, stale: Bool = false) {
@@ -625,6 +644,7 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        SessionMarks.step("顺序")     // 🔬 细账(2026-10-09):拆"落点"这一段
         // 记下这份名单(和它属于哪块屏):下一局唤起要靠它先上屏 ✓
         lastSessionGroups = groups
         lastSessionScreenID = screen.flatMap { DisplayOrder.displayID(of: $0) }
@@ -633,6 +653,7 @@ final class PanelController: ObservableObject {
         //   "从 Dock 把窗点回来"**不产生我们的任何动作** ✗ ⇒ 那条路根本没人剪 ✗
         //   ⇒ 局面重设的这一刻就是最好的机会(而且这里最便宜:一局一次 ✓)
         reconcileMinimizedMarks(raw)
+        SessionMarks.step("剪枝")     // 🔬 细账
         listReady = true
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
@@ -640,15 +661,22 @@ final class PanelController: ObservableObject {
         // 新一局回到"主环第一格"的语义:上一局若停在启动区,这一局不带过去(主环才是本产品的主世界)
         entrySelected = false
         launchIndex = nil
+        SessionMarks.step("状态三笔")   // 🔬 细账(2026-10-09):@Published 赋值本身要不要钱
         if UserDefaults.standard.object(forKey: Keys.panelShowLaunchables) as? Bool ?? true {
             // ⚠️ 2026-09-17 病例:除了 bundle id,**把 bundle 的路径也放进"在跑"的集合**。
             // 有些 Dock 常驻项取不到 bundleID(`DockApps.launchables` 里会退化成用 **path** 当 id),
             // 那时"在跑"的集合里只有 id ⇒ 两边**永远对不上** ⇒ 明明在跑的 App 也被列成"未启动"。
             // 用户实报:「app 全启动了, 但四指没有文案提示」—— 日志里正是 `未启动的 App(共 2 个)`。
-            let runningApps = NSWorkspace.shared.runningApplications
-            var running = Set(runningApps.compactMap(\.bundleIdentifier))
-            running.formUnion(runningApps.compactMap { $0.bundleURL?.path })
+            // ★ 2026-10-09:整块(含下面那个集合)现在**只吃缓存** ⇒ 亚毫秒;重活全在后台刷 ✓
+            //   细账点名它 15–22ms ✗ ⇒ 见 `DockAppsProvider.runningCache` 的病例 ✓
+            let running = DockAppsProvider.runningSet()
+            SessionMarks.step("在跑集合")   // 🔬 细账
             launchables = DockAppsProvider.launchables(excluding: running)
+            SessionMarks.step("名单")       // 🔬 细账
+            // ★ 2026-10-09:这一拍只吃**缓存**(上面那行现在是一次 filter ✓ 亚毫秒);
+            //   真正的重活(Dock plist + N 次 LaunchServices 查询 + 图标元数据)挪到后台算,
+            //   **下一局生效** ✓ —— 病例与实测账见 `DockAppsProvider.candidateCache` ✓
+            refreshLaunchCandidatesSoon()
             // 诊断(只在真有名单时出声):把名字与 id 都打出来 —— 一眼能看出是谁、以及 id 退化没退化
             if isTraceEnabled, !launchables.isEmpty {
                 trace("[T91] 未启动名单: " + launchables.map { "\($0.name)[\($0.id)]" }.joined(separator: " · "))
@@ -656,6 +684,8 @@ final class PanelController: ObservableObject {
         } else {
             launchables = []
         }
+        SessionMarks.step("T91")        // 🔬 细账
+        SessionMarks.step("Dock")     // 🔬 细账:启动区名单(自 2026-10-09 起只吃缓存 ⇒ 应该降到亚毫秒 ✓)
         // **唤起落点**(2026-09-14 做成开关;用户口径:"默认肯定是用 macOS 原生的习惯,不要调教用户"):
         //   开(**默认**)= 直接落在"上一个 App" —— 一次 ⌘Tab 就完成一次切换,这是 macOS 原生节奏;
         //   关        = 落在第一个(当前 App),要再按一次 Tab 才切走 —— 留给"先唤起看清列表再决定"的人。
@@ -1047,6 +1077,7 @@ final class PanelController: ObservableObject {
         //    与"面板要已经在"这条纪律不冲突 —— 用户感知不到那一拍。
         panel.alphaValue = 0
         setFrameIfNeeded(panel, target)
+        SessionMarks.step("置框")     // 🔬 细账(2026-10-09):拆"开窗"这一段
         // ★★ T91:**先画这一帧,再上屏** —— 顺序反了就是那道白光。
         //
         // 病例(2026-09-17,用户实报「重启之后第一次唤起面板, 会闪一下, 有一道白光」):
@@ -1076,6 +1107,7 @@ final class PanelController: ObservableObject {
         } else {
             panel.orderFrontRegardless()
         }
+        SessionMarks.step("上屏")     // 🔬 细账:orderFront + 首轮布局
         // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
         //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
         if summonFadeEnabled {

@@ -20,15 +20,32 @@ enum DockAppsProvider {
     }
 
     /// 图标缓存(NSWorkspace.icon(forFile:) 逐次调用不便宜;App 卸载重装极少变,进程级够用)
-    private static var iconCache: [String: NSImage] = [:]
+    /// ⚠️ 自 2026-10-09 起它会在**后台线程**被读写(候选名单的重活挪去了后台 ✓)
+    ///   ⇒ 加锁;代价可忽略(每局几次字典访问 ✓)
+    nonisolated(unsafe) private static var iconCache: [String: NSImage] = [:]
+    nonisolated(unsafe) private static let iconLock = NSLock()
+    /// 取图标(命中就回;未命中就加载并存入 ✓ 锁只圈字典、不圈加载 ⇒ 不会卡住别人 ✓)
+    nonisolated private static func cachedIcon(_ path: String) -> NSImage {
+        iconLock.lock(); let hit = iconCache[path]; iconLock.unlock()
+        if let hit { return hit }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        iconLock.lock(); iconCache[path] = icon; iconLock.unlock()
+        return icon
+    }
 
     /// **白名单**(2026-09-19):不在 Dock 常驻的 App 也进未启动环。存 bundle id(见 spec note 6)。
     /// 名单在设置页编辑;两名单互斥由选择器保证(已在对方名单的 App 根本不出现)。
-    static var whitelist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchWhitelist) ?? [] }
-    static func setWhitelist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: Keys.launchWhitelist) }
+    nonisolated static var whitelist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchWhitelist) ?? [] }
+    static func setWhitelist(_ ids: [String]) {
+        UserDefaults.standard.set(ids, forKey: Keys.launchWhitelist)
+        invalidateCandidates()   // 设置一改 ⇒ 下一局重算(设置是绝对权威 ✓)
+    }
     /// **黑名单**:Dock 常驻也不进未启动环。
-    static var blacklist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchBlacklist) ?? [] }
-    static func setBlacklist(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: Keys.launchBlacklist) }
+    nonisolated static var blacklist: [String] { UserDefaults.standard.stringArray(forKey: Keys.launchBlacklist) ?? [] }
+    static func setBlacklist(_ ids: [String]) {
+        UserDefaults.standard.set(ids, forKey: Keys.launchBlacklist)
+        invalidateCandidates()
+    }
 
     /// 名单条目(bundle id)在盘上解析出的展示信息。找不到(已卸载)= path 空串,调用方灰显
     struct InstalledApp: Identifiable {
@@ -94,22 +111,53 @@ enum DockAppsProvider {
     /// 本局面板的"未启动"名单:**Dock 常驻 ∪ 白名单 − 黑名单 − 在跑的**(2026-09-19 收录面扩容)。
     /// `runningBundleIDs`:主环已有谁(本局 groups 的 bundle id ∪ 系统全部在跑 App 的 bundle id)——
     /// 在跑的已由主环/无窗应用支线展示,启动区不再重复。
-    static func launchables(excluding runningBundleIDs: Set<String>) -> [LaunchableApp] {
+    /// ★★ 2026-10-09:**候选名单的进程级缓存** —— 这块活是每次唤起里最贵的一段 ✗
+    ///
+    /// 细账(13 次唤起,拆到段):
+    ///   `陈旧上屏 3.6 · 顺序 2.0 · 剪枝 0.1 · **Dock 20.0(max 27)** · 落点 0.0 · 置框 1.8 · 上屏 12.2 · 首帧 12.7`
+    ///   ⇒ 一次唤起 36–75ms,`Dock` 一段占**一半** ✗
+    /// 但把这段里的每个调用**单独量**(独立进程、真样本)全都很快:
+    ///   读 Dock plist 0.00 · `runningApplications` 0.4 · 7 个 App 图标+元数据 0.8 ·
+    ///   白名单 7 次 `urlForApplication` 0.03ms(热态)⇒ 合计 ~1.5ms,**解释不了 20ms** ✗
+    /// ⇒ 剩下最合理的机制:它**与后台枚举抢同一批系统服务**(那 40–60ms 正并发跑着 ✓
+    ///   —— 同一段日志里 `[T8] 按键→枚举就位 53ms(后台枚举)` 就是它 ✓)
+    ///   按本仓老规矩(**掉帧要让开,不是调曲线**):不管谁对,把这份活挪出关键路径 ✓
+    ///
+    /// 口径:缓存的是**候选**(Dock ∪ 白名单 − 黑名单,含图标 —— 那份确定、也就那份贵 ✓);
+    /// "在跑的"每次唤起**现减**(读一次 `runningApplications` 只要 0.4ms ✓)
+    ///   ⇒ "刚启动的 App 立刻从启动区消失"这条语义一个字不变 ✓
+    /// 失效:设置里改名单 ⇒ `invalidateCandidates()`;每次唤起之后再后台刷一遍 ✓
+    /// ⚠️ 隔离说明:`candidateCache` 与下面两个入口都 `nonisolated` —— 因为**重活必须在后台算** ✓
+    ///   (若留在 `@MainActor` 里,后台任务就调不了它 ✗,只能丢回主线程 ⇒ 又把卡顿请回来了 ✗)
+    ///   读写口径:`candidates()/storeCandidates()` 只在主线程调 ✓;后台线程只跑
+    ///   `computeCandidates()`(纯函数、不碰缓存 ✓)⇒ 没有交叉访问 ✓
+    nonisolated(unsafe) private static var candidateCache: [LaunchableApp]?
+
+    nonisolated static func invalidateCandidates() { candidateCache = nil }
+
+    /// 取候选(命中就返回;没有就同步算一次 —— 只在开机第一局或名单刚改过时发生 ✓)
+    nonisolated static func candidates() -> [LaunchableApp] {
+        if let c = candidateCache { return c }
+        let list = computeCandidates()
+        candidateCache = list
+        return list
+    }
+
+    /// 后台算好的候选交回来(只许主线程调 ✓)
+    nonisolated static func storeCandidates(_ list: [LaunchableApp]) { candidateCache = list }
+
+    /// 真正那份重活的入口:供**后台任务**调用 ✓ ⇒ 它不碰缓存字段本身(无共享可变状态 ✓)
+    /// ⚠️ 自 2026-10-09 起**不再包含** "减掉在跑的" —— 那一减改到 `runningSet()`(见下面那段病例)
+    nonisolated static func computeCandidates() -> [LaunchableApp] {
         let raw = CFPreferencesCopyAppValue("persistent-apps" as CFString, "com.apple.dock" as CFString)
         let blacklist = Set(blacklist)
         var out: [LaunchableApp] = []
         var seen = Set<String>()
         for pinned in DockApps.parse(persistentApps: raw) {
             let bid = pinned.bundleID ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.bundleIdentifier ?? pinned.path
-            guard !blacklist.contains(bid), !runningBundleIDs.contains(bid), !seen.contains(bid) else { continue }
+            guard !blacklist.contains(bid), !seen.contains(bid) else { continue }
             seen.insert(bid)
-            let icon: NSImage
-            if let cached = iconCache[pinned.path] {
-                icon = cached
-            } else {
-                icon = NSWorkspace.shared.icon(forFile: pinned.path)
-                iconCache[pinned.path] = icon
-            }
+            let icon = cachedIcon(pinned.path)
             let name = pinned.name
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.infoDictionary?["CFBundleName"] as? String
@@ -118,25 +166,77 @@ enum DockAppsProvider {
         }
         // **白名单补录**:不在 Dock 的 App 按名单顺序排在环尾(用户在设置里排的就是展示序)。
         // 黑名单照旧压住(理论上互斥保证不会撞,这里再挡一道——两处编辑可能在两台设备间不同步);
-        // 在跑的照旧不算。找不到的(已卸载)静默跳过,名单里留着没坏处——重装即恢复。
+        // 在跑的照旧不算 —— 那一减现在住在 `launchables(excluding:)` 里(每次现减 ✓)。找不到的
+        // (已卸载)静默跳过,名单里留着没坏处——重装即恢复。
         for bid in whitelist where !blacklist.contains(bid) && !seen.contains(bid) {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) else { continue }
             let path = url.path
-            guard !runningBundleIDs.contains(bid), !runningBundleIDs.contains(path) else { continue }
             seen.insert(bid)
-            let icon: NSImage
-            if let cached = iconCache[path] {
-                icon = cached
-            } else {
-                icon = NSWorkspace.shared.icon(forFile: path)
-                iconCache[path] = icon
-            }
+            let icon = cachedIcon(path)
             let name = Bundle(url: url)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
                 ?? url.deletingPathExtension().lastPathComponent
             out.append(LaunchableApp(id: bid, name: name, path: path, icon: icon))
         }
         return out
+    }
+
+    /// ★★ 2026-10-09 第二轮:**"在跑的"那份名单也要缓存** —— 它才是真凶 ✗
+    ///
+    /// 细账点名(同一份日志,`在跑集合` 那一段的墙钟):
+    ///   `[打卡] 唤起 共 38.3ms(CPU 28.6 · 等 9.8) | … · 在跑集合 15.1 · 名单 0.0 · …`
+    ///   `[打卡] 唤起 共 65.2ms(CPU 37.1 · 等 28.2) | … · 在跑集合 22.0 · 名单 0.1 · …`
+    ///   ⇒ 先前把"候选名单"缓存了,`名单` 确实降到 0.0 ✓;但 `在跑集合` 原封不动地占着 15–22ms ✗
+    ///   (它 = `NSWorkspace.shared.runningApplications` + 两次 `compactMap`(bundleIdentifier / bundleURL.path)
+    ///    —— 单独量它只要 0.4ms ✗,再一次印证"测出来的 20ms 不在调用里,在**这一拍**" ✓)
+    /// ⇒ 同样挪出关键路径:后台刷 + **工作区通知**(启动/退出)保持及时 ✓
+    ///   语义一个字不变:刚启动的 App 立刻从启动区消失(通知在毫秒级触发刷新 ✓)
+    nonisolated(unsafe) private static var runningCache: Set<String>?
+
+    /// 取"在跑的"(bundle id ∪ bundle path ⇒ 与候选名单两套 id 都对得上 ✓)
+    nonisolated static func runningSet() -> Set<String> {
+        if let c = runningCache { return c }
+        let s = computeRunningSet()
+        runningCache = s
+        return s
+    }
+
+    nonisolated static func storeRunningSet(_ s: Set<String>) { runningCache = s }
+
+    /// 纯函数:自己算一遍(供后台任务调用 ✓)
+    nonisolated static func computeRunningSet() -> Set<String> {
+        let apps = NSWorkspace.shared.runningApplications
+        var s = Set(apps.compactMap(\.bundleIdentifier))
+        s.formUnion(apps.compactMap { $0.bundleURL?.path })
+        return s
+    }
+
+    /// 工作区通知 ⇒ 后台刷新(开机调一次 ✓)。为什么不用定时轮询:
+    /// 用户从启动环里启动一个 App 之后,**下一局**它就该从环里消失 —— 靠轮询会滞后 ✗
+    nonisolated(unsafe) private static var observingRunning = false
+    static func startObservingRunningApps() {
+        guard !observingRunning else { return }
+        observingRunning = true
+        let nc = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification] {
+            nc.addObserver(forName: name, object: nil, queue: .main) { _ in
+                refreshRunningSetInBackground()
+            }
+        }
+    }
+
+    /// 后台刷新一次(candidates 与 running 一起刷 ✓ 两者都不碰主线程状态)
+    nonisolated static func refreshRunningSetInBackground() {
+        Task.detached(priority: .utility) {
+            let s = computeRunningSet()
+            await MainActor.run { storeRunningSet(s) }
+        }
+    }
+
+    /// 本局要展示的"未启动"名单 = **候选 − 在跑的**(现减 ✓ 两边都是缓存 ⇒ 亚毫秒 ✓)
+    static func launchables(excluding runningBundleIDs: Set<String>) -> [LaunchableApp] {
+        candidates().filter { !runningBundleIDs.contains($0.id) && !runningBundleIDs.contains($0.path) }
     }
 
     /// 启动并激活。面板在「确认」一发即关(生效即散场),启动成败**不回头** ——

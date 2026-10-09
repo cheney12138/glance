@@ -28,11 +28,24 @@ enum SessionMarks {
     private static var firstThumbAt: Double?
     /// 本局的开局时刻(不随 finish 清零 —— 首图常在本局结算之后才到)
     private static var lastSessionStart: CFAbsoluteTime = 0
+    /// 开局时的**本线程 CPU 时刻**(ms) —— 用来分清“墙钟 45ms”里“在算”与“在等”各占多少 ✓
+    /// 病例(2026-10-09):`Dock` 那一段墙钟稳定 20ms ✗,但把段里的每个调用单独量都只有 ~1.5ms,
+    ///   连缓存化之后也**一分没降** ✗ ⇒ 那就得回答:这 20ms 是 CPU 花了,还是**排队等了**?
+    ///   (XPC 调用等了 daemon、或被别的线程抢占 ⇒ 解药是“让开”,不是“优化” ✓)
+    private static var cpuAtBegin: Double = 0
+
+    /// 本线程累计 CPU 时间(ms;`CLOCK_THREAD_CPUTIME_ID` —— 只算真占用,不算等 ✓)
+    private static func threadCPUMs() -> Double {
+        var ts = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
+        return Double(ts.tv_sec) * 1000 + Double(ts.tv_nsec) / 1_000_000
+    }
 
     static func begin(_ label: String) {
         self.label = label
         t0 = CFAbsoluteTimeGetCurrent()
         last = t0
+        cpuAtBegin = threadCPUMs()
         steps.removeAll(keepingCapacity: true)
         firstThumbAt = nil
         lastSessionStart = t0
@@ -62,10 +75,12 @@ enum SessionMarks {
     static func finish() {
         guard t0 > 0 else { return }
         let total = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let cpu = threadCPUMs() - cpuAtBegin          // 真占用(与墙钟的差 = 等 ✓)
         defer { t0 = 0 }   // lastSessionStart 保留:首图打卡要继续用它
         if isTraceEnabled {
             let axis = steps.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: " · ")
-            glog(String(format: "[打卡] %@ 共 %.1fms | %@", label, total, axis))
+            glog(String(format: "[打卡] %@ 共 %.1fms(CPU %.1f · 等 %.1f) | %@",
+                        label, total, cpu, max(0, total - cpu), axis))
         } else {
             let slow = steps.filter { $0.1 > 16.7 }
             guard !slow.isEmpty else { return }   // 没超就一行都不打(日志预算)
