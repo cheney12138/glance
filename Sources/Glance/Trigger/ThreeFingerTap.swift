@@ -158,6 +158,21 @@ final class ThreeFingerTap {
     private var observing = false
     /// 上次挂设备的时刻(久闲后的第一次唤起会用它做自愈判据 ✓)
     private var lastAttachAt: CFAbsoluteTime = 0
+
+    /// **重挂设备的专用串行队列**(2026-10-09 病例:app 卡死 · 99% CPU · 连 ⌘Tab 都没了 ✗)
+    ///
+    /// 采样铁证(用户实报「什么都没干, 又卡死了」,pid 13277):
+    ///   `HotkeyTap.handleMouse → ThreeFingerTap.reviveIfFramesDead() → attachDevices(reason:)`
+    ///   `→ MTDeviceStop → usleep → __semwait_signal`
+    ///   —— 3 秒采样的 **2527 个样本全停在最后那一行** ✗(不是慢,是**不返回** ✓)
+    /// ⇒ `MTDeviceStop` 在"已成死挂"的设备句柄上会长时间不返回 ✗,而它原来跑在
+    ///   **主线程的事件回调里** ⇒ 主线程整个卡住 ⇒ 面板/热键/⌘Tab 全哑、CPU 100% ✓
+    ///   ⚠️ 在 CGEventTap 回调里阻塞是最坏的一处:回调不返回,**系统键盘投递都会排队** ✗
+    /// ⇒ 凡 `MT*` 这类平台调用**一律挪到这条队列**;主线程只投递意图 ✓
+    ///   (它只碰 `attachedDevices`/`lastAttachAt`,与喂帧路径不共享状态 ⇒ 不需要 `feedLock` ✓)
+    private let attachQueue = DispatchQueue(label: "glance.tap.attach")
+    private let attachStateLock = NSLock()
+    private var attachInFlight = false
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -176,7 +191,10 @@ final class ThreeFingerTap {
         //   第一次实现用 lastFrameAt —— 实机一测**不触发** ✗ 因为**鼠标设备也在吐帧**
         //   (设备列表里不只有触控板 ✓)⇒ 时间戳被一路刷新 ⇒ 永远不到 30 分钟 ✓
         //   改成只看挂载时刻:久闲后的第一发触发键重挂一次(注册是亚毫秒级 ✓ 很便宜 ✓)
-        let age = CFAbsoluteTimeGetCurrent() - lastAttachAt
+        attachStateLock.lock()
+        let since = lastAttachAt
+        attachStateLock.unlock()
+        let age = CFAbsoluteTimeGetCurrent() - since
         guard age > Double(idleMin) * 60 else { return }
         attachDevices(reason: String(format: "久闲 %.0f 分钟后自愈", age / 60))
     }
@@ -189,7 +207,10 @@ final class ThreeFingerTap {
     /// 在 `HotkeyTap.handleMouse` 里挂(点击必过 ✓ 挂载亚毫秒级 ✓)
     func reviveIfFramesDead() {
         let silence = CFAbsoluteTimeGetCurrent() - lastFrameAt
-        guard silence > 2.0, CFAbsoluteTimeGetCurrent() - lastAttachAt > 30 else { return }
+        attachStateLock.lock()
+        let since = lastAttachAt
+        attachStateLock.unlock()
+        guard silence > 2.0, CFAbsoluteTimeGetCurrent() - since > 30 else { return }
         attachDevices(reason: String(format: "点击但 %.0fs 无帧(投递死亡)", silence))
     }
     /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
@@ -347,6 +368,23 @@ final class ThreeFingerTap {
     private var attachedDevices: [UnsafeMutableRawPointer] = []
 
     private func attachDevices(reason: String) {
+        attachStateLock.lock()
+        if attachInFlight { attachStateLock.unlock(); return }   // 一次只跑一个(排队期间不再投递 ✓)
+        attachInFlight = true
+        lastAttachAt = CFAbsoluteTimeGetCurrent()                // 防抖从"投递"起算(排队也算 ✓)
+        attachStateLock.unlock()
+        // ⚠️ 这一行是给"下次卡死"留的判据:**只见"重挂开始"、不见"挂载"= 卡在那个 C 调用里** ✓
+        glog("[指点按] 重挂开始(\(reason))")
+        attachQueue.async { [weak self] in
+            self?.performAttach(reason: reason)
+            self?.attachStateLock.lock()
+            self?.attachInFlight = false
+            self?.attachStateLock.unlock()
+        }
+    }
+
+    /// 真正的重挂(只许在 `attachQueue` 上跑 ✓ —— 见上面那条卡死病例)
+    private func performAttach(reason: String) {
         guard let sym = Self.symbols else { return }
         // 先拆(上一轮的把手还活着 —— 它们的列表从未释放,指针有效 ✓)
         let detached = attachedDevices.count

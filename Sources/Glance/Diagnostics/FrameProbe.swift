@@ -266,6 +266,13 @@ final class MainThreadWatchdog {
                         // ⚠️ 这一行**必须**走 glog:后台线程写文件不受主线程卡死影响 ✓
                         glog(String(format: "[卡死] 主线程 ≥%.0fs 没心跳(后台线程仍在跑)⇒ "
                                     + "立刻 `sample %d 3 -file /tmp/glance-hang.txt` 抓现场 ✓", still, pid))
+                        // ★ **当场把栈抓下来**(2026-10-09 加):以前这里只写一句"请你去 sample"✗
+                        //   —— 现场是**稍纵即逝**的(今天那三秒栈,是靠用户手快才抓到 ✓)
+                        //   `sample` 是独立进程:主线程卡死不影响它;**不等**它结束(看门狗继续看着 ✓)
+                        let sp = Process()
+                        sp.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+                        sp.arguments = ["\(pid)", "3", "-file", "/tmp/glance-hang.txt"]
+                        try? sp.run()
                         // 落一个标记文件(万一日志通道也不通,至少有东西可查 ✓)
                         try? "\(Date()) 主线程卡住 \(still)s · pid \(pid)"
                             .write(toFile: "/tmp/glance-hang-marker.txt", atomically: true, encoding: .utf8)
