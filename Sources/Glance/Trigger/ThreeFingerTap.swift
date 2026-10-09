@@ -170,9 +170,27 @@ final class ThreeFingerTap {
     ///   ⚠️ 在 CGEventTap 回调里阻塞是最坏的一处:回调不返回,**系统键盘投递都会排队** ✗
     /// ⇒ 凡 `MT*` 这类平台调用**一律挪到这条队列**;主线程只投递意图 ✓
     ///   (它只碰 `attachedDevices`/`lastAttachAt`,与喂帧路径不共享状态 ⇒ 不需要 `feedLock` ✓)
-    private let attachQueue = DispatchQueue(label: "glance.tap.attach")
+    private let attachQueueLock = NSLock()
+    private var attachQueue = DispatchQueue(label: "glance.tap.attach")
     private let attachStateLock = NSLock()
     private var attachInFlight = false
+    /// 这一条重挂是什么时候投递的 + 它属于哪一代(卡死换队列时用 ✓)
+    private var attachStartedAt: CFAbsoluteTime = 0
+    private var attachGeneration = 0
+    /// 卡多久算"楔住" ⇒ 弃用旧队列、换新队列重试 ✓
+    ///
+    /// ★★ 2026-10-09 病例(用户:「三指又无法唤起了…用内建触摸板就会出现」):
+    ///   日志铁证:`[5769682ms] 重挂开始(点击但 17s 无帧(投递死亡))` 之后 ——
+    ///   ① **再没有一句「挂载」**(= `MTDeviceStop` 至今没返回 ✗)
+    ///   ② 之后的 2459 条事件里**没有一条来自触点层** ⇒ 触投递一直是死的 ✗
+    ///   ③ `attachInFlight` 就此**永远为 true** ⇒ 久闲/睡醒/屏变化全都被丢掉 ⇒ 再也回不来 ✗
+    ///   (上一版把平台调用挪出主线程是对的 ✓ —— app 不再卡死 ✓;但它把"卡住"变成了"静默死" ✗)
+    /// ⇒ 加一个"楔住"判据:超过这个秒数仍没有完成 ⇒ 换一条新串行队列重试 ✓
+    ///   (旧的卡在那条队列上无害 —— 反正它永远不返回 ✓;新队列仍保"一次只跑一个" ✓)
+    /// ⚠️ 记账(已知风险):重试仍是**先拆后挂** ✓;若那条卡死的调用只是"半途"(拆到一半),
+    ///   新一次可能对某个设备**重复注册**(症状 = 手指数翻倍 ✗)。权衡:比"永久静默"可接受 ✓
+    ///   —— 若真出现"手指数翻倍",先看日志里那两句 `重挂开始/⚠️ 卡住`,再定是否改成"只 register" ✓
+    static let attachWedgeSeconds: CFAbsoluteTime = 6
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -369,16 +387,38 @@ final class ThreeFingerTap {
 
     private func attachDevices(reason: String) {
         attachStateLock.lock()
-        if attachInFlight { attachStateLock.unlock(); return }   // 一次只跑一个(排队期间不再投递 ✓)
+        var wedged = false
+        var gen = attachGeneration
+        if attachInFlight {
+            // 上一次还没回来:没超过"楔住"阈值就照旧丢掉这一次(不堆积 ✓);超了 ⇒ 换新队列重试 ✓
+            guard CFAbsoluteTimeGetCurrent() - attachStartedAt >= Self.attachWedgeSeconds else {
+                attachStateLock.unlock(); return
+            }
+            wedged = true
+            gen += 1
+            attachGeneration = gen
+            attachQueueLock.lock()
+            attachQueue = DispatchQueue(label: "glance.tap.attach.\(gen)")
+            attachQueueLock.unlock()
+        }
         attachInFlight = true
-        lastAttachAt = CFAbsoluteTimeGetCurrent()                // 防抖从"投递"起算(排队也算 ✓)
+        attachStartedAt = CFAbsoluteTimeGetCurrent()
+        lastAttachAt = attachStartedAt                // 防抖从"投递"起算(排队也算 ✓)
         attachStateLock.unlock()
+        if wedged {
+            glog(String(format: "[指点按] ⚠️ 上一次重挂卡住 ≥%.0fs(MTDeviceStop 不返回)⇒ 换新队列重试 ✓",
+                        Self.attachWedgeSeconds))
+        }
         // ⚠️ 这一行是给"下次卡死"留的判据:**只见"重挂开始"、不见"挂载"= 卡在那个 C 调用里** ✓
         glog("[指点按] 重挂开始(\(reason))")
-        attachQueue.async { [weak self] in
+        attachQueueLock.lock()
+        let q = attachQueue                             // 取快照:永远投到"这一代"的队列上 ✓
+        attachQueueLock.unlock()
+        q.async { [weak self] in
             self?.performAttach(reason: reason)
             self?.attachStateLock.lock()
-            self?.attachInFlight = false
+            // 只有"当前这一代"才能清旗标(旧代哪天回来了也不许清别人正在跑的那面 ✗)
+            if gen == self?.attachGeneration { self?.attachInFlight = false }
             self?.attachStateLock.unlock()
         }
     }
