@@ -88,6 +88,9 @@ enum Keys {
     static let debugTapUndoDriftPt = "debug.tapUndoDriftPt"
     /// `debug.staleListFirst` —— 用上一局的名单先上屏、枚举回来再刷新(默认 true;false = 回到等枚举)
     static let debugStaleListFirst = "debug.staleListFirst"
+    /// 🔬 逐轮打印触点**几何账**(峰值速 / 抬手速 / 方向抖)—— 给"滑动尾巴 vs 点按"找新判据用 ✓
+    /// 默认关:它每轮一行,是重型诊断 ✓(量完就关;见 TapRound.Snapshot 里"几何账"那段病例)
+    static let debugTapGeometry = "debug.tapGeometry"
     /// `debug.moveOverflowRule` —— 送窗"塞不下"时切哪边(keepLeft 默认/center/keepRight)
     /// `debug.sheenGain` —— 指针光晕的强度倍率(默认 1.0;0.5 = 一半,1.5 = 更亮)
     static let debugSheenGain = "debug.sheenGain"

@@ -137,6 +137,14 @@ public enum TapRound {
         ///   (实测手指上限 10.4 ✓ 掌心下限 17.1 ✓ ⇒ 14 落在两簇正中间,两侧各留 ~3pt 余量 ✓)
         ///   档位:`debug.tapMaxMajor`(设 0 = 关掉这条门 ✓)
         public var maxMajor: Float = 14
+        // ⚠️ 2026-10-09 否掉的一条路(记账,别再走 ✗):曾经用"**抬手速**"(质心速度)当宽限档的
+        //   新判据 —— 首发的样本看着很干净(误触 41.16/s vs 正常点按 1.94 / 0.01 /s,差 20 倍 ✓),
+        //   实机再量一轮就被否掉 ✗:
+        //     · 又一条滑动尾巴(330ms/norm 0.189)**抬手速只有 3.05** ⇒ 门没拦住 ✗
+        //     · 而一发 60ms/0.3pt 的**正常点按**测出 **598/s** ✗✗ ⇒ 量本身是坏的
+        //   真因:那是**整团触点的质心**速度 —— 手指落/抬的那一帧质点集合变了,质心瞬移 ✗
+        //   (不是手在动,是算的人在动 ✓)。要重做,得按**同一根手指**逐帧位移算(carry 配对已有 ✓),
+        //   而不是质心 ✗ —— 这一条留给"手势专题"。
         /// 续接窗口：旧轨迹失联多久之内，新 id 可以认领它
         public var carryWindow: Double = 0.06
         /// 续接半径（归一化距离）：新 id 离旧轨迹多近才算同一根手指（≈ 屏宽的 5%）
@@ -158,6 +166,16 @@ public enum TapRound {
         public var palmCount: Int = 0
         public var maxSize: Float = 0
         public var maxMajorAxis: Float = 0
+        // ── 几何账(2026-10-09 加:给"滑动尾巴 vs 点按"找一个**新量** ✓ 只算不判 ✓)──
+        // 病例(用户实赔三次):"滑动尾巴"被"拖后宽限"放行 ✗ —— 而它与要放行的那件真事
+        // (305ms/norm 0.185)**在时长与位移上完全重叠** ⇒ 拧阈值必误伤之一方 ✗
+        // ⇒ 换判据之前先把这三个量量出来(它们分别回答):
+        //   · `peakSpeed`  —— 滑动是一路在走;点按只在落/抬那两下快
+        //   · `liftSpeed`  —— **抬手那一瞬**的速度:滑动收不住手 ✓;点按结束时是停住的 ✓
+        //   · `dirFlips`   —— 逐帧主位移方向的翻转次数:滑动单向 ⇒ 0–1;点按的漂移散乱 ⇒ 大 ✓
+        public var peakSpeed: Float = 0
+        public var liftSpeed: Float = 0
+        public var dirFlips: Int = 0
         public var statesSeen: [Int32] = []
         public var sawFrameGap: Bool = false
         public var releaseSpan: Double = 0
@@ -226,6 +244,13 @@ public enum TapRound {
         private var maxAbsMove: Float = 0
         // 跨轮
         private var lastFrameAt: Double = 0
+        /// 几何账的采样状态(上一帧的质心/位移方向)—— 只用于上面那三个量 ✓
+        private var geoPrevCentroid: (Double, Double)?
+        private var geoPrevDelta: (Double, Double)?
+        private var geoPrevAt: Double = 0
+        private var geoPeakSpeed: Float = 0
+        private var geoLiftSpeed: Float = 0
+        private var geoDirFlips = 0
 
         public init(policy: Policy = .standard) { self.policy = policy }
 
@@ -275,6 +300,13 @@ public enum TapRound {
             carried = 0
             maxNormMove = 0
             maxAbsMove = 0
+            // 几何账(2026-10-09):新局重开 ⇒ 采样状态一并归零(否则上一局的峰值串进来 ✗)
+            geoPrevCentroid = nil
+            geoPrevDelta = nil
+            geoPrevAt = 0
+            geoPeakSpeed = 0
+            geoLiftSpeed = 0
+            geoDirFlips = 0
         }
 
         // MARK: 喂帧
@@ -373,6 +405,27 @@ public enum TapRound {
                 maxTracks = touching
             }
             palmCount = max(palmCount, palmTouching)
+            // ⚙️ 几何账(只算不判 ✓):质心速度 + 逐帧方向翻转 + 抬手那一瞬的速度
+            if !seen.isEmpty {
+                var sx = 0.0, sy = 0.0
+                for c in seen { sx += Double(c.normalized.x); sy += Double(c.normalized.y) }
+                let cx = sx / Double(seen.count)
+                let cy = sy / Double(seen.count)
+                if let pc = geoPrevCentroid, now > geoPrevAt {
+                    let dx = cx - pc.0, dy = cy - pc.1
+                    let speed = Float((dx * dx + dy * dy).squareRoot() / (now - geoPrevAt))
+                    geoPeakSpeed = max(geoPeakSpeed, speed)
+                    geoLiftSpeed = speed                       // 最后一帧 ⇒ 结束时自然成了"抬手速" ✓
+                    if let pd = geoPrevDelta {
+                        // 主轴上方向反了 ⇒ 记一次"抖"(滑动单向 ⇒ 几乎不增 ✓)
+                        if (dx > 0) != (pd.0 > 0), abs(dx) > 0.002 { geoDirFlips += 1 }
+                        if (dy > 0) != (pd.1 > 0), abs(dy) > 0.002 { geoDirFlips += 1 }
+                    }
+                    geoPrevDelta = (dx, dy)
+                }
+                geoPrevCentroid = (cx, cy)
+                geoPrevAt = now
+            }
             return touching
         }
 
@@ -499,6 +552,9 @@ public enum TapRound {
             s.releaseSpan = firstLiftAt > 0 ? now - firstLiftAt : 0
             s.carriedContacts = carried
             s.maxContactAge = live.filter { !$0.isPalm }.map { now - $0.landedAt }.max() ?? 0
+            s.peakSpeed = geoPeakSpeed
+            s.liftSpeed = geoLiftSpeed
+            s.dirFlips = geoDirFlips
             return s
         }
 

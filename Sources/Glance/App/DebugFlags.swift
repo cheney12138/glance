@@ -117,6 +117,11 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugMainThreadWatchdog) as? NSNumber)?.boolValue ?? true
     }
 
+    /// 🔬 触点几何账(默认关 ✓;见 `Keys.debugTapGeometry` 的病例)
+    static var tapGeometry: Bool {
+        (UserDefaults.standard.object(forKey: Keys.debugTapGeometry) as? NSNumber)?.boolValue ?? false
+    }
+
     static var summonPopMs: Int {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
     }
@@ -158,6 +163,7 @@ enum DebugFlags {
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
         ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
+        (Keys.debugTapGeometry, tapGeometry, "触点几何账:每轮一行(峰值速/抬手速/方向抖)—— 量完就关 ✓"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

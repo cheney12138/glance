@@ -284,6 +284,16 @@ final class ThreeFingerTap {
         /// (MT 回调线程写、主线程读 —— 与本结构其它标量同一条纪律:单字读写,不拆不绕 ✓)
         private(set) var lastTouching = 0
 
+        /// 🔬 几何账一行(只用于诊断;开关 `debug.tapGeometry` ✓)
+        /// 三个量的意义与病例见 `TapRound.Snapshot` 里"几何账"那段 ✓
+        var geometryLine: String {
+            let s = lastSnapshot
+            let st = s.statesSeen.sorted().map(String.init).joined(separator: "/")
+            return String(format: "%d 指[state %@] %.0fms norm=%.4f abs=%.1fpt · 峰值 %.2f/s · 抬手 %.2f/s · 方向抖 %d · size %.1f major %.1f",
+                          s.fingerCount, st, s.held * 1000, s.normalizedMove, s.absoluteMove,
+                          s.peakSpeed, s.liftSpeed, s.dirFlips, s.maxSize, s.maxMajorAxis)
+        }
+
         /// 量尺(进日志):本轮见过的 state 档
         var statesSeen: [Int32] { lastSnapshot.statesSeen }
         /// 整轮时长(给"按压起点 = now − heldTotal"用,拖后宽限的判据之一 ✓)
@@ -599,6 +609,8 @@ final class ThreeFingerTap {
         let now0 = CFAbsoluteTimeGetCurrent()
         let grace = evidence && tap.postDragGracePending(pressStart: now0 - tap.press.heldTotal)
         let outcome = tap.press.judge(dragEvidence: evidence, postDragGrace: grace)   // 先判卷(要用账本 ✓)
+        // 🔬 几何账(默认关 ✓):给"滑动尾巴 vs 点按"找新判据 —— 老两个量(时长/位移)分不开 ✗
+        if DebugFlags.tapGeometry { glog("[几何] \(tap.press.geometryLine) → \(outcome)") }
         tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
         let graceNote = grace ? "(拖后宽限)" : ""
         DispatchQueue.main.async {
