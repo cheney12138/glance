@@ -26,6 +26,26 @@ struct GroupOffsetKey: PreferenceKey {
     }
 }
 
+/// **内容底部哨兵**(2026-10-09 用户实报:「我已经滑动到最底部了, 但是导航到不了最后一个」)
+///
+/// 病例(附截图):上面那套"滚动 → 导航跟着走"取的是"**已越过顶部预留带**的组里最靠下的那个" ✓,
+///   可**最后一组永远到不了那条线** —— 它下面没内容了 ✗ ⇒ 滑到底时导航停在**倒数第二组** ✗
+///   (截图里:左侧停在「未启动环」,而右侧内容已经停在「动效」= 最后一组 ✓)。
+/// 口径:把"内容真正的底"报上来,与**视口高度**一比就知道到底没有 ✓
+///   两个哨兵都是零布局成本(`.background` + `Color.clear` ✓)
+struct ContentBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = min(value, nextValue())
+    }
+}
+
+/// 视口高度(ScrollView 自己的 frame)—— 与 `ContentBottomKey` 一起判"到底了没有" ✓
+struct ViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct SettingsGroup<Content: View>: View {
     var label: String? = nil
     /// 侧栏子菜单的滚动锚点(锚点 id = "\(页):\(组名)");nil = 不参与定位
