@@ -73,6 +73,9 @@ struct SettingsView: View {
     }
 
     @State private var page: Page = .general
+    /// 内容底哨兵的位置 + 视口高度 ⇒ "到底了没有"(见 `ContentBottomKey` 的病例 ✓)
+    @State private var contentBottom: CGFloat?
+    @State private var viewportHeight: CGFloat?
     /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
     /// 子菜单点击 = 页内滚动定位。nil = 不定位
     @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
@@ -176,7 +179,19 @@ struct SettingsView: View {
                 .padding(.horizontal, SettingsMetrics.contentPadX)
                 .padding(.top, SettingsMetrics.contentPadTop)
                 .padding(.bottom, SettingsMetrics.contentPadBottom)
+                // ★ 底部哨兵(零布局成本):报出"内容真正的底"在滚动坐标系里的 maxY ✓
+                //   与视口高度一比 ⇒ 到底没有 ✓(病例见 `ContentBottomKey`)
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(
+                            key: ContentBottomKey.self,
+                            value: g.frame(in: .named(SettingsScrollSpace.name)).maxY)
+                    })
             }
+            // 视口高度(ScrollView 自己的 frame ✓)—— 跟着上面那个哨兵一起判"到底" ✓
+            .background(GeometryReader { g in
+                Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
+            })
             // **关掉到顶回弹**(2026-09-19,用户录屏自诊:「滚到头之后回弹不顺畅,一卡一卡的」):
             // 帧账证明滚动期主线程很闲(P95 8.4ms@120Hz),磕绊出在系统橡皮筋动画本身的节奏,
             // App 摸不到它 —— 那就不要回弹:惯性到顶后顺滑减速停住。SwiftUI 没有这个开关,
@@ -229,8 +244,23 @@ struct SettingsView: View {
             }
             // ★ 反向:**滚动 → 左侧导航跟着走**(2026-09-22 用户实报后新增;此前只有单向 ✓→✗)
             .coordinateSpace(name: SettingsScrollSpace.name)
+            .onPreferenceChange(ContentBottomKey.self) { contentBottom = ($0 == .greatestFiniteMagnitude ? nil : $0) }
+            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
             .onPreferenceChange(GroupOffsetKey.self) { offsets in
                 guard CFAbsoluteTimeGetCurrent() > suppressNavSpyUntil else { return }   // 程序化滚动期间不回写
+                // ★ **到底规则**(2026-10-09 病例,见 `ContentBottomKey`):最后一组永远到不了那条线 ✗
+                //   三个条件**同时**成立才动手 —— 它们分别挡住三种误伤:
+                //     ① 内容真的在往上走(已有一组跑到视口上方 ✓)⇒ 挡住"内容本来就短、根本不能滚"
+                //     ② 底部哨兵已经进视口(真的到底了 ✓)⇒ 挡住"才滚了一点点"
+                //     ③ 最后一组仍在预留带之下(它确实上不来 ✓)⇒ 挡住"它其实已经到位了"
+                //   (点了倒数第二组但因为到底而滚不动的情形:那次滚动在 `suppressNavSpyUntil` 里 ⇒
+                //    动画跑完就没新变化了 ⇒ 这里不会再把它改成最后一组 ✓)
+                let lastAnchor = page.groups.last.map { page.anchor($0) }
+                if let lastAnchor, let bottom = contentBottom, let vh = viewportHeight, vh > 0,
+                   (offsets.values.min() ?? 0) < -1, bottom <= vh + 1, (offsets[lastAnchor] ?? 0) > 40 {
+                    if navSelection != lastAnchor { navSelection = lastAnchor }
+                    return
+                }
                 // 顶部预留带(scrollTopPad)下方 40pt 视为"已进入这一组"⇒ 在越过的组里取**最靠下**的那个 = 当前组 ✓
                 let passed = offsets.filter { $0.value <= 40 }
                 let current = passed.max { $0.value < $1.value }?.key

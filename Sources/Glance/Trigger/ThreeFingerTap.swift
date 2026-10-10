@@ -158,6 +158,39 @@ final class ThreeFingerTap {
     private var observing = false
     /// 上次挂设备的时刻(久闲后的第一次唤起会用它做自愈判据 ✓)
     private var lastAttachAt: CFAbsoluteTime = 0
+
+    /// **重挂设备的专用串行队列**(2026-10-09 病例:app 卡死 · 99% CPU · 连 ⌘Tab 都没了 ✗)
+    ///
+    /// 采样铁证(用户实报「什么都没干, 又卡死了」,pid 13277):
+    ///   `HotkeyTap.handleMouse → ThreeFingerTap.reviveIfFramesDead() → attachDevices(reason:)`
+    ///   `→ MTDeviceStop → usleep → __semwait_signal`
+    ///   —— 3 秒采样的 **2527 个样本全停在最后那一行** ✗(不是慢,是**不返回** ✓)
+    /// ⇒ `MTDeviceStop` 在"已成死挂"的设备句柄上会长时间不返回 ✗,而它原来跑在
+    ///   **主线程的事件回调里** ⇒ 主线程整个卡住 ⇒ 面板/热键/⌘Tab 全哑、CPU 100% ✓
+    ///   ⚠️ 在 CGEventTap 回调里阻塞是最坏的一处:回调不返回,**系统键盘投递都会排队** ✗
+    /// ⇒ 凡 `MT*` 这类平台调用**一律挪到这条队列**;主线程只投递意图 ✓
+    ///   (它只碰 `attachedDevices`/`lastAttachAt`,与喂帧路径不共享状态 ⇒ 不需要 `feedLock` ✓)
+    private let attachQueueLock = NSLock()
+    private var attachQueue = DispatchQueue(label: "glance.tap.attach")
+    private let attachStateLock = NSLock()
+    private var attachInFlight = false
+    /// 这一条重挂是什么时候投递的 + 它属于哪一代(卡死换队列时用 ✓)
+    private var attachStartedAt: CFAbsoluteTime = 0
+    private var attachGeneration = 0
+    /// 卡多久算"楔住" ⇒ 弃用旧队列、换新队列重试 ✓
+    ///
+    /// ★★ 2026-10-09 病例(用户:「三指又无法唤起了…用内建触摸板就会出现」):
+    ///   日志铁证:`[5769682ms] 重挂开始(点击但 17s 无帧(投递死亡))` 之后 ——
+    ///   ① **再没有一句「挂载」**(= `MTDeviceStop` 至今没返回 ✗)
+    ///   ② 之后的 2459 条事件里**没有一条来自触点层** ⇒ 触投递一直是死的 ✗
+    ///   ③ `attachInFlight` 就此**永远为 true** ⇒ 久闲/睡醒/屏变化全都被丢掉 ⇒ 再也回不来 ✗
+    ///   (上一版把平台调用挪出主线程是对的 ✓ —— app 不再卡死 ✓;但它把"卡住"变成了"静默死" ✗)
+    /// ⇒ 加一个"楔住"判据:超过这个秒数仍没有完成 ⇒ 换一条新串行队列重试 ✓
+    ///   (旧的卡在那条队列上无害 —— 反正它永远不返回 ✓;新队列仍保"一次只跑一个" ✓)
+    /// ⚠️ 记账(已知风险):重试仍是**先拆后挂** ✓;若那条卡死的调用只是"半途"(拆到一半),
+    ///   新一次可能对某个设备**重复注册**(症状 = 手指数翻倍 ✗)。权衡:比"永久静默"可接受 ✓
+    ///   —— 若真出现"手指数翻倍",先看日志里那两句 `重挂开始/⚠️ 卡住`,再定是否改成"只 register" ✓
+    static let attachWedgeSeconds: CFAbsoluteTime = 6
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -176,7 +209,10 @@ final class ThreeFingerTap {
         //   第一次实现用 lastFrameAt —— 实机一测**不触发** ✗ 因为**鼠标设备也在吐帧**
         //   (设备列表里不只有触控板 ✓)⇒ 时间戳被一路刷新 ⇒ 永远不到 30 分钟 ✓
         //   改成只看挂载时刻:久闲后的第一发触发键重挂一次(注册是亚毫秒级 ✓ 很便宜 ✓)
-        let age = CFAbsoluteTimeGetCurrent() - lastAttachAt
+        attachStateLock.lock()
+        let since = lastAttachAt
+        attachStateLock.unlock()
+        let age = CFAbsoluteTimeGetCurrent() - since
         guard age > Double(idleMin) * 60 else { return }
         attachDevices(reason: String(format: "久闲 %.0f 分钟后自愈", age / 60))
     }
@@ -189,7 +225,10 @@ final class ThreeFingerTap {
     /// 在 `HotkeyTap.handleMouse` 里挂(点击必过 ✓ 挂载亚毫秒级 ✓)
     func reviveIfFramesDead() {
         let silence = CFAbsoluteTimeGetCurrent() - lastFrameAt
-        guard silence > 2.0, CFAbsoluteTimeGetCurrent() - lastAttachAt > 30 else { return }
+        attachStateLock.lock()
+        let since = lastAttachAt
+        attachStateLock.unlock()
+        guard silence > 2.0, CFAbsoluteTimeGetCurrent() - since > 30 else { return }
         attachDevices(reason: String(format: "点击但 %.0fs 无帧(投递死亡)", silence))
     }
     /// 一次按压的账本(记账 + 判卷都在 `Press`,回调只喂数据 —— 2026-09-18 重构:
@@ -244,6 +283,16 @@ final class ThreeFingerTap {
         /// mouseTap(主线程)问"现在板上有没有 ≥2 指" ⇒ 有才记证据 ✓
         /// (MT 回调线程写、主线程读 —— 与本结构其它标量同一条纪律:单字读写,不拆不绕 ✓)
         private(set) var lastTouching = 0
+
+        /// 🔬 几何账一行(只用于诊断;开关 `debug.tapGeometry` ✓)
+        /// 三个量的意义与病例见 `TapRound.Snapshot` 里"几何账"那段 ✓
+        var geometryLine: String {
+            let s = lastSnapshot
+            let st = s.statesSeen.sorted().map(String.init).joined(separator: "/")
+            return String(format: "%d 指[state %@] %.0fms norm=%.4f abs=%.1fpt · 峰值 %.2f/s · 抬手 %.2f/s · 方向抖 %d · size %.1f major %.1f",
+                          s.fingerCount, st, s.held * 1000, s.normalizedMove, s.absoluteMove,
+                          s.peakSpeed, s.liftSpeed, s.dirFlips, s.maxSize, s.maxMajorAxis)
+        }
 
         /// 量尺(进日志):本轮见过的 state 档
         var statesSeen: [Int32] { lastSnapshot.statesSeen }
@@ -347,6 +396,45 @@ final class ThreeFingerTap {
     private var attachedDevices: [UnsafeMutableRawPointer] = []
 
     private func attachDevices(reason: String) {
+        attachStateLock.lock()
+        var wedged = false
+        var gen = attachGeneration
+        if attachInFlight {
+            // 上一次还没回来:没超过"楔住"阈值就照旧丢掉这一次(不堆积 ✓);超了 ⇒ 换新队列重试 ✓
+            guard CFAbsoluteTimeGetCurrent() - attachStartedAt >= Self.attachWedgeSeconds else {
+                attachStateLock.unlock(); return
+            }
+            wedged = true
+            gen += 1
+            attachGeneration = gen
+            attachQueueLock.lock()
+            attachQueue = DispatchQueue(label: "glance.tap.attach.\(gen)")
+            attachQueueLock.unlock()
+        }
+        attachInFlight = true
+        attachStartedAt = CFAbsoluteTimeGetCurrent()
+        lastAttachAt = attachStartedAt                // 防抖从"投递"起算(排队也算 ✓)
+        attachStateLock.unlock()
+        if wedged {
+            glog(String(format: "[指点按] ⚠️ 上一次重挂卡住 ≥%.0fs(MTDeviceStop 不返回)⇒ 换新队列重试 ✓",
+                        Self.attachWedgeSeconds))
+        }
+        // ⚠️ 这一行是给"下次卡死"留的判据:**只见"重挂开始"、不见"挂载"= 卡在那个 C 调用里** ✓
+        glog("[指点按] 重挂开始(\(reason))")
+        attachQueueLock.lock()
+        let q = attachQueue                             // 取快照:永远投到"这一代"的队列上 ✓
+        attachQueueLock.unlock()
+        q.async { [weak self] in
+            self?.performAttach(reason: reason)
+            self?.attachStateLock.lock()
+            // 只有"当前这一代"才能清旗标(旧代哪天回来了也不许清别人正在跑的那面 ✗)
+            if gen == self?.attachGeneration { self?.attachInFlight = false }
+            self?.attachStateLock.unlock()
+        }
+    }
+
+    /// 真正的重挂(只许在 `attachQueue` 上跑 ✓ —— 见上面那条卡死病例)
+    private func performAttach(reason: String) {
         guard let sym = Self.symbols else { return }
         // 先拆(上一轮的把手还活着 —— 它们的列表从未释放,指针有效 ✓)
         let detached = attachedDevices.count
@@ -521,6 +609,8 @@ final class ThreeFingerTap {
         let now0 = CFAbsoluteTimeGetCurrent()
         let grace = evidence && tap.postDragGracePending(pressStart: now0 - tap.press.heldTotal)
         let outcome = tap.press.judge(dragEvidence: evidence, postDragGrace: grace)   // 先判卷(要用账本 ✓)
+        // 🔬 几何账(默认关 ✓):给"滑动尾巴 vs 点按"找新判据 —— 老两个量(时长/位移)分不开 ✗
+        if DebugFlags.tapGeometry { glog("[几何] \(tap.press.geometryLine) → \(outcome)") }
         tap.press.endRound()                     // 再清账(id 跨轮累计 ⇒ 手指数算成 11 ✗)
         let graceNote = grace ? "(拖后宽限)" : ""
         DispatchQueue.main.async {

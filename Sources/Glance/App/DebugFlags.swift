@@ -107,6 +107,21 @@ enum DebugFlags {
     }
 
 
+    /// **主线程看门狗**(2026-10-09 起默认 **开** ✓)。卡死时由**后台线程**写出
+    /// `[卡死] 主线程 ≥Ns 没心跳(后台线程仍在跑)⇒ 立刻 sample <pid> 抓现场 ✓`
+    /// 见 `Diagnostics/FrameProbe.swift` 尾部的实现与病例
+    /// 为什么改成默认开:2026-10-08 与 10-09 **两次**卡死,第一次现场全丢(无崩溃报告、
+    ///   无 spin 报告、trace 还是块缓冲 ✗);第二次靠用户手快 `sample` 才抓到栈 ✓
+    ///   ⇒ 这份保险的代价只有"1Hz 的一次比较" ✓ 卡死才有输出 ⇒ 属于"应该一直开着"的那类 ✓
+    static var mainThreadWatchdog: Bool {
+        (UserDefaults.standard.object(forKey: Keys.debugMainThreadWatchdog) as? NSNumber)?.boolValue ?? true
+    }
+
+    /// 🔬 触点几何账(默认关 ✓;见 `Keys.debugTapGeometry` 的病例)
+    static var tapGeometry: Bool {
+        (UserDefaults.standard.object(forKey: Keys.debugTapGeometry) as? NSNumber)?.boolValue ?? false
+    }
+
     static var summonPopMs: Int {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
     }
@@ -143,10 +158,12 @@ enum DebugFlags {
         ("debug.hideTray", hideTray, "不显示托盘 ⇒ **改变观感**"),
         ("debug.noSegmentAnim", noSegmentAnim, "关掉换组分段动效 ⇒ **改变观感**"),
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
+        (Keys.debugMainThreadWatchdog, !mainThreadWatchdog, "主线程看门狗**被关掉了** ⇒ 下次卡死抓不到栈 ✗(默认开 ✓)"),
         ("debug.summonPopMs", summonPopMs != 120, "入场渐入时长 = \(summonPopMs)ms(默认 120)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
         ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
+        (Keys.debugTapGeometry, tapGeometry, "触点几何账:每轮一行(峰值速/抬手速/方向抖)—— 量完就关 ✓"),
         ("debug.autoOpenSettings", autoOpenSettings, "启动即弹设置窗"),
     ]
 

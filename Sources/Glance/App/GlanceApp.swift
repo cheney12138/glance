@@ -23,6 +23,13 @@ struct GlanceApp: App {
         // **最先跑**:两个实例会抢同一组 ⌘Tab 并画出叠在一起的面板(见 SingleInstanceGuard 的病例),
         // 而且必须在 NativeHotkeys / 事件 tap 之前拦住,退出时系统状态才是一行没动
         SingleInstanceGuard.enforce()
+
+        // 卡死现场的唯一见证者(默认关 ✓;要抓卡死时:
+        //   defaults write com.cheney12138.macswitcher debug.mainThreadWatchdog -bool true)
+        MainThreadWatchdog.shared.start()
+        // "在跑的 App"名单的后台刷新钩子(2026-10-09):工作区启动/退出 ⇒ 刷一次缓存 ✓
+        // 为什么必须及时:用户从启动环里启动一个 App 后,**下一局**它就该从环里消失 ✓
+        DockAppsProvider.startObservingRunningApps()
         // ★ 调试开关**只随启动参数生效**(2026-09-19 病例:自动化测试用 defaults 把
         //   pinPanelOnRelease 留成 ON 后忘了复位 ⇒ 用户实报「点空白关不掉面板」——
         //   钉住模式下"面板外点击不免死"本来就是设计)。普通启动一律清掉:
