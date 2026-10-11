@@ -843,6 +843,12 @@ final class PanelController: ObservableObject {
     /// (与 `[尺寸]` 那行注释里同一条教训:行/列要在收紧之后算)
     private func recomputeSessionFit(on screen: NSScreen?) {
         applySessionScaleCap(on: screen)
+        // ⚠️ 2026-10-10 我在这里试过"只增不减"(想让托盘窗成为一局的不变量 ✗)—— **错的,已回退** ✓
+        //   用户实拍:窗框尺寸是保住了,可**内容布局(几行几列)是从同一个 max 推出来的** ✗
+        //   ⇒ 5 扇窗仍按 2 行 × 3 列画 ⇒ 托盘变高、第二排被面板压住 ⇒ 「更是离谱」✓
+        //   ⇒ 正解是把两件事拆开:**窗框尺寸**(一局不变量 ✓)与**内容布局**(当前组 ✓),
+        //     现在它们共用 `trayMaxContentSize` 一个输入 ✗ —— 那是一次"托盘几何"的设计改动,
+        //     要重读 `TrayGeometry`/视图那条链,不能在连轴转的深夜顺手改 ✗(见下条注释 ✓)
         trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
             let c = previewContentSize(for: g)
             return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
