@@ -35,6 +35,50 @@ final class ThumbnailRefresher {
     /// 上一次被激活的 App pid(= 在下一次激活发生时刚刚失焦的那个)。见 `handleActivation` 的失焦拍
     private var lastActivatedPID: pid_t?
 
+    // MARK: - 轻扫的"自适应"(2026-10-10)
+    ///
+    /// 用户实报「刚才疯狂掉帧」+「面板没开、平时也觉得顿」⇒ 对着日志量到:
+    /// ```
+    /// [保温] 开窗拍:22 窗(枚举 …)     本局 1170 次
+    ///   枚举 P50 **90ms** · P90 120ms · **max 1417ms** ✗
+    /// ```
+    /// 而那次轻扫的注释写着"枚举在后台毫秒级、常驻成本可忽略" ✗ —— 那是早年量的;
+    /// 窗口数涨到 22 之后早就不成立 ✓(而且**每 5 秒**就来一下 ✗)。
+    /// 更冤的是:窗口没变时这一趟 **一枚快门都不会发生**(TTL 全过滤 ✓)⇒ 纯白付枚举的钱 ✗
+    ///
+    /// 口径(两条互不相干,各自都能省):
+    ///   ① **窗口集合没变 ⇒ 跳过**:用只读 `CGWindowList` 取一份便宜指纹(不碰 AX ✓),
+    ///      与上次一致、且距上次完整扫 < 30s ⇒ 这一趟不必跑(至少每 30s 还是会走一趟 ✓
+    ///      —— TTL 刷新那条路不能彻底断 ✓)
+    ///   ② **上次越贵 ⇒ 下次间隔越长**:5s 起、30s 封顶 ✓
+    /// (用户可见的"新鲜度"本来就不靠它:开面板那一路有 0.45s 补拍,
+    ///  App 切换那一路有激活即拍 ⇒ 轻扫只是额外的暖 ✓)
+    private var lastSweepSignature: [Int] = []
+    private var lastSweepAt: CFAbsoluteTime = 0
+    private var lastSweepCost: Double = 0        // 秒
+
+    /// 便宜的窗口指纹(只读 CGWindowList ⇒ 不碰 AX ✓):窗口 id + 位置尺寸
+    /// 位置也算进去:窗口挪了/缩了 ⇒ 它的图就旧了 ⇒ 这一趟值得跑 ✓
+    nonisolated static func windowSignature() -> [Int] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]] else { return [] }
+        var out: [Int] = []
+        for d in list {
+            guard let wid = d[kCGWindowNumber as String] as? Int,
+                  let raw = d[kCGWindowBounds as String] as? NSDictionary,
+                  let r = CGRect(dictionaryRepresentation: raw) else { continue }
+            out.append(wid &+ Int(r.minX) &* 7 &+ Int(r.minY) &* 3
+                       &+ Int(r.width) &+ Int(r.height))
+        }
+        return out.sorted()
+    }
+
+    /// 下次轻扫等多久:上次花得越久等得越久(5s 起、30s 封顶 ✓)
+    private func adaptiveSweepDelay() -> Double {
+        guard lastSweepCost > 0 else { return 5 }
+        return min(30, max(5, 5 * (lastSweepCost / 0.05)))
+    }
+
     func start() {
         guard observers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
@@ -69,10 +113,12 @@ final class ThumbnailRefresher {
     /// **开窗拍**(2026-09-18 用户:「所有 app 都需要这个钩子,不是只对 glance」):
     /// 任何 App 新开的窗,不该等用户下一次唤起面板才第一次被拍。macOS 没有"别家开新窗"
     /// 的通知,就用**低频轻扫**兜住 —— 与关面板预拍同一条路:sweepAllScreens 全量走 TTL
-    /// 过滤(谁新谁不拍),没有新窗、没有过期时**一枚快门都不发生**;枚举在后台毫秒级,
-    /// 常驻成本可忽略。Glance 自己的设置窗另有一个 0.6s 的即时钩子(开窗即拍,不等扫)。
+    /// 过滤(谁新谁不拍),没有新窗、没有过期时**一枚快门都不发生**。
+    /// ⚠️ 但"不发生快门"**不等于"不花钱"** ✗ —— 枚举本身实测 P50 90ms / max 1417ms,
+    ///   而原来**每 5 秒**就来一下 ⇒ 早就不是"成本可忽略"了(见 `lastSweepSignature` 那段病例 ✓)。
+    ///   现在:窗口没变就跳过 + 上次贵就拉长间隔 ✓;Glance 自己的设置窗另有 0.6s 即时钩子 ✓
     private func schedulePeriodicSweep() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + adaptiveSweepDelay()) { [weak self] in
             self?.sweepAllScreens(reason: "开窗拍")
             self?.schedulePeriodicSweep()
         }
@@ -146,6 +192,14 @@ final class ThumbnailRefresher {
                 glog("[保温] \(reason) 跳过:面板已在台上(不与入场抢资源 ✓)")
                 return
             }
+            // ★ 先拿便宜指纹(不碰 AX ✓):窗口集合 + 位置尺寸都没变 ⇒ 这一趟没必要跑 ✓
+            //   (至少每 30s 还是会完整走一趟 —— TTL 刷新那条路不断 ✓)
+            let signature = Self.windowSignature()
+            let (lastSignature, idle) = await MainActor.run { (self.lastSweepSignature, CFAbsoluteTimeGetCurrent() - self.lastSweepAt) }
+            if reason == "开窗拍", !signature.isEmpty, signature == lastSignature, idle < 30 {
+                if isTraceEnabled { glog("[保温] \(reason) 跳过:窗口集合没变(省掉一次 ~90ms 的枚举 ✓)") }
+                return
+            }
             let beganAt = CFAbsoluteTimeGetCurrent()
             // rawGroups 的归属判定保证一扇窗只属于一块屏:按屏枚举天然不重不漏
             var windows: [WindowRecord] = []
@@ -158,6 +212,13 @@ final class ThumbnailRefresher {
                 glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
             }
             await Snapshotter.shared.precapture(windows)
+            // 记下这一趟的指纹/代价 ⇒ 下次既知该不该跳过、也知道该等多久 ✓
+            let cost = CFAbsoluteTimeGetCurrent() - beganAt
+            await MainActor.run {
+                self.lastSweepSignature = signature
+                self.lastSweepAt = CFAbsoluteTimeGetCurrent()
+                self.lastSweepCost = cost
+            }
             // 只在"这次确实很贵"时说话(常态静默 ✓ —— 本仓日志预算:一次唤起 ≤2 行 ✓)
             let total = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
             if total > 150 {
