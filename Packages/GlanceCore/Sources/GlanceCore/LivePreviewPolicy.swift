@@ -84,6 +84,25 @@ public enum LivePreviewPolicy {
 
         // ③ 换档:选中 = 用户档位,其余 = lowFps。档不对 ⇒ 停(下面 ④ 会用新档重建 ⇒ 帧保留不闪 ✓)
         //    超过上限的那些**不进名单**:它们不参与起流,也不该被换档
+        // ③ **超上限就淘汰**(2026-10-10 病例,用户实报「疯狂掉帧…就是刚操作的」)
+        //   日志铁证:`[直播] 起流池 += … 池内=11` ✗ —— 同一屏 12 个 App 悬停扫过
+        //   每个 hover 过的 App 都留下 1–3 条流,而 `keepAlive` 是 5s ✗
+        //   ⇒ 5 秒内扫过 12 个 App 就是 12 条 SCStream 同时抓屏(每条起流本身 45–99ms ✓)
+        //   ⚠️ 光靠下面那个 `maxStreams` 治不了:它只管"起流上限",**不回收已经在跑的** ✗
+        //   ⇒ 这一条只淘汰"**已闲置**"的那些(不在 items 里 = 已经离开当前组 ✓),
+        //     并且**最久没用**的先走 ✓(当前组 / 正在看的那几张绝不动 ✗)
+        let over = running.count - maxStreams
+        if over > 0 {
+            let victims = idleAfter.filter { running[$0.key] != nil }
+                .sorted { $0.value < $1.value }
+                .prefix(over)
+                .map(\.key)
+            for wid in victims where !out.stop.contains(where: { $0.wid == wid }) {
+                out.stop.append(StopRequest(wid: wid,
+                                            reason: .idleOutside(seconds: Int(now - (idleAfter[wid] ?? now)))))
+            }
+        }
+
         let live = items.prefix(maxStreams)
         for item in live {
             guard let have = running[item.wid] else { continue }
