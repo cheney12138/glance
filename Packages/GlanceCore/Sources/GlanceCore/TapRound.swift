@@ -115,7 +115,6 @@ public enum TapRound {
         ///   (见 `judge` 的 `postDragGrace`):快速选词(237ms / 0.025,也是短促小拖)
         ///   在**没有前序拖拽**时仍一票否决(2026-09-23 语料,见 corpus 样本)✓
         public var dragGraceDuration: Double = 0.50
-        public var dragGraceMove: Float = 0.25
 
         /// ⚠️ 2026-09-24 试过放宽到 0.45 —— **被语料测试当场拦下** ✓ 保持 0.6:
         ///   依据(用户实报「三指要点好多遍才能唤起」):有意点按实测落在 **0.6–0.9** ✓,
@@ -491,7 +490,15 @@ public enum TapRound {
                 return .rejected(String(format: "%d 指 抬手用了 %.0fms(>%.0fms)⇒ 不是点按",
                                         snap.fingerCount, snap.releaseSpan * 1000, policy.maxReleaseSpan * 1000))
             }
-            if snap.normalizedMove > (wide ? policy.dragGraceMove : policy.maxMove) {
+            // ★★ 2026-10-10 定案:**宽限只放宽时长,不再放宽位移** —— 用户实报 4 次 + 系统自证 ✓
+            //   最后那两发的日志(用户「又误触了三指」):
+            //     `三指 284ms norm=0.1925 abs=29.3pt → 唤起(拖后宽限)` ✗
+            //     1.2s 后 `⚠️ 之后系统在拖拽 ⇒ 撤销这次唤起(拖拽误触)` ✓✓ ← 系统自己说是拖拽
+            //   ⇒ 那条 0.25 的位移余量(正常门是 0.05 = 5 倍 ✗)就是放行它们的口子 ✓
+            //   **代价(照实记账)**:2026-09-25 你报的那件"拖完窗边框、第一下要按两次"会回来 ✗
+            //     —— 那种形状(norm 0.185)与滑动尾巴(norm 0.12–0.19)**完全重叠** ✗
+            //     ⇒ 两者只能保一个,而误触的代价明显更烦人 ✓(要退回来:把这一行改回 wide ? … ✓)
+            if snap.normalizedMove > policy.maxMove {
                 return .slide(norm: snap.normalizedMove)
             }
             // ★ 拖移证据门:按压期间系统按下过鼠标 ⇒ 这不是轻点,是拖移的起手/全程(规格表二 ✓)。
@@ -499,7 +506,7 @@ public enum TapRound {
             //   的局才被它拦下 —— 日志里它一出现,就说明真拦住了一次误触 ✓
             //   ★ 拖后宽限(wide):刚拖完 + 系统又来抢 ⇒ 那一下"点击/小拖"反正已经发生、
             //   收不回来,面板照给(用户 2026-09-25 裁定:「任何时候三指都应该是唤起手势」);
-            //   真拖已在上面两道宽门(0.50s / 0.25)被挡 ✓
+            //   真拖已在上面那道宽门(0.33s)被挡 ✓;位移那道门 2026-10-10 起与正常路径同一个值 ✓
             if dragEvidence, !wide {
                 return .rejected("按压期间出现过鼠标按下(三指拖移被系统消费的签名)⇒ 让给系统,不动作")
             }
