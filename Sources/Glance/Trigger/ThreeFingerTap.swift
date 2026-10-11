@@ -191,6 +191,20 @@ final class ThreeFingerTap {
     ///   新一次可能对某个设备**重复注册**(症状 = 手指数翻倍 ✗)。权衡:比"永久静默"可接受 ✓
     ///   —— 若真出现"手指数翻倍",先看日志里那两句 `重挂开始/⚠️ 卡住`,再定是否改成"只 register" ✓
     static let attachWedgeSeconds: CFAbsoluteTime = 6
+
+    /// ★★ 2026-10-10 病例(用户「三指突然无法唤起了」):上一版那条"楔住重试"变成了**无限循环** ✗
+    /// ```
+    /// 880411ms  重挂开始(点击但 3s 无帧(投递死亡))
+    /// 951934ms  ⚠️ 上一次重挂卡住 ≥6s ⇒ 换新队列重试 ✓   ← 之后**永远等不到"挂载"** ✗
+    /// 985552ms  ⚠️ 重试 … → 又卡住 ✗                    ← 6 秒一轮,连了 **60+** 次 ✗✗
+    /// ```
+    /// ⇒ 两个病:① `MTDeviceStop` 在这台机器上**每次都不返回**(不是偶发 ✓)⇒ 重试的那条路
+    ///      必然重蹈覆辙 ✗;② 无限重试 ⇒ 攒了一堆卡死线程、日志刷屏,而触控**一次都没回来** ✗
+    /// ⇒ 口径:① 重试**有预算**(连试 3 次就停,不再自动试 ✓,并明确告诉用户怎么恢复 ✓);
+    ///          ② 重试**只走轻量路**:不再调 `MTDeviceStop` ✗,只把当前设备重新
+    ///             `register + start`(它不碰那个卡死的调用 ✓)—— 成功就重置预算 ✓
+    private var attachWedgeRetries = 0
+    static let attachWedgeMaxRetries = 3
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -399,12 +413,23 @@ final class ThreeFingerTap {
         attachStateLock.lock()
         var wedged = false
         var gen = attachGeneration
+        var light = false
         if attachInFlight {
             // 上一次还没回来:没超过"楔住"阈值就照旧丢掉这一次(不堆积 ✓);超了 ⇒ 换新队列重试 ✓
             guard CFAbsoluteTimeGetCurrent() - attachStartedAt >= Self.attachWedgeSeconds else {
                 attachStateLock.unlock(); return
             }
+            // ⚠️ 预算用尽 ⇒ **停止自动重试**(否则就是 2026-10-10 那个 60+ 次的循环 ✗)
+            guard attachWedgeRetries < Self.attachWedgeMaxRetries else {
+                attachInFlight = false          // 别把旗标挂着(否则以后连"睡醒自愈"都进不来 ✗)
+                attachStateLock.unlock()
+                glog("[指点按] ⚠️ 重挂已连续卡住 \(Self.attachWedgeMaxRetries) 次 ⇒ **放弃自动重试**"
+                     + "(触控投递已死;重启 Glance 即可恢复 ✓ —— 不要再点/滑了,徒增日志 ✓)")
+                return
+            }
+            attachWedgeRetries += 1
             wedged = true
+            light = true                    // 轻量路:不碰 MTDeviceStop ✗(它就是卡住的那个 ✓)
             gen += 1
             attachGeneration = gen
             attachQueueLock.lock()
@@ -425,7 +450,7 @@ final class ThreeFingerTap {
         let q = attachQueue                             // 取快照:永远投到"这一代"的队列上 ✓
         attachQueueLock.unlock()
         q.async { [weak self] in
-            self?.performAttach(reason: reason)
+            self?.performAttach(reason: reason, light: light)
             self?.attachStateLock.lock()
             // 只有"当前这一代"才能清旗标(旧代哪天回来了也不许清别人正在跑的那面 ✗)
             if gen == self?.attachGeneration { self?.attachInFlight = false }
@@ -434,13 +459,17 @@ final class ThreeFingerTap {
     }
 
     /// 真正的重挂(只许在 `attachQueue` 上跑 ✓ —— 见上面那条卡死病例)
-    private func performAttach(reason: String) {
+    private func performAttach(reason: String, light: Bool = false) {
         guard let sym = Self.symbols else { return }
         // 先拆(上一轮的把手还活着 —— 它们的列表从未释放,指针有效 ✓)
+        // ⚠️ 轻量路(楔住重试)跳过整段"先拆":`MTUnregister…`/`MTDeviceStop` 正是卡死的调用 ✗
+        //   那些把手已经死了 ⇒ 直接丢掉引用、重新 register+start 一遍 ✓
         let detached = attachedDevices.count
-        for p in attachedDevices {
-            sym.unregister?(p, Self.contactFrame)
-            sym.stop?(p)
+        if !light {
+            for p in attachedDevices {
+                sym.unregister?(p, Self.contactFrame)
+                sym.stop?(p)
+            }
         }
         attachedDevices.removeAll()
         guard let devices = sym.list() else { return }
@@ -453,7 +482,9 @@ final class ThreeFingerTap {
             attachedDevices.append(p)
         }
         lastAttachAt = CFAbsoluteTimeGetCurrent()
-        glog("[指点按] 挂载 \(count) 个设备(\(reason),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
+        // 这一趟真的走到头了 ⇒ 清掉"楔住"预算(下一次死投递可以从头试 ✓)
+        attachStateLock.lock(); attachWedgeRetries = 0; attachStateLock.unlock()
+        glog("[指点按] 挂载 \(count) 个设备(\(reason)\(light ? " · 轻量路(不拆旧 ✓)" : ""),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
              + " · 四指=\(enabledFour ? "开" : "关")")
     }
 
