@@ -849,35 +849,30 @@ final class PanelController: ObservableObject {
         //   ⇒ 正解是把两件事拆开:**窗框尺寸**(一局不变量 ✓)与**内容布局**(当前组 ✓),
         //     现在它们共用 `trayMaxContentSize` 一个输入 ✗ —— 那是一次"托盘几何"的设计改动,
         //     要重读 `TrayGeometry`/视图那条链,不能在连轴转的深夜顺手改 ✗(见下条注释 ✓)
-        // ══════════════════════════════════════════════════════════════════════════
-        // 🚧 未修完（分支 `fix/tray-size-is-a-session-invariant`，2026-10-10 夜里的完整诊断）
+        // ★★ 2026-10-10 定案（用户:「6-1 的时候还是没好」+ `[托]` 探针一锤定音）:
+        //   探针把病灶定死了:
+        //   ```
+        //   68753526ms  窗=1226x537  内容= 978x344  网格=2x3  组窗数=6  max=1033x344  ✓
+        //   68755188ms  窗=1226x537  内容=**1560x184** 网格=1x5  组窗数=5  max=1033x344  ✗✗
+        //                           ↑ 内容比窗框宽 334pt ⇒ 溢出 ⇒ 用户看到的"错位"
+        //   ```
+        //   机理:窗框按"本局开局那一刻的**最坏网格**"定(6 窗 ⇒ 2行×3列 = 1033 ✓);
+        //   关掉一扇后,布局器取"放得下的**最少行数**" ⇒ 5 张排成一行 ⇒ 而**在本局那把尺**下
+        //   每张卡 ≈312pt ⇒ 一行要 1560 ✗ ⇒ 比窗框宽 ⇒ 溢出 ✓
+        //   (另一块屏上没这毛病,就因为那边开局时的最坏情况**碰巧**覆盖了"一行"这个形状 ✓)
         //
-        // 用户口径：**六个窗口的组，关掉一扇之后**
-        //   · 期望 (a)：托盘窗**不变大不变小**，里面的 5 张卡重新排成**一行**、居中 ✓
-        //   · 实况 ①（原状）：窗框中途缩尺寸 `… 1717x537 → 1136x537` ✗ ⇒ 卡片按旧槽位画 ⇒ 整排错位
-        //   · 实况 ②（我试过"一局只增不减"，被用户回「更是离谱」✗）：窗框保住了 ✓，
-        //     但 5 扇窗仍按 **2 行 × 3 列** 画 ⇒ 托盘变高、第二排被面板压住 ✗
-        //
-        // 三条链，缺一不可（前两次栽在只看了一两条 ✗）：
-        //   ① **窗框尺寸**：`previewFrame()` → `TrayGeometry(maxContentSize: trayMaxContentSize …)`
-        //      —— 现在由本函数在 `applyList` 里跟着**当前组**重算 ✗ ⇒ 中途 setFrame ✓
-        //      正解：一局**只算一次**（开局，取整局的 max ✓，ADR-0006 ✓），局中一律不重算 ✓
-        //   ② **卡片尺度**：`trayFitScale` / `applySessionScaleCap` —— 本局恒定的那把尺 ✓（保留 ✓）
-        //   ③ **网格（行 × 列）**：来自 `trayFitScale` + `worstLayout`（"托盘最挤 6 窗 → 2 行 × 3 列"）
-        //      —— 它按**本局最坏情况**定 ✗ ⇒ 即使窗框不变,5 扇窗也按 6 窗的网格画 ⇒ 两排 ✗
-        //      正解：网格按**当前组**算（5 ⇒ 一行 ✓），内容在这块不变量的窗里**居中** ✓
-        //      ⚠️ 注意线 1007 那条警告:"行 × 列"只能有**一个来源**（视图排网格与 `previewContentSize`
-        //         都取它 ✓）—— 所以拆的时候要在那个唯一来源里拆,别在两处各算一遍 ✗
-        //
-        // 判据(failed 的两次都记在上面,别再走 ✓)：动完必须满足
-        //   · 6 窗 ⇒ 关到 5 ⇒ 窗框**不动** ∧ 卡片**一行居中** ✓
-        //   · 3 窗 ⇒ 窗框仍不动 ∧ 一行居中 ✓（本局开局那次 max 仍然管着窗框 ✓）
-        //   · 关面板重开（新一局）⇒ 按新的最大窗数重算 ✓（尺寸允许在这一拍变 ✓）
+        //   ⇒ 口径（用户选 A）:**本局最大内容 = 各组"最坏一行"与"最坏网格"的较大者** ✓
+        //     窗框从此一定装得下"这一组排成一行"的形状 ⇒ 关一扇之后是一行居中 ✓
+        //     代价照实说:一行算得更宽 ⇒ 窗框更宽、本局比例可能更早收紧(长条/图标略小 ✓)
+        //     ⚠️ 这是一局**开局算一次**的数(ADR-0006 ✓),局中一律不重算 ✓
         // ══════════════════════════════════════════════════════════════════════════
         trayMaxContentSize = groups.reduce(NSSize.zero) { acc, g in
-            let c = previewContentSize(for: g)
+            let natural = previewContentSize(for: g)
+            let oneRow = Self.oneRowContentSize(for: g)
+            let c = NSSize(width: max(natural.width, oneRow.width), height: max(natural.height, oneRow.height))
             return NSSize(width: max(acc.width, c.width), height: max(acc.height, c.height))
         }
+
         // 启动行(方案 E)也是托盘的一种内容:它可能是本局**最大**的托盘(未启动比某组的窗多),
         // 不进 max 的话,选中入口槽那一下就会把托盘窗口撑到中途改尺寸
         if launchSectionEnabled {
@@ -1014,6 +1009,18 @@ final class PanelController: ObservableObject {
     // 口径:**卡仍按真窗比例画**(形状跟真窗走 ✓ 保住用户的设计 ✓),但它**占的槽位固定** = 本局最宽那张卡。
     //   ⇒ 换组时位置一个像素不动 ✓。代价:窄卡两侧留白(实测最窄 195 vs 最宽 274 ⇒ 左右各 ≈40pt ✓),
     //     且整行变宽 ⇒ 会话缩放比相应略降(卡片整体略小一点 ✓)。
+
+    /// 某一组**排成一行**时的内容尺寸(2026-10-10:给"本局最大内容"多算一种形状 ✓)
+    /// 数学与 `previewContentSize(for:)` 同源:同一把 `cardSizes` ✓、同一套 `TrayGrid` ✓、同一组内边 ✓
+    static func oneRowContentSize(for group: AppGroup) -> NSSize {
+        let sizes = cardSizes(group.windows)
+        guard !sizes.isEmpty else { return .zero }
+        let widths = sizes.map(\.width)
+        let rows = 1, cols = sizes.count
+        let h = rowHeights(sizes, rows: rows, cols: cols).reduce(0, +)
+        return NSSize(width: maxRowWidth(widths, rows: rows, cols: cols) + PanelMetrics.trayPadX * 2,
+                      height: PanelMetrics.trayPadTop + h + PanelMetrics.trayPadBottom)
+    }
 
     static func cardSizes(_ windows: [WindowRecord]) -> [CGSize] {
         windows.map { PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect) }
@@ -1959,6 +1966,18 @@ final class PanelController: ObservableObject {
         // 基本都出在这里,这会直接吃掉 1–1.5 帧 —— 入场上浮时再按一下 Tab 就"顿"一下
         traceCost("托盘改尺寸") {
             setFrameIfNeeded(previewPanel, frame)
+            // 🔬 临时探针(2026-10-10 · 修"关一扇窗就错位"用):**同一拍**把四个数并排打出来 ✓
+            //   为什么需要它:读代码显示两侧本来已经分开(内容跟当前组 ✓ / 窗框跟一局 max ✓),
+            //   可屏幕上确实是错的 ⇒ 中间还有一个我没看见的数在带偏它 ✗ ⇒ 先量,不猜 ✓
+            if isTraceEnabled {
+                let content = previewContentSize()
+                let wins = currentGroup?.windows ?? []
+                let (r, c) = trayLayout(widths: wins.map { PanelMetrics.thumbWidth(aspect: $0.aspect) })
+                let pf = previewPanel.frame
+                let w = String(format: "%.0fx%.0f@%.0f,%.0f", pf.width, pf.height, pf.minX, pf.minY)
+                glog("[托] 窗=\(w) · 内容=\(Int(content.width))x\(Int(content.height)) · 网格=\(r)x\(c)"
+                     + " · 组窗数=\(wins.count) · 本局max=\(Int(trayMaxContentSize.width))x\(Int(trayMaxContentSize.height))")
+            }
         }
         __mark("setFrame")
         // ★★ 2026-09-21 真凶(分段计时抓到):`orderFrontRegardless()` 在**每次 hover 更新**都被调用 ✗
