@@ -1864,18 +1864,7 @@ final class PanelController: ObservableObject {
         // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
         //   取整规则(尺寸向上、原点向下)住在那个类型里,别处改了也不会分叉 ✓。
         let maxContent = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
-        // ★ 把**当前**这一组的内容高度也交给几何:它只用来决定"窗抬高多少" ⇒
-        //   内容底边(芯片那一排)到环的距离恒定 ⇒ 双排时不再贴上去 ✓(见 TrayGeometry 的病例)
-        // ★ 抬升量 = 当前内容比"**一行**那档"高多少 ✓
-        //   基准取"一行"而不是"本局最大":一行那档正是用户看着舒服的那档(不动 ✗),
-        //   多行往上抬 ⇒ 芯片到环的距离两档一致 ✓(见 TrayGeometry 的病例 ✓)
-        let cur = previewContentSize()
-        let oneRow = (entrySelected || currentGroup == nil)
-            ? cur.height
-            : Self.oneRowContentSize(for: currentGroup!).height
-        let bottomLift = max(0, cur.height - oneRow)
-        let geo = TrayGeometry(maxContentSize: maxContent, bottomLift: bottomLift,
-                               panelFrame: panel.frame, screenArea: area)
+        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
         if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
             trayOverflowLogged = true
             glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")
