@@ -872,9 +872,21 @@ struct TrayGeometry {
 
     /// - Parameters:
     ///   - maxContentSize: 本局所有托盘内容里的**最大**尺寸(整局恒定 ⇒ 窗口整局只落位一次)
+    ///   - bottomLift: 窗**位置**的抬升量(pt)—— 用来让"内容底边到环的距离"恒定 ✓
     ///   - panelFrame: 主面板窗框(托盘与它同轴、并贴在它下沿)
     ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
-    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
+    ///
+    /// ★★ 2026-10-12 病例(用户两张对比图:「**双排窗口**的时候, 芯片跟环的距离变近了」):
+    ///   探针量到的数(同一局内):
+    ///   ```
+    ///   1 排:窗高 537 · 内容高 184 ⇒ 底部空 **353pt** ✓（用户看着舒服的那档）
+    ///   2 排:窗高 537 · 内容高 344 ⇒ 底部空 **193pt** ✗ ⇒ 差了 **160pt** = 他看到的"变近"
+    ///   ```
+    ///   机理:窗高是**本局不变量**(ADR-0006 ✓),而内容**顶对齐**画在窗里 ⇒
+    ///     内容越高、底部那段空当越小 ⇒ 芯片(内容底边)离环越近 ✗
+    ///   ⇒ 口径:**让"内容底边"到环的距离恒定** ✓(以 1 排那档的手感为基准)——
+    ///     窗**尺寸**照旧不动 ✓,只是把窗**位置**按"当前内容比最大内容矮多少"抬高 ✓
+    init(maxContentSize: NSSize, bottomLift: CGFloat, panelFrame: NSRect, screenArea: NSRect) {
         let pad = PanelMetrics.shadowPadPop * 2
         let size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
                           height: (maxContentSize.height + pad).rounded(.up))
@@ -887,6 +899,10 @@ struct TrayGeometry {
             x = min(max(x, screenArea.minX + margin), screenArea.maxX - margin - size.width)
         }
         self.windowSize = size
-        self.windowOrigin = NSPoint(x: x.rounded(.down), y: (panelFrame.maxY - frameGap).rounded(.down))
+        // ★ 抬升量由调用方给(它才知道"当前比基准高多少" ✓):
+        //   基准 = **一行**那档(用户看着舒服的那档 ✓,它不动 ✗)⇒ 多出来的行数把窗**抬高** ✓
+        //   ⇒ 两档的"内容底边(芯片那一排)"到环的距离就重合了 ✓
+        self.windowOrigin = NSPoint(x: x.rounded(.down),
+                                    y: (panelFrame.maxY - frameGap + max(0, bottomLift)).rounded(.down))
     }
 }
