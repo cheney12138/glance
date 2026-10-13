@@ -229,7 +229,7 @@ final class PanelController: ObservableObject {
         let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
         // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
         let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
-        let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom)
+        let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
         guard x >= 0, yUp >= 0 else { return }
         let c = max(0, min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)))
         let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
@@ -934,28 +934,33 @@ final class PanelController: ObservableObject {
         var worstAspects: [CGFloat] = []
         var worstN = 0
         var worstScale = CGFloat.greatestFiniteMagnitude
+        // ★★ 2026-10-13 用户裁定「环和容器两边自己控制」——
+        //   **这条 `cap = min(cap, fit)` 就是病灶**(用户实拍「怎么把环给我缩小了」✓):
+        //   托盘一装不下就把整局比例(长条/玻璃/圆角都在用)一起收紧 ⇒ 环被托盘拖着缩 ✗
+        //   ⇒ 现在 `fit` 只写进 `PanelMetrics.trayCap`(只管卡片 ✓),环只由 `availW / stripBase` 定 ✓
+        var trayCap = CGFloat.greatestFiniteMagnitude
         for g in groups where !g.windows.isEmpty {
             let fit = trayFitScale(aspects: g.windows.map(\.aspect)).scale
-            cap = min(cap, fit)
+            trayCap = min(trayCap, fit)
             if fit < worstScale {
                 worstScale = fit
                 worstN = g.windows.count
                 worstAspects = g.windows.map(\.aspect)
             }
         }
+        PanelMetrics.trayCap = trayCap
         PanelMetrics.sessionCap = cap
         // 行/列要在**收紧之后**再算:列数取的是当前尺寸下能放几张,
         // 收紧前算出来的会是上一局的尺寸(日志里就会看到对不上的行 × 列)
         let worstLayout = trayLayout(widths: worstAspects.map { PanelMetrics.thumbWidth(aspect: $0) })
         // **只在档位变化时打**:同一台机器上它几乎每局一样,重印就是噪音;变了一定要看
         if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
-        Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)
-        // ⚠️ 这里原来用 `print`(走 stdout)⇒ **块缓冲** ⇒ 落盘能延迟几分钟 ✗
+        Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)        // ⚠️ 这里原来用 `print`(走 stdout)⇒ **块缓冲** ⇒ 落盘能延迟几分钟 ✗
         //   (2026-09-24 查"面板比屏还宽"时被它坑了一次:明明打了,日志里半天看不见 ✓)
-        trace(String(format: "[尺寸] 固定 %.0f%% · 本局 %.0f%% · 长条 %.0fpt(基准) · 托盘最挤 %d 窗 → %d 行 × %d 列 · 玻璃 %.0f/%.0fpt%@",
-                     s * 100, cap * 100, stripBase, worstN, worstLayout.rows, worstLayout.cols,
-                     cap * stripBase, availW,
-                     cap < s - 0.001 ? " → 已收紧" : ""))
+        trace(String(format: "[尺寸] 固定 %.0f%% · 环 %.0f%%(长条 %.0fpt 基准 · 玻璃 %.0f/%.0fpt%@) · 托盘 %.0f%%(只剩它自己管卡片 · 最挤 %d 窗 → %d 行 × %d 列)",
+                     s * 100, cap * 100, stripBase, cap * stripBase, availW,
+                     cap < s - 0.001 ? " → 已收紧" : "",
+                     min(trayCap, s) * 100, worstN, worstLayout.rows, worstLayout.cols))
         // (托盘窗口尺寸那行撤了:它是"整局只 setFrame 一次"的验证账,已验证完;
         //  要复核时看 `[工] 托盘改尺寸` 是否只在开局出现即可)
         if cap < 0.6 {
@@ -972,8 +977,10 @@ final class PanelController: ObservableObject {
     private func trayFitScale(aspects: [CGFloat]) -> (scale: CGFloat, rows: Int, cols: Int) {
         guard !aspects.isEmpty else { return (.greatestFiniteMagnitude, 0, 0) }
         let saved = PanelMetrics.sessionCap
+        let savedTrayCap = PanelMetrics.trayCap          // ★ 两把尺子都要在 ∞ 窗口内(否则基准宽会带着上一局的缩放 ✗)
         PanelMetrics.sessionCap = .greatestFiniteMagnitude
-        let s = PanelMetrics.scale
+        PanelMetrics.trayCap = .greatestFiniteMagnitude
+        let s = PanelMetrics.trayScale
         // 每行/每列在 1.0 倍下的占位(含间隙;末尾那一份间隙要减掉,所以 pad 里是减不是加)。
         // 卡宽随窗比例(T88):**必须在 ∞ 窗口内**由 aspect 推基准宽 —— 传入现成的宽
         // 会带着上一局的缩放,除回 s 也救不回来(k 是在取值那一刻生效的)
@@ -985,6 +992,7 @@ final class PanelController: ObservableObject {
         let rowH = (PanelMetrics.thumbH + PanelMetrics.trayRowGap) / s
         let padH = (PanelMetrics.trayPadTop + PanelMetrics.trayPadBottom - PanelMetrics.trayRowGap) / s
         PanelMetrics.sessionCap = saved
+        PanelMetrics.trayCap = savedTrayCap
 
         var best = (scale: CGFloat(0), rows: 1, cols: aspects.count)
         for r in 1...min(aspects.count, PanelMetrics.trayMaxRows) {
@@ -1369,6 +1377,7 @@ final class PanelController: ObservableObject {
         endActivity()
         FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
         PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
+        PanelMetrics.trayCap = .greatestFiniteMagnitude    // 托盘那把尺子同样收掉 ✓
         // ★ 取证:收窗**之前**两扇窗各是什么状态(下次再看到"残留"时,这一行能分清
         //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
         trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
@@ -1752,6 +1761,9 @@ final class PanelController: ObservableObject {
             height: PanelMetrics.trayPadTop
                 + rowH.reduce(0, +) + max(CGFloat(max(rows, 1)) - 1, 0) * PanelMetrics.trayRowGap
                 + PanelMetrics.trayPadBottom
+                // ★ 2026-10-13:容器与环之间那**固定的一段空气** ✓
+                //   (内容贴底摆 ⇒ 不论几行,芯片到环的距离一样 ✓;它不进 `trayFitScale` ✓)
+                + PanelMetrics.trayBottomBreath
         )
     }
 
@@ -1768,6 +1780,7 @@ final class PanelController: ObservableObject {
                 + PanelMetrics.trayPadX * 2,
             height: PanelMetrics.trayPadTop + r * PanelMetrics.icon
                 + max(r - 1, 0) * PanelMetrics.trayRowGap + PanelMetrics.trayPadBottom
+                + PanelMetrics.trayBottomBreath
         )
     }
 
@@ -1863,7 +1876,18 @@ final class PanelController: ObservableObject {
               let area = contextScreen?.visibleFrame else { return nil }
         // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
         //   取整规则(尺寸向上、原点向下)住在那个类型里,别处改了也不会分叉 ✓。
-        let maxContent = trayMaxContentSize.width > 0 ? trayMaxContentSize : previewContentSize()
+        // ★★ 2026-10-13 用户裁定(第三、四次明说):「变化的始终是容器的宽和高」——
+        //   改前用 `trayMaxContentSize`(本局**所有组**里最大的那个内容)⇒ 容器/玻璃按本局最大撑开 ✗
+        //   病例(用户实拍访达那组 8 窗):
+        //   ```
+        //   窗=2625x505 · 内容=285x184 · 本局max=2432x344
+        //   ⇒ 玻璃比卡片宽出一大截 ⇒ 用户:「太宽了, 收窄一点」/「边距还是有问题」✓
+        //   ```
+        //   ⇒ 改成**跟着当前组**收(入口槽那扇也一样 ⇒ 用 `previewContentSize()` ✓,它已按选中状态分支 ✓)
+        //   ⚠️ 代价(与旧 ADR-0006 相反,已请用户确认 ✓):换组时会**改一次窗框尺寸**
+        //      ⇒ 实测这个动作用 0.1–0.4ms(主线程 ✓),且内容贴底 ⇒ 位置不动、只有玻璃左右收 ✓
+        //     —— 即“旧口径:窗框是一局的不变量”改成了“窗框跟着当前组走” ✓
+        let maxContent = previewContentSize()
         let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
         if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
             trayOverflowLogged = true
@@ -2042,7 +2066,7 @@ final class PanelController: ObservableObject {
         // 玻璃 → 内容:视图是 .padding(top: trayPadTop, horizontal: trayPadX, bottom: trayPadBottom),
         // 卡片那一横条因此从玻璃下沿 + trayPadBottom 起算
         let x = p.x - glass.minX - PanelMetrics.trayPadX
-        let yUp = p.y - glass.minY - PanelMetrics.trayPadBottom
+        let yUp = p.y - glass.minY - PanelMetrics.trayPadBottom - PanelMetrics.trayBottomBreath
         guard x >= 0, yUp >= 0 else { return }
         if entrySelected {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
@@ -3189,6 +3213,7 @@ final class PanelController: ObservableObject {
         //   ⇒ 局中**只收紧、不放松**:重算一次,更紧才采纳(变少 ⇒ 保持原档,
         //     图标不当着用户的面跳大;trayMaxContentSize 的"整局不变"也一并守住 ✓)
         let savedCap = PanelMetrics.sessionCap
+        let savedTrayCap = PanelMetrics.trayCap
         let savedTrayMax = trayMaxContentSize
         recomputeSessionFit(on: contextScreen)
         if PanelMetrics.sessionCap >= savedCap {
@@ -3198,6 +3223,8 @@ final class PanelController: ObservableObject {
             trace(String(format: "[尺寸] 局中名单变多 ⇒ 收紧 %.2f → %.2f(玻璃不超屏)",
                          savedCap == .greatestFiniteMagnitude ? -1 : savedCap, PanelMetrics.sessionCap))
         }
+        // ★ 托盘那把尺子同上:**只收紧、不放松**(卡片不当着用户的面变大 ✓)
+        if PanelMetrics.trayCap >= savedTrayCap { PanelMetrics.trayCap = savedTrayCap }
         // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
         if let panel, let target = centerFrame(for: paddedSize()) {
             setFrameIfNeeded(panel, target)

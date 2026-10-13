@@ -69,6 +69,13 @@ struct PanelView: View {
                     .fill(PanelColors.glassVeil)
                     .allowsHitTesting(false)
             )
+            // 临时量尺(2026-10-13):量**玻璃**在面板窗内的位置 ⇒ 才能算出
+            // "托盘内容底边 → 环的可见顶"这段真实间距(两屏对比时缺的就是它 ✗)
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { PanelContentProbe.report(g.frame(in: .global)) }
+                    .onChange(of: g.frame(in: .global)) { _, r in PanelContentProbe.report(r) }
+            })
             // ★★ **玻璃反光边**(2026-10-08)—— 三条否掉的错路都记在这,别再走:
             //   ① 2026-09-15:`strokeBorder` **均匀实线** ⇒ 「还是有边框看着」✗
             //   ② 本日第一稿:细 stroke + 模糊 ⇒ 「**像是描的边**, 没有手机**曲面屏**那种自然向下过渡」✗
@@ -702,5 +709,19 @@ struct GlassRim: View {
             .inset(by: inset)
             .strokeBorder(color, lineWidth: width)
             .blur(radius: blur)
+    }
+}
+
+/// ⚠️ **临时量尺**(2026-10-13,用完删 ✗)—— 与 `PreviewPanelView.TrayContentProbe` 同一套口径:
+/// 量的是**玻璃在窗内的位置**(`.global` = 窗内坐标,origin 在窗的**左上**,y 向下 ✓)
+@MainActor
+private enum PanelContentProbe {
+    private static var last: CGRect = .null
+    static func report(_ r: CGRect) {
+        if !last.isNull, abs(last.minY - r.minY) < 0.5, abs(last.height - r.height) < 0.5,
+           abs(last.minX - r.minX) < 0.5, abs(last.width - r.width) < 0.5 { return }
+        last = r
+        glog(String(format: "[面内容] 玻璃 窗内 x=%.0f y=%.0f w=%.0f h=%.0f · 顶离窗顶 %.0f",
+                    r.minX, r.minY, r.width, r.height, r.minY))
     }
 }
