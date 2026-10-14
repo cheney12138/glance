@@ -8,6 +8,14 @@ import GlanceCore
 struct GlanceApp: App {
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
+        // ★ 快照与 live/静帧"三源一把尺"的接线(依赖倒置 ✓):Snapshotter(Inventory 层)
+        //   不许认识 Design 的尺寸 token ⇒ 组装根把"卡片盒像素"公式递进去 ✓
+        //   ⚠️ 必须在启动首扫(0.8s)之前 —— init 里接线,天然赶在前面 ✓
+        snapshotBoxProvider = { w in
+            let aspect = w.bounds.width / max(w.bounds.height, 1)
+            let pt = PanelMetrics.thumbSize(real: w.bounds.size, aspect: aspect)
+            return CGSize(width: pt.width * PanelScreen.scale, height: pt.height * PanelScreen.scale)
+        }
         // 预拍要知道"面板在不在台上"(2026-09-22 掉帧病例:15 窗预拍与入场抢 GPU ⇒ 652ms 长帧 ✗)
         PanelStageProbe.isVisible = { [weak panelController] in panelController?.isVisible ?? false }
         _ = stdoutIsLineBuffered
