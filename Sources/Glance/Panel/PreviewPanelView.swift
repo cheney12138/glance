@@ -927,6 +927,18 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             cfg.scalesToFit = false
             cfg.ignoreShadowsSingleWindow = true     // 与快照链一致(病例 B6:内容框也要同源)
             let filter = SCContentFilter(desktopIndependentWindow: win)
+            // ★★ 2026-10-14 静帧占位(用户:「打开即有真图」✓;当年错位的病根 = **两个图源两把尺子** ✗)
+            //   当年:`CGWindowListCreateImage` 自己算取景/缩放 ✗ ⇒ 与 live 差一点点像素
+            //        ⇒ 切流那一刻看起来"轻微位移"(用户为它调了很久 ✓)
+            //   ⇒ 现在改用 **SCScreenshotManager + 同一个 `filter` / 同一份 `cfg`** ✓
+            //     ⇒ 取景与缩放的**来源唯一** ⇒ 与 live **逐像素对齐**(不是凑出来的 ✓)
+            //   时机:与起流**并行**发出(不 await 到流之前 ✗,否则白等一次静帧的时间 ✓)
+            Task { [weak self] in
+                guard let self else { return }
+                guard let cg = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                          configuration: cfg) else { return }
+                self.queue.async { self.deliver(cg, wid: wid) }   // 与直播帧同一条上屏路 ✓
+            }
             let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
             let out = LiveOutput(wid: wid) { [weak self] sb in self?.ingest(sb, wid: wid, gen: g) }
             do {
@@ -958,6 +970,12 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             firstFrameLogged.insert(wid)
             glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
+        deliver(img, wid: wid)
+    }
+
+    /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
+    /// ⚠️ 只在**池队列**上调用(账本 `latest`/`latestOrder`/`wanted` 全是池队列状态 ✓)
+    fileprivate func deliver(_ img: CGImage, wid: CGWindowID) {
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
         while latestOrder.count > 10 {
