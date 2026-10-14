@@ -34,6 +34,10 @@ final class ThumbnailRefresher {
     private var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
     /// 上一次被激活的 App pid(= 在下一次激活发生时刚刚失焦的那个)。见 `handleActivation` 的失焦拍
     private var lastActivatedPID: pid_t?
+    /// ★★ 破环冷却(2026-10-14 病例:三指被拖死 ✓):屏参数事件后到这个时刻之前**一律不拍**。
+    ///   环是这样的:屏事件 → 缓存全清 + 手势重挂 → 全量重拍(SCK 连发)→ SCK 又触发屏事件 ✗✗
+    ///   ⇒ 给屏事件后的重拍加冷却,环断供就停 ✓(每次事件都重置 ⇒ 事件停了 8s 后才恢复拍 ✓)
+    private var captureCooldownUntil: CFAbsoluteTime = 0
 
     // MARK: - 轻扫的"自适应"(2026-10-10)
     ///
@@ -110,6 +114,7 @@ final class ThumbnailRefresher {
                 let now = Self.screenSignature()
                 guard now != self.lastScreenSignature else { return }   // 只是通知勤,屏没变
                 self.lastScreenSignature = now
+                self.captureCooldownUntil = CFAbsoluteTimeGetCurrent() + 8   // ★ 破环 ✓(每次事件重置 ✓)
                 self.invalidateAll(reason: "显示器参数变化")
             }
         })
@@ -215,6 +220,13 @@ final class ThumbnailRefresher {
             //   ⇒ 收窄成两条:
             //     ① 让开入场:等 0.6s 再走(入场动画那几拍不动它 ✓)
             //     ② **只补"没有图/图太旧"的窗**(`maxAge: 2` ✓)—— 全量重拍仍然不做 ✓
+            // ★ 破环冷却(见 captureCooldownUntil 的注释 ✓):屏事件后 8s 内不拍,
+            //   断掉「屏事件 → 全量重拍 → 更多屏事件」的环 ✓(真实插拔屏代价 ≤8s 图标 ✓ 可接受 ✓)
+            let cooldownUntil = await MainActor.run { self.captureCooldownUntil }
+            if CFAbsoluteTimeGetCurrent() < cooldownUntil {
+                if isTraceEnabled { glog("[保温] 跳过:屏变化后截屏冷却中 ✓") }
+                return
+            }
             let onStage = await MainActor.run(body: { PanelStageProbe.isVisible() })
             if onStage {
                 try? await Task.sleep(nanoseconds: 600_000_000)
