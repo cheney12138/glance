@@ -2121,9 +2121,15 @@ final class PanelController: ObservableObject {
             var hit: Int?
             for j in start..<end {
                 let w = widths[j]
-                if x < cursor + w { hit = j; break }
+                // ★★ 2026-10-13 病例(用户:「预览窗口边缘选中错位到相邻的这个问题还是存在」✓):
+                //   卡片之间那道缝(thumbGap)原来**整条判给下一张** ✗
+                //   ⇒ 在第一张卡的右侧边缘扫过时,高亮会跳到第二张 ✓(点击路径一直是"归最近那张" ✓
+                //     见 thumbGrid 的"行级点击"注释 —— 两条路口径不一致本身就是病 ✗)
+                //   ⇒ 缝以中线为界:左半归左边那张、右半归右边那张 ✓
+                if x < cursor + w + PanelMetrics.thumbGap / 2 { hit = j; break }
                 cursor += w + PanelMetrics.thumbGap
             }
+            hit = hit ?? (end - 1)      // 行最右缘 ⇒ 归最后一张(也是"最近"的那张 ✓)
             guard let i = hit else {
                 // 玻璃内但没命中卡片(点在 padding/行间隙):节流打一行,给"点击吞没"定位用
                 if CFAbsoluteTimeGetCurrent() - Self.lastCardMissLog > 0.5 {
