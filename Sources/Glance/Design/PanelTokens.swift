@@ -287,13 +287,10 @@ enum PanelMetrics {
     ///   ⇒ 下一局生效 ✓;不写这个键 = 用出厂默认 50 ✓
     static var trayRingGap: CGFloat {
         if let v = DebugFlags.trayRingGap { return CGFloat(max(0, v)) }
-        // 2026-10-13 用户口径演进:50「太宽了」⇒ 30;用户又指"访达那组太近 + 就是这对边(A)" ⇒ 44 ✓
-        //   这对边 = **卡片/芯片下沿 → 环玻璃上沿**(用户逐条点选(A) ✓)—— 由它一个数唯一决定 ✓
-        // 2026-10-13 用户口径(收口):「不管有多少窗口, 卡片距离环的边距**都要一样**」✓
-        //   演进:50 太宽 → 30 → 44 又太宽 → 28;最后定在 **40**(下面这个数就是那对边的净距 ✓)
-        // ★★ 2026-10-13 **定稿值**(用户:「ok, 一致了, 再多5pt吧」⇒ 40 + 5 = **45**)✓
-        //   这条边 = 卡片/芯片下沿 → 环玻璃上沿;与"几扇窗/几行"**完全无关** ✓
-        return 45
+        // ★ 2026-10-13 **最终定值 18**（用户：「ok了, 太宽了, 收窄一点. 大概保留一指就行」✓）
+        //   口径已校准:`trayRingGap = 0` ⇒ 卡片/芯片**紧贴环的上沿** ✓；这个数 = **眼睛看到的**那段高度 ✓
+        //   与“几扇窗 / 几行”完全无关 ✓（两条边 = 卡片/芯片下沿 → 环玻璃上沿）
+        return 18
     }
     // 圆角
     static var rPanel: CGFloat { k(34) }
@@ -988,15 +985,23 @@ struct TrayGeometry {
         //   ⇒ 说明内容在窗里其实**贴着顶**(不是贴底 ✗):内容越矮,离环越远 ✓
         //   ⇒ 式子必须**与内容高度无关**:底边只由"窗底 + shadowPadPop(渲染实测的那 96)"决定 ✓
         //     (之前多加了 `trayPadBottom` ⇒ 单窗多出 14;而"顶对齐"⇒ 多窗那种又少一截 ✓)
+        // ★★ 2026-10-13 **算式定案**(用三把量尺实测反解,不再猜 ✓):
+        //   实测(同一帧):窗底 553 · 内容框底边 554(= 窗底 + 1,即**内容与窗底齐平** ✓)
+        //                 面板玻璃顶 604 ⇒ 内容底比玻璃顶低 50 ✗(芯片再上 14 ⇒ 压着芯片 ✓)
+        //   机理:式子里的 `− shadowPadPop(96)` 是**白扣的** ✗ —— 它假设"内容底 = 窗底 + 托盘阴影",
+        //        而实测内容与窗底齐平(阴影那段并不在内容框里 ✓)
+        //   ⇒ y = 玻璃顶 + trayRingGap + trayPadBottom(内容框底 → 芯片底 那 14)
+        //     校验:gap=0 ⇒ y = 618 ⇒ 内容底 619 ⇒ 芯片底 605 ≈ 玻璃顶 604 ⇒ **紧贴** ✓(= 用户的标准 ✓)
+        //     校验:gap=45 ⇒ 芯片底 650 ⇒ 间距 46 ✓(与旋钮值一致 ✓)
         let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
-            + PanelMetrics.trayRingGap - PanelMetrics.shadowPadPop
-        let topLimit = screenArea.maxY - margin
+            + PanelMetrics.trayRingGap + PanelMetrics.trayPadBottom
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
         //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
         //   ⇒ 下限必须 = 内容 + `shadowPadPop`(底部那段内缩 ✓):
         //     宁可让窗**顶**伸出屏幕(那是透明区,看不见 ✓),也不许挤内容 ✗
         let minHeight = maxContentSize.height + PanelMetrics.shadowPadPop
+        let topLimit = screenArea.maxY - margin          // ← 被上一版的正则误删 ✗,补回 ✓
         if y + size.height > topLimit {
             size.height = max(minHeight, topLimit - y)
             glog("[托] 窗顶超屏 ⇒ 只裁透明区(内容 + 间距都不动 ✓)")
