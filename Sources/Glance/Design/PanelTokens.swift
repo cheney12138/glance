@@ -287,7 +287,13 @@ enum PanelMetrics {
     ///   ⇒ 下一局生效 ✓;不写这个键 = 用出厂默认 50 ✓
     static var trayRingGap: CGFloat {
         if let v = DebugFlags.trayRingGap { return CGFloat(max(0, v)) }
-        return 30   // 2026-10-13 用户:50「太宽了, 收窄一点」⇒ 收一档 ✓(可现场拧 ✓)
+        // 2026-10-13 用户口径演进:50「太宽了」⇒ 30;用户又指"访达那组太近 + 就是这对边(A)" ⇒ 44 ✓
+        //   这对边 = **卡片/芯片下沿 → 环玻璃上沿**(用户逐条点选(A) ✓)—— 由它一个数唯一决定 ✓
+        // 2026-10-13 用户口径(收口):「不管有多少窗口, 卡片距离环的边距**都要一样**」✓
+        //   演进:50 太宽 → 30 → 44 又太宽 → 28;最后定在 **40**(下面这个数就是那对边的净距 ✓)
+        // ★★ 2026-10-13 **定稿值**(用户:「ok, 一致了, 再多5pt吧」⇒ 40 + 5 = **45**)✓
+        //   这条边 = 卡片/芯片下沿 → 环玻璃上沿;与"几扇窗/几行"**完全无关** ✓
+        return 45
     }
     // 圆角
     static var rPanel: CGFloat { k(34) }
@@ -940,8 +946,12 @@ struct TrayGeometry {
     ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
     init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
         let pad = PanelMetrics.shadowPadPop * 2
+        // ★★ 2026-10-13 定稿(用户:「不管有多少窗口, 我都要卡片距离环边距是一样的」✓):
+        //   高 = **内容 + 底部那一段内缩**,顶上不留透明呼吸 ✗
+        //   ⇒ 于是「内容下沿」= 窗底 + shadowPadPop,**与内容高度无关** ✓
+        //     (先前留了两份 pad ⇒ 内容贴顶时"矮内容离环更远" ✗ = 用户看到的"单窗太宽" ✓)
         var size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
-                          height: (maxContentSize.height + pad).rounded(.up))
+                          height: (maxContentSize.height + PanelMetrics.shadowPadPop).rounded(.up))
         var x = panelFrame.midX - size.width / 2          // 窗口居中 ⇒ 内容随之居中(与长条同轴)
         let margin = PanelMetrics.screenMargin
         if size.width <= screenArea.width - margin * 2 {
@@ -969,12 +979,27 @@ struct TrayGeometry {
         // ⚠️ 2026-10-13 符号错(用户实拍「这卡片都掉到下面了你没看到吗」):上一版写成 `- gap` ✗
         //   ⇒ 内容底边落到玻璃顶**下面** 50pt ⇒ 卡片/芯片被环的玻璃盖住(看着就是"掉下去了" ✓)
         //   ⇒ 内容**贴底** ⇒ 想离环远一点就得把窗**往上抬** ⇒ y 必须**变大** ⇒ 这里是 `+` ✓
+        // ⚠️ 2026-10-13 第三处错(用户红框标出:芯片落进环的玻璃里 ✗):
+        //   上面那三个量算出的底边是**内容框**的底边,而内容框下沿**还含 `trayPadBottom` 内边距** ✗
+        //   ⇒ 用户要的那对边是「**芯片下沿** → 环玻璃顶」⇒ 必须把这 14(×比例)补回去 ✓
+        //   (我先前量的"距 28/30"其实一直是"框底距",芯片实际只有 14pt ✗)
+        // ★★ 2026-10-13 定稿(用户点了要求:「不管有多少窗口, 我都要卡片距离环边距是一样的」):
+        //   症状(值固定 80 时):多窗那组刚好 ✓、**单窗那组太宽** ✗
+        //   ⇒ 说明内容在窗里其实**贴着顶**(不是贴底 ✗):内容越矮,离环越远 ✓
+        //   ⇒ 式子必须**与内容高度无关**:底边只由"窗底 + shadowPadPop(渲染实测的那 96)"决定 ✓
+        //     (之前多加了 `trayPadBottom` ⇒ 单窗多出 14;而"顶对齐"⇒ 多窗那种又少一截 ✓)
         let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
             + PanelMetrics.trayRingGap - PanelMetrics.shadowPadPop
         let topLimit = screenArea.maxY - margin
+        // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
+        //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
+        //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
+        //   ⇒ 下限必须 = 内容 + `shadowPadPop`(底部那段内缩 ✓):
+        //     宁可让窗**顶**伸出屏幕(那是透明区,看不见 ✓),也不许挤内容 ✗
+        let minHeight = maxContentSize.height + PanelMetrics.shadowPadPop
         if y + size.height > topLimit {
-            size.height = max(0, topLimit - y)      // 只变高 ⇒ 内容不动 ✓
-            glog("[托] 窗顶超屏 ⇒ 只裁高(间距不变 ✓)")
+            size.height = max(minHeight, topLimit - y)
+            glog("[托] 窗顶超屏 ⇒ 只裁透明区(内容 + 间距都不动 ✓)")
         }
         self.windowSize = size
         self.windowOrigin = NSPoint(x: x.rounded(.down), y: y.rounded(.down))

@@ -38,13 +38,6 @@ struct PreviewPanelView: View {
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
-        // 临时量尺(2026-10-13):用户"间距太大"但按我的模型改了两版都"没变化" ⇒ 不再猜 ✗
-        // 量的是**内容真正画在窗内的位置**(内框=固定内容尺寸/外框=窗给的空间)
-        .background(GeometryReader { g in
-            Color.clear
-                .onAppear { TrayContentProbe.report("内框", g.frame(in: .global)) }
-                .onChange(of: g.frame(in: .global)) { _, r in TrayContentProbe.report("内框", r) }
-        })
         // ★★ 2026-10-13 病例(用户两张对比图 + 他的方案:「是不是要给一个容器, 固定这个容器跟环的边距,
         //   然后 resize 在这个容器里做会比较好呀」—— **他这套是对的** ✓):
         //   探针量到的事实(同一局内):
@@ -60,12 +53,9 @@ struct PreviewPanelView: View {
         //     那段恒定值 = `trayBottomBreath`(容器多给的一段固定空气 ✓,150pt 基准),
         //     它加在**容器尺寸**里、**不进** `trayFitScale` ⇒ 不会把卡片缩小 ✓
         //     同时环/玻璃/卡片改成两把尺子(见 PanelTokens 那两条记账 ✓)⇒ 环不再被托盘拖着缩 ✓
+        // ★★ 2026-10-13 定稿:贴底**不靠对齐语义**(它没生效 ✗),靠**窗高 = 内容 + 底部内缩** ✓
+        //   ⇒ 就算内容贴顶,它的下沿也必然落在"窗底 + 内缩" = 与内容高度**无关** ✓
         .frame(maxHeight: .infinity, alignment: .bottom)
-        .background(GeometryReader { g in
-            Color.clear
-                .onAppear { TrayContentProbe.report("外框", g.frame(in: .global)) }
-                .onChange(of: g.frame(in: .global)) { _, r in TrayContentProbe.report("外框", r) }
-        })
         // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效」。
         // 病例(3 个窗口时左右两边各自滑进来):换段走的是 `withAnimation(segmentAnimation) { … }`
         //   (PanelController:1954),而托盘内容依赖 currentGroup ⇒ 它跟着那次事务**一起重排** ✗
@@ -1157,22 +1147,4 @@ final class CardImageCache {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 
-}
-
-/// ⚠️ **临时量尺**(2026-10-13)—— 用完删 ✗
-/// 为什么加它:用户报"芯片到环的间距",我按"内容贴容器底 + 固定空气"改了两版,
-/// 用户两次回"太大了 / 没变化" ⇒ 说明我对**内容实际位置**的模型是错的 ✗
-/// ⇒ 先量出来再说(本仓纪律:病根要量出来不许猜 ✓)
-@MainActor
-private enum TrayContentProbe {
-    private static var last: [String: CGRect] = [:]
-    static func report(_ tag: String, _ r: CGRect) {
-        if let p = last[tag], abs(p.minX - r.minX) < 0.5, abs(p.minY - r.minY) < 0.5,
-           abs(p.width - r.width) < 0.5, abs(p.height - r.height) < 0.5 { return }
-        last[tag] = r
-        // ⚠️ 标注口径(2026-10-13 自查纠正 ✗):`maxY` 是**离窗顶**的距离,不是"离窗底" ——
-        //   上一版把它写成"离窗底" ⇒ 读数直接反了 ✗(本仓"量具自己也会假阳"的老毛病 ✓)
-        glog(String(format: "[托内容] %@ 窗内 x=%.0f y=%.0f w=%.0f h=%.0f · 底边离窗顶 %.0f",
-                     tag, r.minX, r.minY, r.width, r.height, r.maxY))
-    }
 }

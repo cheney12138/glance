@@ -1037,7 +1037,16 @@ final class PanelController: ObservableObject {
     /// 分行后**每行的最大高度**(内容尺寸 / 命中判定 / 视图三处共用同一套数)
     /// 算式在 `GlanceCore.TrayGrid`(可单测);这里只把"这一局的尺子"喂进去。
     static func rowHeights(_ sizes: [CGSize], rows: Int, cols: Int) -> [CGFloat] {
-        TrayGrid.rowHeights(sizes, rows: rows, cols: cols)
+        // ★★ 2026-10-13 病例(用户实拍:访达 8 窗 2 排 ⇒「访达距离环太近了」/第二排芯片消失 ✗):
+        //   视图里每张卡是 `VStack(卡片, 芯片)` ⇒ **渲染高 = 卡片高 + (thumbH − shotH)** ✓
+        //   而这里只按**卡片**高算行高 ✗ ⇒ 每行少算约 36pt(芯片那一段)
+        //   ⇒ 1 排:内容矮一截 ⇒ 芯片勉强还在框内(所以一直没暴露 ✗)
+        //   ⇒ 2 排:矮两截 ⇒ 内容实际比窗框高 ⇒ 贴底后**往下溢** ⇒
+        //      最后一排芯片钻到环的玻璃底下(用户截图:第一排芯片在、第二排没了 ✓)
+        //   ⇒ 行高 = 行内最高的卡 + 芯片那一段(与视图**同一个来源** ✓,不许各算各的 ✗)
+        let chipSegment = PanelMetrics.thumbH - PanelMetrics.shotH
+        return TrayGrid.rowHeights(sizes.map { CGSize(width: $0.width, height: $0.height + chipSegment) },
+                                   rows: rows, cols: cols)
     }
 
     private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
