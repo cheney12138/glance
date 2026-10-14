@@ -441,6 +441,13 @@ private struct WindowThumb<Overlay: View>: View {
             }
         }
         .frame(width: box.width, height: box.height)
+        // ★★ 交接溶解(2026-10-14 用户拍板「做, 我看看效果」✓):快照→live 不硬切 ✓
+        //   DockDoor 实证是裸硬切(LivePreviewImageCached: capturedImage ?? lastFrame ?? fallback,
+        //   无任何动画 ✗)⇒ 我们好一档 ✓。内容差物理消不掉(窗口内容变化无系统事件 ✗),
+        //   溶解是唯一能把"一跳"变"无感"的手段 ✓
+        //   · 只挂 value: liveFrame != nil ⇒ 只在换源那一拍动画 ✓,直播中逐帧更新不重放 ✓
+        //   · 透明度家族 ✓:减弱动态效果压不掉(整块渐入同款先例 ✓)
+        .animation(.easeInOut(duration: 0.15), value: liveFrame != nil)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
