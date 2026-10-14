@@ -73,10 +73,20 @@ final class ThumbnailRefresher {
         return out.sorted()
     }
 
-    /// 下次轻扫等多久:上次花得越久等得越久(5s 起、30s 封顶 ✓)
+    /// 下次轻扫等多久 —— 两道闸分开算(2026-10-14 改 ✓):
+    ///
+    /// 用户口径:「预览应该 app图标兜底 → 快照 → live,层层降级,任何场景都不显示异常」✓
+    ///   ⇒ 兜底(图标)那一层之所以还能看见,就是因为**新开的窗要等到下一趟轻扫才被拍** ✗
+    ///     实测:轻扫间隔 5s 起 ⇒ 新窗最多 5 秒没有快照 ⇒ 一打开面板就是图标 ✓
+    ///
+    /// 但"扫得勤"不等于"拍得勤"(那 90ms 的枚举就是当年被否掉的那条 ✗):
+    ///   · **指纹检查**(`windowSignature`,只读 CGWindowList 的 id/位置尺寸)很便宜 ✓
+    ///     ⇒ 间隔压到 **1.5s** 也不会掉帧 ✓(跑不跑全量由指纹决定 ✓)
+    ///   · **全量轻扫**仍然"窗口没变就跳过" + "上次贵就拉长" ✓
+    /// 判据:新开一扇窗后 ≤1.5s 应有它的快照 ✓;(指纹闸保证了常态零枚举 ✓)
     private func adaptiveSweepDelay() -> Double {
-        guard lastSweepCost > 0 else { return 5 }
-        return min(30, max(5, 5 * (lastSweepCost / 0.05)))
+        guard lastSweepCost > 0 else { return 1.5 }
+        return min(30, max(1.5, 1.5 * (lastSweepCost / 0.05)))
     }
 
     func start() {
@@ -197,9 +207,17 @@ final class ThumbnailRefresher {
             if waitMs > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(waitMs) * 1_000_000)
             }
-            if await MainActor.run(body: { PanelStageProbe.isVisible() }) {
-                glog("[保温] \(reason) 跳过:面板已在台上(不与入场抢资源 ✓)")
-                return
+            // ★★ 2026-10-14 病例(用户:「等了 2s 还是有图标出现」✓,量尺当场指出来):
+            //   原来只要**面板在台上**就整趟跳过 ✗ —— 那条例外当初是为了"别跟入场抢 GPU"
+            //   (15 窗全量预拍实测 652ms 长帧 ✗ ✓)。但代价是:
+            //   **新开的窗**如果出现在"面板开着"这段里,就一次次被跳过 ⇒ 永远是图标 ✓
+            //   (日志铁证:`[保温] 开窗拍 跳过:面板已在台上` 紧跟着 `[缺图] wid=… 首次缺` ✓)
+            //   ⇒ 收窄成两条:
+            //     ① 让开入场:等 0.6s 再走(入场动画那几拍不动它 ✓)
+            //     ② **只补"没有图/图太旧"的窗**(`maxAge: 2` ✓)—— 全量重拍仍然不做 ✓
+            let onStage = await MainActor.run(body: { PanelStageProbe.isVisible() })
+            if onStage {
+                try? await Task.sleep(nanoseconds: 600_000_000)
             }
             // ★ 先拿便宜指纹(不碰 AX ✓):窗口集合 + 位置尺寸都没变 ⇒ 这一趟没必要跑 ✓
             //   (至少每 30s 还是会完整走一趟 —— TTL 刷新那条路不断 ✓)
@@ -216,11 +234,23 @@ final class ThumbnailRefresher {
                 windows.append(contentsOf: WindowEnumerator.rawGroups(on: screen).flatMap(\.windows))
             }
             guard !windows.isEmpty else { return }
+            // ★★ 2026-10-14 病例(用户:「重启之后第一次切换到访达就看到 app 图标了」✓):
+            //   20 窗 × ~30–100ms ⇒ 整趟首扫要 **0.6–2s** ✗ ⇒ 这期间打开面板,轮到没轮到的窗
+            //   就只能是 App 图标 ✓ —— 而"第一次打开"几乎必然是**当前最前面那个 App** ✓
+            //   ⇒ 把它的窗排到队伍最前面(其余顺序不动,稳定分区 ✓)
+            //   判据:重启后 ≤1s 内切到最前面那个 App,应有快照、无图标 ✓
+            if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+                let mine = windows.filter { $0.pid == front }
+                if !mine.isEmpty, mine.count != windows.count {
+                    windows = mine + windows.filter { $0.pid != front }
+                }
+            }
             if isTraceEnabled {
                 let ms = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
                 glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
             }
-            await Snapshotter.shared.precapture(windows)
+            // 面板在台上 ⇒ 只补"新窗/太旧的图"(≤2s 内的不重拍 ✓,不与入场抢资源 ✓)
+            await Snapshotter.shared.precapture(windows, maxAge: onStage ? 2 : nil)
             // 记下这一趟的指纹/代价 ⇒ 下次既知该不该跳过、也知道该等多久 ✓
             let cost = CFAbsoluteTimeGetCurrent() - beganAt
             await MainActor.run {
