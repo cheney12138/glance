@@ -174,13 +174,17 @@ struct PreviewPanelView: View {
         return WindowThumb(
             record: w,
             bundleID: controller.currentGroup?.bundleID,
-            // ★★ 2026-09-24 终版(用户裁定「回到上一版,loading 显示 App 图标能接受」):
-            //   冷窗垫图(S2'')**退役** —— 垫图 ⇒ 换源那一下内容仍会"移一下"(快照走
-            //   transparentTrimRect 裁了透明衬边、live 不裁,内容的画幅位置按构造就差一层 ✗,
-            //   这正是用户实报的抖动复现)。⇒ live 开 = **不垫图**:冷窗显示静默 App 图标,
-            //   live 首帧(36–74ms)一到直接替换 —— 全程一个源,不存在"换源"这件事 ✓
-            //   (S3 的原装行为,用户明确接受这个 loading)。
-            image: LivePreviewPool.enabled ? nil : snapshotter.cache[w.wid],
+            // ★★ 2026-10-14 **三层降级重新接线**(用户定稿的架构:「app图标兜底 → 快照 → live,
+            //   层层降级,任何场景都不显示异常」✓):
+            //   快照必须喂给卡片 —— 否则 2026-09-24 那个「image: nil」就是**把第 2 层整层禁用**:
+            //   live 开着时卡片只剩 live 帧 和 App 图标两级 ✗,保温拍了也白拍(卡片根本不读它)✓
+            //   (日志铁证:启动首扫 20 窗全拍了,8 张卡在 8.3s 仍 [缺图] ✓)
+            //   当年否掉垫图的位移病根已被 de9bf1c 治了:静帧与 live 同一个 SCContentFilter/配置 ✓;
+            //   且 Snapshotter 现在 ignoreShadows=true + 不拍子窗 ⇒ trimTransparentEdges 对普通窗
+            //   是空操作,比例与真窗一致 ✓(真有透明衬边的自绘窗:换源那一下轻微移动,量尺
+            //   CardRulerLog 会报,先接受 —— 比 App 图标好一个量级 ✓)。
+            //   显示顺序不变:liveFrame 优先,快照只在 live 还没到的 ~30–100ms 里顶上 ✓。
+            image: snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
             face: nil,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
