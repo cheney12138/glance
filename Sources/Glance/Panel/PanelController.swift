@@ -957,7 +957,9 @@ final class PanelController: ObservableObject {
         if Self.lastScaleLine == String(format: "%.3f/%.3f", s, cap) { return }
         Self.lastScaleLine = String(format: "%.3f/%.3f", s, cap)        // ⚠️ 这里原来用 `print`(走 stdout)⇒ **块缓冲** ⇒ 落盘能延迟几分钟 ✗
         //   (2026-09-24 查"面板比屏还宽"时被它坑了一次:明明打了,日志里半天看不见 ✓)
-        trace(String(format: "[尺寸] 固定 %.0f%% · 环 %.0f%%(长条 %.0fpt 基准 · 玻璃 %.0f/%.0fpt%@) · 托盘 %.0f%%(只剩它自己管卡片 · 最挤 %d 窗 → %d 行 × %d 列)",
+        trace(String(format: "[尺寸] 净距 %.0fpt(%@) · 固定 %.0f%% · 环 %.0f%%(长条 %.0fpt 基准 · 玻璃 %.0f/%.0fpt%@) · 托盘 %.0f%%(只剩它自己管卡片 · 最挤 %d 窗 → %d 行 × %d 列)",
+                     PanelMetrics.trayRingGap,
+                     DebugFlags.trayRingGap == nil ? "默认" : "用户键①",
                      s * 100, cap * 100, stripBase, cap * stripBase, availW,
                      cap < s - 0.001 ? " → 已收紧" : "",
                      min(trayCap, s) * 100, worstN, worstLayout.rows, worstLayout.cols))
@@ -1847,7 +1849,6 @@ final class PanelController: ObservableObject {
 
     /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
     private var trayOverflowLogged = false
-
     /// 托盘本局是否已经上屏过(只为上面那行日志:区分"首次渐入"与"后续更新" ✓)
     private var trayShownOnce = false
 
@@ -2080,7 +2081,9 @@ final class PanelController: ObservableObject {
         if entrySelected {
             // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
             let (rows, cols) = launchLayout(count: count)
-            let r = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
+            // 同一个颠倒(见窗口卡那段的病例):行号要从**顶**往下数 ✓
+            let bandFromBottom2 = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
+            let r = max(0, max(rows, 1) - 1 - bandFromBottom2)
             let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
             guard launchables.indices.contains(i), i != launchIndex else { return }
             bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
@@ -2099,14 +2102,18 @@ final class PanelController: ObservableObject {
             let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
             let (rows, cols) = trayLayout(widths: widths)
             // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
-            var r = 0
+            // ★★ 2026-10-13 病例(用户实报:「鼠标在第一排第二个选不中, 选中的是第二排」✓):
+            //   `yUp` 是**从内容底往上**量的,所以下面循环数出来的行号是**从下往上**的 ✗
+            //   而视图(VStack)的行是**从上往下**排的 ⇒ 两排时整块**上下颠倒** ✗
+            //   ⇒ 循环得到的是"离内容底第几条带",真正的行号 = rows − 1 − 带号 ✓
+            var bandFromBottom = 0
             var rowTop: CGFloat = 0
             let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
             for k in 0..<max(rows, 1) where yUp >= rowTop + rowH[k] + PanelMetrics.trayRowGap {
                 rowTop += rowH[k] + PanelMetrics.trayRowGap
-                r = k + 1
+                bandFromBottom = k + 1
             }
-            r = min(max(rows, 1) - 1, r)
+            let r = max(0, max(rows, 1) - 1 - min(max(rows, 1) - 1, bandFromBottom))
             let start = r * cols
             let end = min(start + cols, widths.count)
             guard start < end else { return }

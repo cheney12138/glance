@@ -290,7 +290,8 @@ enum PanelMetrics {
         // ★ 2026-10-13 **最终定值 18**（用户：「ok了, 太宽了, 收窄一点. 大概保留一指就行」✓）
         //   口径已校准:`trayRingGap = 0` ⇒ 卡片/芯片**紧贴环的上沿** ✓；这个数 = **眼睛看到的**那段高度 ✓
         //   与“几扇窗 / 几行”完全无关 ✓（两条边 = 卡片/芯片下沿 → 环玻璃上沿）
-        return 18
+        // 2026-10-13 用户:「还是高了, 再降低一点」⇒ 18 → **10** ✓（下面这个数 = 眼睛看到的高度 ✓）
+        return 10
     }
     // 圆角
     static var rPanel: CGFloat { k(34) }
@@ -993,8 +994,11 @@ struct TrayGeometry {
         //   ⇒ y = 玻璃顶 + trayRingGap + trayPadBottom(内容框底 → 芯片底 那 14)
         //     校验:gap=0 ⇒ y = 618 ⇒ 内容底 619 ⇒ 芯片底 605 ≈ 玻璃顶 604 ⇒ **紧贴** ✓(= 用户的标准 ✓)
         //     校验:gap=45 ⇒ 芯片底 650 ⇒ 间距 46 ✓(与旋钮值一致 ✓)
+        // ⚠️ 2026-10-13 最后一处符号错(用户设 4 却看到 ≈33 ✗):上面那 14 我**加了两遍** ✗
+        //   实测:内容框底 ≈ 窗底(+1) · 芯片底 = 内容框底 + trayPadBottom(14) ⇒ 芯片底 = y + 15
+        //   要"芯片底 = 玻璃顶 + gap" ⇒ **y = 玻璃顶 + gap − trayPadBottom** ✓(不是 + ✗)
         let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
-            + PanelMetrics.trayRingGap + PanelMetrics.trayPadBottom
+            + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
         //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
