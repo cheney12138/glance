@@ -251,17 +251,14 @@ final class ThumbnailRefresher {
             }
             // 面板在台上 ⇒ 只补"新窗/太旧的图"(≤2s 内的不重拍 ✓,不与入场抢资源 ✓)
             await Snapshotter.shared.precapture(windows, maxAge: onStage ? 2 : nil)
-            // ★★ 2026-10-14 保鲜(量尺实锤:「闪烁 = 快照过期 + live 硬切」✓):
-            //   面板关着时全量快照只按 60s TTL 刷新,而窗口**内容**变化系统不发事件 ✗
-            //   ⇒ 在一个 App 里待久了,它的快照可能旧到一分钟 ⇒ 唤起那一下内容跳变 ✗
-            //   ⇒ 给"最前面那个 App"的窗单独 10s 短保鲜 —— 它就是下次唤起最可能显示的那组 ✓
-            //     (1-5 扇 ✓ 每 10s ≤50ms 后台开销 ✓);其余窗仍走标准 TTL ✓ 不加钱 ✓
-            if !onStage, let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-                let mine = windows.filter { $0.pid == front }
-                if !mine.isEmpty {
-                    await Snapshotter.shared.precapture(mine, maxAge: 10)
-                }
-            }
+            // ⚠️ 2026-10-14 撤销:曾在这里给"最前面那个 App"做 10s 轮询保鲜 ✗✗
+            //   病例:屏参数事件(哪怕一次)会触发「整块缓存作废」⇒ 下一趟轻扫发现 20 窗全没图
+            //   ⇒ 全量重拍(SCK 连发)⇒ 又触发屏参数事件 ⇒ 重挂风暴 ⇒ MT 投递拖死 ✗✗✗
+            //   (用户实报「三指死了」;日志:13.5s 里 10 次重挂 + "要拍 20 窗(无图 20,曾拍到过 20)")
+            //   改前指纹没变的轻扫会整趟跳过 ⇒ 这个环转不起来 ✓
+            //   教训:**任何绕过指纹闸的周期性 SCK 调用都是给"屏事件↔重拍"环供燃料** ✗
+            //   保鲜的正路是事件驱动(App 激活钩子 ✓ 已有),不是轮询 ✗
+            
             // 记下这一趟的指纹/代价 ⇒ 下次既知该不该跳过、也知道该等多久 ✓
             let cost = CFAbsoluteTimeGetCurrent() - beganAt
             await MainActor.run {
