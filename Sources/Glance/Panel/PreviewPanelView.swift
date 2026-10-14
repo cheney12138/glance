@@ -418,6 +418,12 @@ private struct WindowThumb<Overlay: View>: View {
                         Image(nsImage: image).resizable()
                     }
                 }
+                    // ★ 交接溶解(2026-10-14 用户拍板 ✓):快照→live 两个分支都在这个 Group 里 ✓
+                    //   挂在 Group 上 = 只管图片内容的换源 ✓,卡片框/托盘布局不被它动画 ✓
+                    //   (第一版挂外框 ✗:换组时连布局一起动画 ⇒「从左入场」假动效 ✗;
+                    //    第二版错挂静默态 ZStack ✗ 完全无效 ✓ —— 锚点咬错块尾,回读才抓到 ✓)
+                    //   透明度家族 ✓:减弱动态效果压不掉(整块渐入同款先例 ✓);0.15s 可现场拧 ✓
+                    .animation(.easeInOut(duration: 0.15), value: liveFrame != nil)
                     // 定尺 = 这张卡自己的 box ⇒ 图与卡面同比例(既不拉伸也不留白 ✓)
                     .frame(width: box.width, height: box.height)
                     // 压到 30%,统一底色(`PanelColors.thumbBg`)接管卡面 —— 一排过去不再深浅乱跳;
@@ -441,13 +447,6 @@ private struct WindowThumb<Overlay: View>: View {
             }
         }
         .frame(width: box.width, height: box.height)
-        // ★★ 交接溶解(2026-10-14 用户拍板「做, 我看看效果」✓):快照→live 不硬切 ✓
-        //   DockDoor 实证是裸硬切(LivePreviewImageCached: capturedImage ?? lastFrame ?? fallback,
-        //   无任何动画 ✗)⇒ 我们好一档 ✓。内容差物理消不掉(窗口内容变化无系统事件 ✗),
-        //   溶解是唯一能把"一跳"变"无感"的手段 ✓
-        //   · 只挂 value: liveFrame != nil ⇒ 只在换源那一拍动画 ✓,直播中逐帧更新不重放 ✓
-        //   · 透明度家族 ✓:减弱动态效果压不掉(整块渐入同款先例 ✓)
-        .animation(.easeInOut(duration: 0.15), value: liveFrame != nil)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
