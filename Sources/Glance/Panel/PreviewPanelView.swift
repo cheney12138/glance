@@ -578,8 +578,17 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     /// 而**真正需要"活着"的只有托盘里正被看的那几张**(当前组 ≤3 窗 ✓);
     /// 其余 App 的卡在没被悬停前只是一张静帧 ⇒ 给它留一条流是白付抓屏钱 ✗
     /// (从"冷"到"热"的代价:`首帧 P50 45ms` ⇒ 悬停那一拍内就能补上 ✓ 用户看不见)
-    /// ⇒ 收到 6(当前组最常见的 1–4 窗 + 一点余量 ✓);要再调就改这一个数 ✓
-    static let maxStreams = 6
+    /// ⇒ 收到 6(当前组最常见的 1–4 窗 + 一点余量 ✓)。
+    ///
+    /// ★★ 2026-10-14 用户实报「有两个 window live 没接入」(那组 8 扇窗 ✓)——
+    ///   根因就是这里:6 是**按"最常见的 1–4 窗"估的**,而节流阀管错了地方 ✗
+    ///   ⇒ 该节流的是**帧率**(非 hover 的流本来就只给 `lowFps`=5fps ✓),不是**数量** ✗
+    ///   ⇒ 改成:上限 = **当前要接的条数**(你看到几张卡就有几张 live ✓)
+    ///     硬上限 12 兜住病态情况(几十扇窗时不能无限起流 ✓)
+    ///   为什么敢松开:8 条 5fps = 40 帧/秒,比当年那次 11 条 20fps 小一个量级 ✓
+    static func maxStreams(_ count: Int) -> Int { min(12, max(6, count)) }
+    /// 旧口径的底线(1–4 窗那档别再往下压 ✓)
+    static let maxStreamsFloor = 6
     /// 闲置多久才停:局内**不靠它节流**(环里的窗口全程保留),它只回收"已经不在环里"的窗口。
     static let keepAlive: Double = 5.0
 
@@ -784,7 +793,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                                           idleSince: idleSince,
                                           tierFps: Self.tierFps,
                                           lowFps: Self.lowFps,
-                                          maxStreams: Self.maxStreams,
+                                          maxStreams: Self.maxStreams(items.count),
                                           keepAlive: Self.keepAlive,
                                           allowStart: starts)
         // ① 记闲置(不立刻停 —— 见 keepAlive)
