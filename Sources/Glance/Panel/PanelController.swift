@@ -2130,7 +2130,8 @@ final class PanelController: ObservableObject {
                 cursor += w + PanelMetrics.thumbGap
             }
             hit = hit ?? (end - 1)      // 行最右缘 ⇒ 归最后一张(也是"最近"的那张 ✓)
-            guard let i = hit else {
+            // 卡片高亮已交回 `.onHover` ⇒ 这里只留"未命中"的日志(不再写 winIndex ✓)
+            guard hit != nil else {
                 // 玻璃内但没命中卡片(点在 padding/行间隙):节流打一行,给"点击吞没"定位用
                 if CFAbsoluteTimeGetCurrent() - Self.lastCardMissLog > 0.5 {
                     Self.lastCardMissLog = CFAbsoluteTimeGetCurrent()
@@ -2138,11 +2139,15 @@ final class PanelController: ObservableObject {
                 }
                 return
             }
-            guard i != winIndex else { return }
-            Haptics.fire(.hoverPreviewThumb)     // ★ 见上面启动行那一支的注释(托盘真正的 hover 路在这里 ✓)
-            bumpIdle()   // 同上
-            winIndex = i
-            trace("[T6] 视图挪位后指针重定位(卡片): [\(i + 1)/\(count)] \(names[i])")
+            // ★★ 2026-10-13 病例(用户第五次报,并红框标出范围:「指针移动到红框的范围内之后,
+            //   就会选中到右边的卡片」✓):
+            //   托盘卡片的高亮有**两个写入者** —— 视图的 `.onHover`(按卡片真实帧 ✓ 最准)
+            //   与本函数(按指针坐标重算 ✗)。两者只要差几十 pt,就会在卡内偏右的地方先跳过去 ✗
+            //   量过两次都对不上(2026-10-13 那两轮:视图行左缘 122.5 vs 命中假设 122.9 只差 0.4pt,
+            //   但用户现场仍能稳定复现 ⇒ 说明差在**别处**(行内偏移/换组后的旧帧),而这条重算本来就
+            //   是"内容在指针底下换了"的兜底 —— 为了兜一个罕见场景,天天让用户吃"选错卡"的亏 ✗
+            //   ⇒ 卡片高亮**只认 `.onHover`**(用户眼睛看到的那张 ✓),本函数不再写它 ✓
+            //   代价:换组后指针不动时,高亮会停在旧卡上,直到指针动一下 ✓(可接受 ✓ 点击路径不受影响 ✓)
         }
     }
 

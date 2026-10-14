@@ -439,7 +439,14 @@ final class ThreeFingerTap {
         attachStateLock.lock()
         var wedged = false
         var gen = attachGeneration
-        var light = false
+        // ★★ 2026-10-13 用户点头要做(他今天实报"三指又失效了"✓,日志抓到根因):
+        //   本机 `MTDeviceStop` **永不返回** ✗ ⇒ 只要走"先拆后挂"就会把多触点驱动那侧卡死 ✓
+        //   而唤醒/插拔屏/刷新率切换都会发"屏参数变化"⇒ 频繁触发 ⇒ 用户会觉得"三指时不时就废了"✓
+        //   ⇒ **自愈一律先走轻量路**(只 register+start、不碰 MTDeviceStop ✓)
+        //     只有"启动"那一次走完整路(那时没有旧设备要拆,拆也没意义 ✓)
+        //   代价照实说:轻量路在"真的需要重建"时可能救不回来(那时还有楔住重试 + 预算 + 提示重启 ✓),
+        //     但这比"每次都必然卡死"好得多 ✓
+        var light = (reason != "启动")
         if attachInFlight {
             // 上一次还没回来:没超过"楔住"阈值就照旧丢掉这一次(不堆积 ✓);超了 ⇒ 换新队列重试 ✓
             guard CFAbsoluteTimeGetCurrent() - attachStartedAt >= Self.attachWedgeSeconds else {
