@@ -105,6 +105,15 @@ final class ThumbnailRefresher {
         })
         lastScreenSignature = Self.screenSignature()
         schedulePeriodicSweep()
+        // ★★ 2026-10-14 病例(用户:「重启之后还是有很明显的 app 图标」✓):
+        //   上面那趟周期性轻扫的**第一趟要等 `adaptiveSweepDelay()`(≥5s)** ✗
+        //   ⇒ 启动后那 5 秒里打开面板,**一扇窗都没拍过** ⇒ 卡片全是 App 图标兜底 ✓
+        //   ⇒ 启动后立刻补一趟"首扫"(稍等 0.8s,别跟启动那堆活抢资源 ✓)
+        //   用户的架构口径(2026-10-14):「**App 图标兜底 → 快照 → live 接入**,层层降级,
+        //     任何场景下都不显示异常 ✓」—— 图标那一档是**最后**一档,不该是最常见的一档 ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.sweepAllScreens(reason: "启动首扫")
+        }
         if isTraceEnabled {
             glog("[保温] 已上线:App 激活 → 抓它的窗;显示器变化 → 整块缓存作废;开窗拍 → 5s 轻扫")
         }
