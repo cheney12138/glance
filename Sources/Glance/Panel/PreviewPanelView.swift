@@ -36,8 +36,26 @@ struct PreviewPanelView: View {
         }
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
-        .padding(.bottom, PanelMetrics.trayPadBottom)
+        .padding(.bottom, PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
+        // ★★ 2026-10-13 病例(用户两张对比图 + 他的方案:「是不是要给一个容器, 固定这个容器跟环的边距,
+        //   然后 resize 在这个容器里做会比较好呀」—— **他这套是对的** ✓):
+        //   探针量到的事实(同一局内):
+        //   ```
+        //   1 排:窗高 537 · 内容高 184 ⇒ 内容底边到窗底 **353pt** ✓（舒服的那档）
+        //   2 排:窗高 537 · 内容高 344 ⇒ 只剩 **193pt** ✗ ⇒ 芯片贴上环 ✓（用户:「变近了」）
+        //   ```
+        //   机理:内容**顶对齐**画在固定尺寸的容器里 ✗ ⇒ 内容越高、底部空当越小 ✓
+        //   ⇒ 口径(用户方案):**容器(托盘窗)位置与尺寸都不动** ✓,只把内容**贴容器底 + 固定内边距** ✓
+        //     ⇒ 不论几排,芯片到环的距离**恒定** ✓（先做过一版"抬窗口"✗:内容跟着一起飞
+        //       —— 用户当场回「这对吗, 跑哪去了 大哥」✓ 那条已回退 ✓)
+        //   ★ 2026-10-13 第二步(用户:「你给一个固定的上下边距让它在这个尺寸里自己计算」✓):
+        //     那段恒定值 = `trayBottomBreath`(容器多给的一段固定空气 ✓,150pt 基准),
+        //     它加在**容器尺寸**里、**不进** `trayFitScale` ⇒ 不会把卡片缩小 ✓
+        //     同时环/玻璃/卡片改成两把尺子(见 PanelTokens 那两条记账 ✓)⇒ 环不再被托盘拖着缩 ✓
+        // ★★ 2026-10-13 定稿:贴底**不靠对齐语义**(它没生效 ✗),靠**窗高 = 内容 + 底部内缩** ✓
+        //   ⇒ 就算内容贴顶,它的下沿也必然落在"窗底 + 内缩" = 与内容高度**无关** ✓
+        .frame(maxHeight: .infinity, alignment: .bottom)
         // ★★ 2026-09-21 用户裁定:「任何场景下都不要这个动效」。
         // 病例(3 个窗口时左右两边各自滑进来):换段走的是 `withAnimation(segmentAnimation) { … }`
         //   (PanelController:1954),而托盘内容依赖 currentGroup ⇒ 它跟着那次事务**一起重排** ✗
@@ -560,8 +578,17 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     /// 而**真正需要"活着"的只有托盘里正被看的那几张**(当前组 ≤3 窗 ✓);
     /// 其余 App 的卡在没被悬停前只是一张静帧 ⇒ 给它留一条流是白付抓屏钱 ✗
     /// (从"冷"到"热"的代价:`首帧 P50 45ms` ⇒ 悬停那一拍内就能补上 ✓ 用户看不见)
-    /// ⇒ 收到 6(当前组最常见的 1–4 窗 + 一点余量 ✓);要再调就改这一个数 ✓
-    static let maxStreams = 6
+    /// ⇒ 收到 6(当前组最常见的 1–4 窗 + 一点余量 ✓)。
+    ///
+    /// ★★ 2026-10-14 用户实报「有两个 window live 没接入」(那组 8 扇窗 ✓)——
+    ///   根因就是这里:6 是**按"最常见的 1–4 窗"估的**,而节流阀管错了地方 ✗
+    ///   ⇒ 该节流的是**帧率**(非 hover 的流本来就只给 `lowFps`=5fps ✓),不是**数量** ✗
+    ///   ⇒ 改成:上限 = **当前要接的条数**(你看到几张卡就有几张 live ✓)
+    ///     硬上限 12 兜住病态情况(几十扇窗时不能无限起流 ✓)
+    ///   为什么敢松开:8 条 5fps = 40 帧/秒,比当年那次 11 条 20fps 小一个量级 ✓
+    static func maxStreams(_ count: Int) -> Int { min(12, max(6, count)) }
+    /// 旧口径的底线(1–4 窗那档别再往下压 ✓)
+    static let maxStreamsFloor = 6
     /// 闲置多久才停:局内**不靠它节流**(环里的窗口全程保留),它只回收"已经不在环里"的窗口。
     static let keepAlive: Double = 5.0
 
@@ -766,7 +793,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                                           idleSince: idleSince,
                                           tierFps: Self.tierFps,
                                           lowFps: Self.lowFps,
-                                          maxStreams: Self.maxStreams,
+                                          maxStreams: Self.maxStreams(items.count),
                                           keepAlive: Self.keepAlive,
                                           allowStart: starts)
         // ① 记闲置(不立刻停 —— 见 keepAlive)

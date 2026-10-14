@@ -38,6 +38,24 @@ enum DebugFlags {
 
     // MARK: 交互/状态类实验开关（会改变行为，只在排查时开）
 
+    /// 托盘那段固定空气的高度（pt）。**没写过 ⇒ nil** ⇒ 用 `PanelMetrics` 里的出厂默认 ✓
+    /// （本仓规矩：新开关必须能区分「没写过」与「写成 0」✓ —— 写成 0 就是真不要空气 ✓）
+    static var trayBottomBreath: Double? {
+        UserDefaults.standard.object(forKey: Keys.debugTrayBottomBreath) as? Double
+    }
+
+    /// **卡片芯片到环**的净距（pt）。这是 2026-10-13 定稿的**唯一一个旋钮** ✓
+    /// 它直接控托盘窗的 y，与阴影/比例无关 ⇒ 两块屏**同一个 pt 值** ✓
+    static var trayRingGap: Double? {
+        // ⚠️ 2026-10-13 病例(用户连报两次"改了没变化"):上一版写
+        //   `object(forKey:) as? Double` ✗ —— 而 `defaults write … -float 4` 存进去的是 **Float**
+        //   ⇒ 这个转换失败 ⇒ **静默回落成默认值** ⇒ 用户怎么拧都没反应 ✓
+        //   ⇒ 改成"只要写过就读成数值"(`double(forKey:)` 能吃 Int/Float/Double ✓)
+        let d = UserDefaults.standard
+        guard d.object(forKey: Keys.debugTrayRingGap) != nil else { return nil }   // 没写过 ⇒ nil ✓
+        return d.double(forKey: Keys.debugTrayRingGap)
+    }
+
     /// 按住触发键期间**钉住面板不消失**（用来从容地看中间态）。
     /// ⚠️ 2026-09-22:「保持面板打开」已提升为**用户设置**(`Keys.panelPinOnRelease`)⇒
     /// 它不再是调试开关,也不该出现在"重型开关自报"名单里 ✓ 这里保留只为兼容启动参数那条老路

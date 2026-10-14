@@ -36,6 +36,30 @@ enum PanelMetrics {
 
     /// 基准值 → 实值。所有需要随「面板尺寸」缩放的量都过这一手
     private static func k(_ base: CGFloat) -> CGFloat { base * scale }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ★★ 2026-10-13 用户裁定「环和容器**两边自己控制**」——
+    //   原话:「卡片本来就可以有自己的比例, 环和卡片都是触发了超限之后, 才开始自适应缩小的」
+    //         「动态缩放的应该也只是预览托盘的尺寸… 大了就缩小, 窗口减少了就放大,
+    //           变化的始终是容器的宽和高, 你给一个固定的上下边距让它在这个尺寸里自己计算」
+    //
+    //   病灶(确切到行):`PanelController.applySessionScaleCap` 里的
+    //     `cap = min(cap, trayFitScale(…).scale)` ✗
+    //   ⇒ 托盘一装不下,就把**整个会期的比例**一起收紧,而那个 `sessionCap` 是长条图标 /
+    //     玻璃 / 圆角**全都在用**的 ⇒ **环跟着托盘缩小** ✗
+    //   今天为此付了代价:两次「给托盘加空气」都变成了「把环缩小」(用户当场实拍 ✗)。
+    //
+    //   ⇒ 拆成两把尺子(全仓唯一的两个来源 ✓):
+    //     · `scale`     —— 环 / 玻璃 / 长条 / 一切非托盘的量:只由「环自己装不下」决定 ✓
+    //     · `trayScale` —— 托盘内容(卡片 / 卡片芯片 / 托盘内边距):只由「托盘自己装不下」决定 ✓
+    //   两者都以 `fixedScale(1.2)` 封顶 ⇒ **只有超限才缩** ✓,谁都不许改对方 ✗
+    // ══════════════════════════════════════════════════════════════════════════════
+    /// 本会期**托盘**的尺寸上限(由 `PanelController.applySessionScaleCap` 按各组算)
+    static var trayCap: CGFloat = .greatestFiniteMagnitude
+    /// 托盘的尺子 —— 与 `scale` 同构,只是上限来源不同
+    static var trayScale: CGFloat { min(fixedScale, trayCap) }
+    /// 基准值 → 托盘的实值(**托盘专用**,别与 `k` 混用 ✗)
+    private static func kT(_ base: CGFloat) -> CGFloat { base * trayScale }
     /// 给别的模块(如 `PanelMotion`)按基准值取一个跟着缩放走的量。
     /// 暴露的是"缩放后的值",不是 `k` 本身 —— 外面不该关心基线与倍率的区别。
     static func scaled(_ base: CGFloat) -> CGFloat { k(base) }
@@ -133,7 +157,7 @@ enum PanelMetrics {
     /// 2026-09-14 用户实评"预览窗口太小":128×64 → 196×122(≈16:10,看得清窗口里写了什么)
     /// T88 起卡宽**随窗比例自适应**:`thumbW` 退役,宽度走 `thumbWidth(aspect:)`
     /// (196 = 122 × 1.61,恰好是旧定尺的等效值 —— 比例正常的横窗宽度几乎不变)
-    static var shotH: CGFloat { k(122) } // 截图区(高度恒定,宽度变)
+    static var shotH: CGFloat { kT(122) } // 截图区(高度恒定,宽度变) —— 托盘尺子 ✓
     /// 卡宽下/上限(基准 pt,过 k() 前夹):防极端竖条/横幅把一行撑爆或缩成纸条
     static let thumbMinW: CGFloat = 96
     static let thumbMaxW: CGFloat = 264
@@ -158,7 +182,7 @@ enum PanelMetrics {
     }
 
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
-        k(CardSizing.capWidth(aspect: aspect, metricBase))
+        kT(CardSizing.capWidth(aspect: aspect, metricBase))
     }
 
     /// 纯算式要的"基准尺"(未过 `k()`)。`thumbMinW/thumbMaxW` 本来就是基准值。
@@ -199,7 +223,7 @@ enum PanelMetrics {
     /// ★ 2026-09-25 放大(k18 → k24,用户口径:「IDEA 起很多项目,只能靠芯片名区分,
     ///   尺寸太小反而没法为效率服务」)—— 芯片不是装饰,是**窗口列表** ⇒ 按"可读文本行"给尺寸,
     ///   字号/图标/圆点同步长(见下)。尺寸账走 thumbH 单一来源,面板窗高跟着自动重算 ✓
-    static var chipH: CGFloat { k(24) }
+    static var chipH: CGFloat { kT(24) }
     /// 芯片前面的**选中圆点**(2026-09-14 用户要求:多窗口时"浮动效果不明显",要一眼看出选中的是哪扇窗)。
     /// 颜色选**系统强调色**:与 macOS 的选中语言一致,而且跟随用户在系统设置里挑的强调色。
     /// 未选中时留一颗极淡的灰点**占位** —— 否则圆点出现/消失会让芯片文字左右跳
@@ -208,26 +232,72 @@ enum PanelMetrics {
     /// 动机:原来靠"位置"抚示归属(卡片在哪个图标下面)⇒ 而位置和行宽绑死 ⇒ 窗口一多必出屏 ✗,
     /// 而且小组居中后跟选中图标毫无几何关系 ✗(用户实拍"错了十万八千里")。
     /// 归到卡片自己身上之后,**位置就自由了** ⇒ 后续可以"永远居中、换 App 不动"✓
-    static var chipIcon: CGFloat { k(15) }
-    static var chipDot: CGFloat { k(6) }
+    static var chipIcon: CGFloat { kT(15) }
+    static var chipDot: CGFloat { kT(6) }
     /// 卡片与芯片之间的缝:两者解耦的分界(芯片不在卡片的环/影/浮起里)
-    static var chipGap: CGFloat { k(6) }
+    static var chipGap: CGFloat { kT(6) }
     static var thumbH: CGFloat { shotH + chipGap + chipH }
-    static var thumbGap: CGFloat { k(14) }
+    static var thumbGap: CGFloat { kT(14) }
     /// 卡片**换行**后的行间距(与卡间距不同档:行与行之间要能读成两排,不能糊成一片)
-    static var trayRowGap: CGFloat { k(12) }
+    static var trayRowGap: CGFloat { kT(12) }
     /// 托盘最多几行。超过这个数就不换行了 —— 再往下堆就不是"托盘"了,
     /// 那属于病理情况(几十扇窗),此时宁可让尺寸继续缩(见 `PanelController.trayFitScale`)
-    static let trayMaxRows = 4
-    /// 托盘的**上**留白。走了一圈才定:题头行删掉之后,托盘的视觉重心掉到了下面
+    static let trayMaxRows = 4    /// 托盘的**上**留白。走了一圈才定:题头行删掉之后,托盘的视觉重心掉到了下面
     /// (上 12 / 下 18),用户实评"重心在顶部,留白跑到下面了" —— 于是**调换**:
     /// 上 20 / 下 12。芯片是贴着卡片的一条注脚,它离卡片近才对;空气留在顶上,整块托盘才"浮"起来
-    static var trayPadTop: CGFloat { k(20) }
-    static var trayPadX: CGFloat { k(22) }
-    static var trayPadBottom: CGFloat { k(12) }
+    static var trayPadTop: CGFloat { kT(20) }
+    static var trayPadX: CGFloat { kT(22) }
+    /// 托盘内容与容器**底**之间那段呼吸（12pt，原值 ✓）
+    /// ⚠️ 2026-10-13 我在这里塞过 172pt 想"给托盘的松" —— **错的,已回退** ✗:
+    ///   这个数会喂进 `trayFitScale` ⇒ 直接收紧**本局比例** ⇒ **把环也缩小了** ✗
+    ///   用户原话:「怎么把环给我缩小了... 动态缩放的应该也只是预览托盘的尺寸」
+    ///   ⇒ 环的尺寸不许被托盘牵着走 ✗ —— 正解见 `applySessionScaleCap` 里那条耦合的记账 ✓
+    static var trayPadBottom: CGFloat { kT(12) }
+
+    /// ★ 容器(托盘窗)与环之间那**固定的一段空气** —— 用户口径「你给一个固定的上下边距」✓
+    ///
+    /// 它与 `trayPadBottom` 的区别(这正是 2026-10-13 绕远路的地方 ✗):
+    ///   · `trayPadBottom` = 内容自己的内边距 ⇒ 它**参与** `trayFitScale` 的尺寸账 ⇒
+    ///     拿它当「空气」会顺带把卡片缩小 ✗;
+    ///   · 这一段 = **容器**多出来的尺寸 ⇒ 内容在这块尺寸里**贴底**摆(见 `PreviewPanelView`)⇒
+    ///     于是不论一组几行、内容多高,芯片到环的距离**都一样** ✓
+    /// ⚠️ 它**不进** `trayFitScale`(否则又变成「加空气 ⇒ 卡片变小」那条错路 ✗)
+    /// ⚠️ 2026-10-13 第二版:曾写 `kT(150)` ⇒ **两屏不一样** ✗
+    ///   原因有二(用户两张截图):
+    ///     ① 它当时挂**托盘的尺子** ⇒ 托盘比例被收紧的那块屏,空气跟着变小 ✗
+    ///        (两块屏 cap 不同 ⇒ 同一个数在屏间不等值 ✗)
+    ///     ② 空气一大,容器就高 ⇒ 上方空间小的那块屏**触发上边界钳制** ⇒ 托盘被往下压,
+    ///        间距反被吃掉 ✗(同一件事在两个屏上朝两个方向偏 ✓)
+    ///   ⇒ 定稿:**固定 pt,不随任何尺子**(两屏绝对值相同 ✓) + 收到 52(150 明显太大 ✓)
+    static var trayBottomBreath: CGFloat {
+        // 出厂默认 20(2026-10-13 用户现场拧:52 太大 ✗ —— 这一段是"内容底边到容器底"的**固定值** ✓)
+        // 可现场调:`defaults write com.cheney12138.macswitcher debug.trayBottomBreath -float 8`
+        //   ⇒ 下一局生效 ✓(不写这个键 = 用这个默认 ✓;写 0 = 真不要空气 ✓)
+        if let v = DebugFlags.trayBottomBreath { return CGFloat(v) }
+        return 0    // ★ 用户 2026-10-13 现场定值:0(空气不要,那 33pt 内边距已经够 ✓)
+    }
+
+    /// ★★ **卡片芯片到环**的净距 —— 2026-10-13 定稿的**唯一一个旋钮** ✓
+    ///
+    /// 用户原话:「外接屏这个效果才是正确的, 为什么两边没办法同时改啊」
+    /// ⇒ 旧式子拿 `shadowPadPop/shadowPadStrip/seam` 拼出来,而这些量**随比例缩放** ⇒
+    ///   两块屏的比例不同 ⇒ 同一个式子算出来不是同一个 pt ✗(这就是“不能同时改”的答案)
+    /// ⇒ 改成直接控托盘窗 y 的一个**固定 pt**(与阴影/比例无关 ⇒ 两屏同值 ✓)
+    /// 可现场调:`defaults write com.cheney12138.macswitcher debug.trayRingGap -float 70`
+    ///   ⇒ 下一局生效 ✓;不写这个键 = 用出厂默认 50 ✓
+    static var trayRingGap: CGFloat {
+        if let v = DebugFlags.trayRingGap { return CGFloat(max(0, v)) }
+        // ★ 2026-10-13 **最终定值 18**（用户：「ok了, 太宽了, 收窄一点. 大概保留一指就行」✓）
+        //   口径已校准:`trayRingGap = 0` ⇒ 卡片/芯片**紧贴环的上沿** ✓；这个数 = **眼睛看到的**那段高度 ✓
+        //   与“几扇窗 / 几行”完全无关 ✓（两条边 = 卡片/芯片下沿 → 环玻璃上沿）
+        // ★ 2026-10-13 **最终默认值 = 4**(用户:「边距就按照当前上屏的, 作为默认值」✓)
+        //   口径:trayRingGap = 0 ⇒ 芯片**紧贴环的上沿** ✓;值 = 眼睛看到的那段高度 ✓
+        //   与"几扇窗 / 几行"无关 ✓,两块屏同值 ✓
+        return 4
+    }
     // 圆角
     static var rPanel: CGFloat { k(34) }
-    static var rTray: CGFloat { k(30) }
+    static var rTray: CGFloat { kT(30) }
     static var rPuck: CGFloat { k(24) }
     /// 卡片圆角:16 → 10(2026-09-24 对齐「预览容器整体设计 Demo」的 13px ——
     /// 按卡高折算 13×122/183 ≈ 8.7,取 10 留一点"窗"感;芯片仍是全圆角,形成"方中带圆" ✓)
@@ -240,7 +310,7 @@ enum PanelMetrics {
     /// 现在 13 ×1.2 ≈ 15.6,字重同步从 semibold 降到 medium(见 PreviewPanelView)
     /// 标题字号:12 → 10.5(2026-09-14:"字体缩小一点")→ **12**(2026-09-25:芯片是
     /// 区分 IDEA 多项目的唯一依据,字号要为扫读效率服务 —— 与 macOS 窗口标题 13pt 同量级)
-    static var titleSize: CGFloat { k(12) }
+    static var titleSize: CGFloat { kT(12) }   // 芯片文字 —— 托盘尺子 ✓(只托盘在用 ✓)
     /// 标题双保险截断的**第一道**:只做病理保护(标量是字符数,中英混排靠宽度截断兜底)。
     /// 2026-09-14 实评:12 把终端 tab 名 "π - tab-group-search" 斩成 "π - tab-grou…",
     /// 卡片加宽到 196 后提到 28;同时又随尺寸同比例放宽(面板调大 = 一行能装更多字)
@@ -876,17 +946,73 @@ struct TrayGeometry {
     ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
     init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
         let pad = PanelMetrics.shadowPadPop * 2
-        let size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
-                          height: (maxContentSize.height + pad).rounded(.up))
-        // 缝是两块**玻璃**之间的空当,不是两个窗框之间:缝 = padPop + padStrip − 帧距,
-        // 反解出帧距 = padPop + padStrip − seam(两窗在各自的透明呼吸区里大幅重叠,靠点击穿透互不相扰)
-        let frameGap = PanelMetrics.shadowPadPop + PanelMetrics.shadowPadStrip - PanelMetrics.seam
+        // ★★ 2026-10-13 定稿(用户:「不管有多少窗口, 我都要卡片距离环边距是一样的」✓):
+        //   高 = **内容 + 底部那一段内缩**,顶上不留透明呼吸 ✗
+        //   ⇒ 于是「内容下沿」= 窗底 + shadowPadPop,**与内容高度无关** ✓
+        //     (先前留了两份 pad ⇒ 内容贴顶时"矮内容离环更远" ✗ = 用户看到的"单窗太宽" ✓)
+        var size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
+                          height: (maxContentSize.height + PanelMetrics.shadowPadPop).rounded(.up))
         var x = panelFrame.midX - size.width / 2          // 窗口居中 ⇒ 内容随之居中(与长条同轴)
         let margin = PanelMetrics.screenMargin
         if size.width <= screenArea.width - margin * 2 {
             x = min(max(x, screenArea.minX + margin), screenArea.maxX - margin - size.width)
         }
+        // ══════════════════════════════════════════════════════════════════════════════
+        // ★★ 2026-10-13 定稿(用户:「外接屏这个效果才是正确的, 为什么两边没办法同时改啊」)
+        //
+        //   三条错路(全部实测过 ✗):
+        //   ① 旧公式 `y = 面板顶 − (padPop + padStrip − seam)` —— 这些 pad **随比例缩放**
+        //      ⇒ 两块屏的比例/可用宽不同 ⇒ 同一个式子算出来**不是同一个 pt 值** ✗
+        //      ⇒ 这就是「两边没办法同时改」的答案 ✓
+        //   ② 按旧公式算出的净间距只剩 `seam`(两块玻璃几乎贴住 ✓ = 用户看到的内置屏 ✗)
+        //   ③ 外接屏之所以好看:它的窗太高、撞上我补的**上边界钳制**、被压下 93pt
+        //      ⇒ **碰巧**多出那段空 ✓ —— 好看的那个值从来不是设计出来的 ✗
+        //      (拿 `trayPadBottom` / `trayBottomBreath` 当空气也不对:前者喂进 `trayFitScale`
+        //       会把**环**缩小(用户当场实拍 ✓);后者一量才知道两屏不等值 ✗)
+        //
+        //   ⇒ 定稿三条:
+        //     a. 净间距 = `PanelMetrics.trayRingGap`,一个**固定 pt**(不碰阴影/比例 ✓)
+        //     b. 窗底到内容底那段内缩 = `shadowPadPop`(托盘自己的阴影呼吸 ✓)
+        //     c. 「不许出屏」只钳 **高度** ⇒ 内容贴底、间距不受影响 ✓
+        //        —— 再不许钳**位置** ✗:一钳就静默吃掉间距(它就是这么骗过我的 ✓)
+        // ══════════════════════════════════════════════════════════════════════════════
+        // ⚠️ 2026-10-13 符号错(用户实拍「这卡片都掉到下面了你没看到吗」):上一版写成 `- gap` ✗
+        //   ⇒ 内容底边落到玻璃顶**下面** 50pt ⇒ 卡片/芯片被环的玻璃盖住(看着就是"掉下去了" ✓)
+        //   ⇒ 内容**贴底** ⇒ 想离环远一点就得把窗**往上抬** ⇒ y 必须**变大** ⇒ 这里是 `+` ✓
+        // ⚠️ 2026-10-13 第三处错(用户红框标出:芯片落进环的玻璃里 ✗):
+        //   上面那三个量算出的底边是**内容框**的底边,而内容框下沿**还含 `trayPadBottom` 内边距** ✗
+        //   ⇒ 用户要的那对边是「**芯片下沿** → 环玻璃顶」⇒ 必须把这 14(×比例)补回去 ✓
+        //   (我先前量的"距 28/30"其实一直是"框底距",芯片实际只有 14pt ✗)
+        // ★★ 2026-10-13 定稿(用户点了要求:「不管有多少窗口, 我都要卡片距离环边距是一样的」):
+        //   症状(值固定 80 时):多窗那组刚好 ✓、**单窗那组太宽** ✗
+        //   ⇒ 说明内容在窗里其实**贴着顶**(不是贴底 ✗):内容越矮,离环越远 ✓
+        //   ⇒ 式子必须**与内容高度无关**:底边只由"窗底 + shadowPadPop(渲染实测的那 96)"决定 ✓
+        //     (之前多加了 `trayPadBottom` ⇒ 单窗多出 14;而"顶对齐"⇒ 多窗那种又少一截 ✓)
+        // ★★ 2026-10-13 **算式定案**(用三把量尺实测反解,不再猜 ✓):
+        //   实测(同一帧):窗底 553 · 内容框底边 554(= 窗底 + 1,即**内容与窗底齐平** ✓)
+        //                 面板玻璃顶 604 ⇒ 内容底比玻璃顶低 50 ✗(芯片再上 14 ⇒ 压着芯片 ✓)
+        //   机理:式子里的 `− shadowPadPop(96)` 是**白扣的** ✗ —— 它假设"内容底 = 窗底 + 托盘阴影",
+        //        而实测内容与窗底齐平(阴影那段并不在内容框里 ✓)
+        //   ⇒ y = 玻璃顶 + trayRingGap + trayPadBottom(内容框底 → 芯片底 那 14)
+        //     校验:gap=0 ⇒ y = 618 ⇒ 内容底 619 ⇒ 芯片底 605 ≈ 玻璃顶 604 ⇒ **紧贴** ✓(= 用户的标准 ✓)
+        //     校验:gap=45 ⇒ 芯片底 650 ⇒ 间距 46 ✓(与旋钮值一致 ✓)
+        // ⚠️ 2026-10-13 最后一处符号错(用户设 4 却看到 ≈33 ✗):上面那 14 我**加了两遍** ✗
+        //   实测:内容框底 ≈ 窗底(+1) · 芯片底 = 内容框底 + trayPadBottom(14) ⇒ 芯片底 = y + 15
+        //   要"芯片底 = 玻璃顶 + gap" ⇒ **y = 玻璃顶 + gap − trayPadBottom** ✓(不是 + ✗)
+        let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
+            + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
+        // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
+        //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
+        //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
+        //   ⇒ 下限必须 = 内容 + `shadowPadPop`(底部那段内缩 ✓):
+        //     宁可让窗**顶**伸出屏幕(那是透明区,看不见 ✓),也不许挤内容 ✗
+        let minHeight = maxContentSize.height + PanelMetrics.shadowPadPop
+        let topLimit = screenArea.maxY - margin          // ← 被上一版的正则误删 ✗,补回 ✓
+        if y + size.height > topLimit {
+            size.height = max(minHeight, topLimit - y)
+            glog("[托] 窗顶超屏 ⇒ 只裁透明区(内容 + 间距都不动 ✓)")
+        }
         self.windowSize = size
-        self.windowOrigin = NSPoint(x: x.rounded(.down), y: (panelFrame.maxY - frameGap).rounded(.down))
+        self.windowOrigin = NSPoint(x: x.rounded(.down), y: y.rounded(.down))
     }
 }

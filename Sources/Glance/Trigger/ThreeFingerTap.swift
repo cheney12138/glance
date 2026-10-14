@@ -205,6 +205,10 @@ final class ThreeFingerTap {
     ///             `register + start`(它不碰那个卡死的调用 ✓)—— 成功就重置预算 ✓
     private var attachWedgeRetries = 0
     static let attachWedgeMaxRetries = 3
+    /// 上一次重挂**走到头**(register+start 都成功)的时刻 —— 用来判"成功了却没有帧" ✓
+    private var attachSucceededAt: CFAbsoluteTime = 0
+    /// **MT 投递整体已死**(2026-10-11 病例,见 `reviveIfFramesDead` 里的那段)
+    private var mtDeliveryDead = false
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -239,6 +243,28 @@ final class ThreeFingerTap {
     /// 在 `HotkeyTap.handleMouse` 里挂(点击必过 ✓ 挂载亚毫秒级 ✓)
     func reviveIfFramesDead() {
         let silence = CFAbsoluteTimeGetCurrent() - lastFrameAt
+        // ★★ 2026-10-11 病例(用户「三指又死机了」):今天这局把它走完了 ——
+        //   ```
+        //   31516506ms  重挂开始(点击但 106s 无帧(投递死亡))
+        //   31566395ms  ⚠️ 卡住 ≥6s ⇒ 换新队列重试 ✓
+        //   31566395ms  挂载 2 个设备(… · **轻量路(不拆旧 ✓)**)   ← 重挂**成功**了 ✓
+        //               ✗ 但之后 **15 小时零触点帧** ⇒ 每几十秒白重试一轮 ✗✗
+        //   ```
+        //   ⇒ 结论:**多触点驱动那一侧卡住时,App 怎么 register/start 都唤不回帧** ✗
+        //     上一版只认"重挂卡住",认不出"重挂成功却没帧" ⇒ 既救不了、又刷了 15 小时日志 ✗
+        //   口径:重挂成功过、而 3s 内仍一条触点帧都没有 ⇒ 判"MT 投递整体已死" ⇒ **停手** ✓
+        //     (不再投递重挂 —— 免得攒线程与刷屏 ✓;真恢复了(又有帧)会自动把旗标放下 ✓)
+        //   ⚠️ 防误伤(本仓老病例:外接鼠标 / 盒盖机型"本来就没帧" ✗):必须**曾经有过帧**才判死 ✓
+        //      —— 从没见过的机器(内建板根本没在用)不会走到这里 ✓
+        if lastFrameAt > 0, attachSucceededAt > 0, silence > 3.0 {
+            if !mtDeliveryDead {
+                mtDeliveryDead = true
+                glog("[指点按] ⚠️ 重挂已成功(register+start ✓)但 3s 内仍无任何触点帧"
+                     + " ⇒ **MT 投递整体已死**(多触点驱动那一侧卡住,App 救不了)"
+                     + " ⇒ 停止重试;重启 Glance 即可恢复 ✓")
+            }
+            return
+        }
         attachStateLock.lock()
         let since = lastAttachAt
         attachStateLock.unlock()
@@ -413,7 +439,14 @@ final class ThreeFingerTap {
         attachStateLock.lock()
         var wedged = false
         var gen = attachGeneration
-        var light = false
+        // ★★ 2026-10-13 用户点头要做(他今天实报"三指又失效了"✓,日志抓到根因):
+        //   本机 `MTDeviceStop` **永不返回** ✗ ⇒ 只要走"先拆后挂"就会把多触点驱动那侧卡死 ✓
+        //   而唤醒/插拔屏/刷新率切换都会发"屏参数变化"⇒ 频繁触发 ⇒ 用户会觉得"三指时不时就废了"✓
+        //   ⇒ **自愈一律先走轻量路**(只 register+start、不碰 MTDeviceStop ✓)
+        //     只有"启动"那一次走完整路(那时没有旧设备要拆,拆也没意义 ✓)
+        //   代价照实说:轻量路在"真的需要重建"时可能救不回来(那时还有楔住重试 + 预算 + 提示重启 ✓),
+        //     但这比"每次都必然卡死"好得多 ✓
+        var light = (reason != "启动")
         if attachInFlight {
             // 上一次还没回来:没超过"楔住"阈值就照旧丢掉这一次(不堆积 ✓);超了 ⇒ 换新队列重试 ✓
             guard CFAbsoluteTimeGetCurrent() - attachStartedAt >= Self.attachWedgeSeconds else {
@@ -482,6 +515,7 @@ final class ThreeFingerTap {
             attachedDevices.append(p)
         }
         lastAttachAt = CFAbsoluteTimeGetCurrent()
+        attachSucceededAt = lastAttachAt        // 给"成功了却没有帧"那条判据用 ✓
         // 这一趟真的走到头了 ⇒ 清掉"楔住"预算(下一次死投递可以从头试 ✓)
         attachStateLock.lock(); attachWedgeRetries = 0; attachStateLock.unlock()
         glog("[指点按] 挂载 \(count) 个设备(\(reason)\(light ? " · 轻量路(不拆旧 ✓)" : ""),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
@@ -616,6 +650,8 @@ final class ThreeFingerTap {
         tap.feedLock.lock()
         defer { tap.feedLock.unlock() }
         tap.lastFrameAt = CFAbsoluteTimeGetCurrent()   // 给"久闲后自愈"当判据 ✓
+        // 帧又来了 ⇒ 说明投递活着 ⇒ 把"已判死"的旗标放下(下次再死可以再判一次 ✓)
+        if tap.mtDeliveryDead { tap.mtDeliveryDead = false }
         if tap.press.feed(nFingers: Int(nFingers), data: data) > 0 {
             // ⚠️ 2026-09-22 这里原本有一条"**中途开火**":四指齐压满 0.25s 就当场生效(不必抬手)✗
             //   四指下滑的前 0.25s 与"四指按住"完全一样 ⇒ 拖/滑被误判(用户实报三次 ✓)。

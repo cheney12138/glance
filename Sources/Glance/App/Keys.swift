@@ -96,6 +96,14 @@ enum Keys {
     static let debugSheenGain = "debug.sheenGain"
     /// `debug.puckBrightness` —— 选中图标底下那块托底的亮度倍率(浅色模式;默认 0.75,1 = 原样)
     static let debugPuckBrightness = "debug.puckBrightness"
+    /// `debug.trayBottomBreath` —— 托盘内容底边与容器底之间那段**固定空气**(pt)。
+    /// 2026-10-13 加:用户连提两次「间距太大」而这个数是我拍的(52) ⇒ 把它交给用户现场拧 ✓
+    /// **不写这个键 = 用出厂默认**(见 `PanelMetrics.trayBottomBreath`),写了才以它为准 ✓
+    static let debugTrayBottomBreath = "debug.trayBottomBreath"
+    /// `debug.trayRingGap` —— **卡片芯片到环**那那段净距(pt)。2026-10-13 定稿的**唯一一个旋钮** ✓
+    /// 它直接控托盘窗的 y(与阴影/比例无关 ⇒ **两块屏同一个 pt 值** ✓)
+    /// 不写 = 用出厂默认 50 ✓
+    static let debugTrayRingGap = "debug.trayRingGap"
     static let debugMoveOverflowRule = "debug.moveOverflowRule"
     /// 「送窗撑满门槛」的正式键(2026-09-25:debug 键只活了一天就按用户裁定提升为设置项 ✓)
     static let panelMoveFillMinRatio = "panel.moveFillMinRatio"
