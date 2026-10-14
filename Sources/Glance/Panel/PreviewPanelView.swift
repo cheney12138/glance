@@ -703,7 +703,19 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 self.reconcile(items, selected: selected, starts: true)
             }
             self.startDebounce = work
-            self.queue.asyncAfter(deadline: .now() + 0.15, execute: work)
+            // ★★ 2026-10-14 用户:「live 上屏的延迟…虽然有一个 app 样式兜底, 但是延迟加载的体验真的有点影响」✓
+            //   机理(那段 150ms 推迟本来就是为治"hover 那一拍丢帧" ✓):
+            //     · 面板**刚打开**时池里一条流都没有(会话收场时全停 ✓ 帧保留 ✓)
+            //       ⇒ 起流的几十毫秒正好藏在入场动画/落位那一拍里,用户看不见 ✓
+            //     · 而推迟 150ms 的代价是**先看到 App 图标兜底, 200ms 后才换成真图** ✗
+            //   ⇒ 首屏这一轮(池里**既无已有流、也无在排队的** ✓)**不推迟, 立刻起** ✓
+            //     会话中段 hover 换窗**仍然推迟 150ms** ✓(2026-09-21 那条丢帧病例没变 ✓)
+            // ⚠️ 第一版写成"整个池子空" ✗ ⇒ 实测几乎不触发(收场时**帧保留**、常留下一条流 ✓)
+            //   ⇒ 判据改成:**当前这几张卡一张流都没有**(pending 也算"有" ✓)= 这一屏的第一次填充 ✓
+            let coldOpen = items.allSatisfy {
+                self.handles[$0.wid] == nil && !self.pending.contains($0.wid)
+            }
+            self.queue.asyncAfter(deadline: .now() + (coldOpen ? 0.01 : 0.15), execute: work)
         }
     }
 
