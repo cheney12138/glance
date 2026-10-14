@@ -415,9 +415,6 @@ private struct WindowThumb<Overlay: View>: View {
                     // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
                     .opacity(selected ? 1 : PanelMetrics.thumbWash)
             } else {
-                // ⚠️ 临时量尺(2026-10-14,定位完删 ✗):兜底出现时,把"谁缺图"当场打出来 ✓
-                //   用户报「等了 2s 还是有图标」⇒ 必须知道是**哪一扇窗**、以及它缺了多久 ✓
-                Color.clear.onAppear { CardMissProbe.report(record.wid, app: record.title) }
                 // ★ 静默态(2026-09-21 定版):**该窗所属 App 的淡图标**。
                 //   为什么不是深色块:用户实报"像没加载出来/黑窗" ✗;为什么不是"截图中…":那是 loading 文案 ✗。
                 //   淡图标自解释"这是谁的窗",而且它是**静默**的(不闪、不变、没有进度感)✓。
@@ -1193,17 +1190,4 @@ final class CardImageCache {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 
-}
-
-/// ⚠️ 临时量尺(2026-10-14,定位完删 ✗):卡片回落成 App 图标时,报"谁缺图 / 缺了多久" ✓
-@MainActor
-private enum CardMissProbe {
-    private static var last: [CGWindowID: CFAbsoluteTime] = [:]
-    static func report(_ wid: CGWindowID, app: String) {
-        let now = CFAbsoluteTimeGetCurrent()
-        if let t = last[wid], now - t < 1.0 { last[wid] = now; return }   // 同一张卡别刷屏 ✓
-        let had = last[wid] != nil
-        last[wid] = now
-        glog("[缺图] wid=\(wid) app=\(app) \(had ? "又缺" : "首次缺") ⇒ 这一刻卡片回落成 App 图标 ✓")
-    }
 }
