@@ -154,16 +154,24 @@ final class Snapshotter: ObservableObject {
 
     func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil) {
         guard !windows.isEmpty else { return }
-        // ★★ S5(2026-09-24 终版,用户裁定「回到上一版,loading 显示 App 图标能接受」):
-        //   冷窗垫图(S2'')**整体退役** —— 垫图 ⇒ 换源那一下内容仍会"移一下"(快照裁过透明边,
-        //   live 不裁,位移感治不干净 ✗),用户实报抖动复现 ⇒ 冷窗回到**静默 App 图标**,
-        //   live 是唯一源(I1 彻底成立)。⇒ live 开时快照**完全不采**(不管面板在不在台上):
-        //   既不跟流抢 WindowServer,也不再为"垫图"做任何无用功。
-        //   关掉实时预览 ⇒ 这道门整个不存在,快照链原样全速 ✓。
-        //   (S5' 的案底:曾让"面板关着"时照常采,给垫图供货 —— 垫图退役,货源一并关 ✓)
-        if LivePreviewPool.enabled {
-            logLiveSkipOnce()
-            return
+        // ★★ 2026-10-14 **这道闸重立**(用户定稿的三层降级:「app图标兑底 → 快照 → live,
+        //   层层降级,任何场景都不显示异常」✓):
+        //   原闸(S5)挂在 `LivePreviewPool.enabled` 上 ✗ —— live 一开,快照采集**整个报废**:
+        //   启动首扫当场被拒(日志铁证:1676ms 首扫 20 窗 → [T5] 让位 ✓),cache 永远是空 ⇒
+        //   卡片只剩 live 帧和 App 图标两级 ✗✗ —— 而且那句"面板关着照常采"是 S5' 时代的
+        //   谎话,代码早就不是那个意思 ✗(为此排查了三轮:接线 ✓/保温 ✓ 全是在给一个空缓存绕圈 ✓)
+        //   ⇒ 新闸只保留真正的顾虑(不与入场抢 WindowServer ✓):
+        //     · 面板关着 ⇒ 照常采(快照层的主要货源 ✓,反正内部还有 TTL 过滤 ✓)
+        //     · 面板在台上 ⇒ 只采"从没拍到过"的窗(冷窗/新窗 ✓,通常 1–2 扇 ≤60ms ✓);
+        //       TTL 到期重拍那种全量让位 ✓(652ms 长帧那个病例不再回来 ✓)
+        var windows = windows
+        if PanelStageProbe.isVisible() {
+            let cold = windows.filter { cache[$0.wid] == nil }
+            if cold.isEmpty {
+                logLiveSkipOnce()
+                return
+            }
+            windows = cold
         }
         // ★ **录屏权限预检**(2026-09-19 用户实报「怎么老是弹录屏授权」):后台 sweep(5s 开窗拍)
         // 触发 SCK 时,若权限缺失/失效(重签名、系统更新都会让 TCC 记录失效),macOS 就弹授权框
@@ -272,50 +280,6 @@ final class Snapshotter: ObservableObject {
         if first { SessionMarks.noteFirstThumb(batchSize) }
     }
 
-    /// **透明衬边裁切**(T88 v2):自绘窗(微信登录窗那类)的窗体 backing 常比可见内容大 ——
-    /// 系统影子已被 `ignoreShadows` 关掉,但 App 自己画在窗里的透明圈(圆角外圈/自绘影)还在,
-    /// 内容贴左上、右下留白,卡底色从透明区透出来(2026-09-17 用户实拍)。
-    ///
-    /// 做法:把图 8× 缩采样画进 alpha-only 位图,找"含接近不透明像素"的行列包围盒,按盒裁原图。
-    /// 设计三条:
-    ///   · 普通窗口四边都有不透明内容 ⇒ 包围盒 = 全图,原样返回(唯一开销是一次缩采样);
-    ///   · 阈值取 96:窗口内容边缘是全不透明(255),烤进图里的软影远低于此 —— 行列里有
-    ///     任何一个近不透明像素就算内容,所以抗锯齿的圆角边不会被误裁;
-    ///   · 一切失败路径(画不出/全透明/包围盒即全图)一律返回原图 —— 宁可有边,不裁错。
-    private nonisolated static func trimTransparentEdges(_ image: CGImage) -> CGImage {
-        let w = image.width, h = image.height
-        guard w > 16, h > 16 else { return image }
-        let stride = 8
-        let sw = w / stride, sh = h / stride
-        // RGBA 位图(不用 alphaOnly:Swift 绑定的 space 参数不收 nil),读每采样点的 alpha 字节
-        guard sw > 0, sh > 0, let ctx = CGContext(
-            data: nil, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return image }
-        ctx.interpolationQuality = CGInterpolationQuality.medium
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: sw, height: sh))
-        guard let buf = ctx.data else { return image }
-        let data = buf.bindMemory(to: UInt8.self, capacity: sw * sh * 4)
-        var minX = sw, minY = sh, maxX = -1, maxY = -1
-        for y in 0..<sh {
-            for x in 0..<sw {
-                if data[(y * sw + x) * 4 + 3] > 96 {
-                    if x < minX { minX = x }; if x > maxX { maxX = x }
-                    if y < minY { minY = y }; if y > maxY { maxY = y }
-                }
-            }
-        }
-        guard maxX >= minX, maxY >= minY else { return image }
-        // 位图内存行 0 = 图的顶行(上下文按 CG 坐标画、内存按图像行序排),
-        // 与 `cropping(to:)` 的左上原点同系,直接乘步长换算
-        let rect = CGRect(x: minX * stride, y: minY * stride,
-                          width: min(w, (maxX - minX + 1) * stride),
-                          height: min(h, (maxY - minY + 1) * stride))
-        guard rect.width < CGFloat(w) || rect.height < CGFloat(h),
-              let cropped = image.cropping(to: rect) else { return image }
-        return cropped
-    }
 
     /// 单窗抓图。
     ///
@@ -325,83 +289,67 @@ final class Snapshotter: ObservableObject {
     /// 14/15 没有新 API,沿用旧的。
     private nonisolated static func captureImage(of scWindow: SCWindow,
                                                  _ w: WindowRecord) async -> (CGImage?, String?) {
-        // 出图规格:宽 720px(卡片≈3x retina 余量),高按窗口比例,上下封顶防极端形状
-        // (竖条/横幅)出 4000px 大图(T6 实机现形:320px 高糊成马赛克)
+        // ★★ 2026-10-14 **三源一把尺**(用户要求"彻底解决 live 接入闪烁"✓):
+        //   出图规格与 live/静帧(PreviewPanelView 池起流处)**完全同一套**:
+        //   同一尺寸公式(卡片盒 × 屏幕scale,由注入闭包供给 ✓)、同一批 flags、同一个 API
+        //   (SCScreenshotManager.captureImage + SCStreamConfiguration)⇒ 三源逐像素一致 ✓
+        //   当年闪烁的根源(用户:「快照切换到 live 时非常轻微的闪烁」✗):
+        //     ① `trimTransparentEdges` 改变图的宽高比 ⇒ 卡片 resizable 拉伸时内容
+        //        位置/缩放与 live 差一点 ⇒ 换源那一下"轻微位移" ✗(S2'' 抖动的同族病 ✓)
+        //     ② `scalesToFit` 两边不一致(快照 true / live false)✗
+        //     ③ 26 上走 captureScreenshot(sdrImage),色彩处理与 live 不同 ✗
+        //   ⚠️ trim 退役的代价:真有全透明衬边的自绘窗,快照边缘透出卡底色 ——
+        //      但 live/静帧本来就这样 ✓ ⇒ 三方一致,谁也不"换源位移" ✓
+        //      (2026-09-17 微信"大灰边"的真凶是**窗口影子**,ignoreShadowsSingleWindow 已治 ✓)
+        // 卡片盒由**组装根注入**(依赖倒置 ✓):Inventory 不许直接认识 Design 层的尺寸 token ✗,
+        //   而"三源一把尺"又必须用同一公式 ⇒ App 启动时把闭包递进来 ✓(GlanceApp.init 接线 ✓)
+        //   没接线的安全网:真窗 × 主屏 scale —— 比例仍与真窗一致 ✓(不闪 ✓),只是没过卡片帽 ✗
+        let px: CGSize
+        if let box = snapshotBoxProvider?(w) {
+            px = box
+        } else {
+            let s = NSScreen.main.map { $0.backingScaleFactor } ?? 2
+            px = CGSize(width: w.bounds.width * s, height: w.bounds.height * s)
+        }
         let aspect = w.bounds.width / max(w.bounds.height, 1)
-        let pxW = 720
-        let pxH = min(max(Int(720 / aspect), 48), 1500)
+        let pxW = max(2, Int(px.width.rounded()))
+        let pxH = max(2, Int(px.height.rounded()))
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
-        // 🔬 取证:拍出来的图与"我们要的尺寸"对不对得上。
-        //   病例(2026-09-22):子窗口被默认拍进来 ⇒ 画面被撑大 ⇒ 比例不符 ⇒ 多出来的是透明像素 ⇒ 卡片一块黑 ✗
-        //   修掉 `includeChildWindows` 之后,这一行仍留着 —— 下次再有"图与尺寸不符",一眼可判 ✓
-        //   (只在 trace 下打;一拍一张图,量不大 ✓)
-        //   ★ 要打的是**实得尺寸** —— 它才是判据(只打"请求"等于没打:两张图看起来都会是 720x450 ✗)。
-        //     实得与"窗"的宽高比不一致 ⇒ 就是子窗口/多余内容被拍进来了 ✓
+        // 🔬 取证(保留):实得尺寸 vs 请求 —— 比例不符 ⇒ 子窗口/多余内容被拍进来 ✓
         var capturedSize: (Int, Int)?
         defer {
             if isTraceEnabled {
                 let got = capturedSize.map { "\($0.0)x\($0.1)" } ?? "nil"
                 glog(String(format: "[拍照] wid=%u 窗 %.0fx%.0f(比例 %.2f) 请求 %dx%d 实得 %@",
-                            w.wid, w.bounds.width, w.bounds.height,
-                            w.bounds.width / max(w.bounds.height, 1), pxW, pxH, got))
+                            w.wid, w.bounds.width, w.bounds.height, aspect, pxW, pxH, got))
             }
         }
-
-        if #available(macOS 26.0, *) {
-            let config = SCScreenshotConfiguration()
-            config.width = pxW
-            config.height = pxH
-            config.showsCursor = false
-            // **不拍影子**(T88):默认把窗口阴影一起拍进画面 —— 那是一圈**透明像素**,
-            // 撑大了画面、缩小的内容浮在中间,卡底色从透明区透出来 = 微信登录窗那种
-            // 自绘窗四圈"大灰边"(2026-09-17 用户实拍)。关掉后画面 = 窗口本体,
-            // 与出图比例推导用的 `bounds` 口径一致,fill 裁切也不再吃空边
-            config.ignoreShadows = true
-            // ★★ 2026-09-22 用户实报(两张截图):Sublime Text 有「编辑器 + 一个 Update 进度窗」,
-            //    结果那张卡的图里**两块内容挤在一起**,旁边一大块黑 ✗。
-            //    真因在 SDK 文档里写着:`includeChildWindows` —— **child windows are included by default** ✓
-            //    ⇒ 我们按"单窗"拍图,系统却把它的**子窗口一起拍进来** ✗:
-            //      画面按子窗撑大 ⇒ 与我们要的尺寸/比例不符 ⇒ 多出来的地方是透明像素 ⇒ 卡片上一块黑 ✗
-            //    ⇒ 明确关掉:一张卡只画这扇窗自己的内容 ✓(要的是"切换器里那张缩略图",不是"窗口全家福")
-            // 这里**不用**再查 14.2:外层已经是 `#available(macOS 26.0, *)`(编译器会提示恒真 ✓)
-            config.includeChildWindows = false
-            return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
-                // **超时兜底**(2026-09-14 实机病):SCK 的回调**可能永远不回来** ——
-                // 而 withCheckedContinuation 会一直等,于是整批拍图卡在第一个窗上:
-                // 后面的窗一律拿不到图,回填重试也永不触发,面板就一直是"截图中…"。
-                // 这里用一次性旗票保证**恰好 resume 一次**,谁先到谁说话。
-                let once = Once()
-                SCScreenshotManager.captureScreenshot(contentFilter: filter, configuration: config) { output, error in
-                    guard once.claim() else { return }
-                    if let error {
-                        cont.resume(returning: (nil, error.localizedDescription))
-                    } else if let img = output?.sdrImage {
-                        capturedSize = (img.width, img.height)
-                        cont.resume(returning: (Self.trimTransparentEdges(img), nil))
-                    } else {
-                        cont.resume(returning: (nil, nil))
-                    }
-                }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) {
-                    guard once.claim() else { return }
-                    cont.resume(returning: (nil, "SCK 回调超时(1.2s 未回)"))
-                }
-            }
-        }
-
         let config = SCStreamConfiguration()
         config.width = pxW
         config.height = pxH
         config.showsCursor = false
-        config.scalesToFit = true
-        // 同上(14/15 这条也有同一个默认值):一张卡只画这扇窗自己 ✓
+        config.scalesToFit = false                 // 与 live 一致(同一把尺子连 flag 一起同源 ✓)
+        config.ignoreShadowsSingleWindow = true    // 与 live 一致 ✓(影子才是"大灰边"真凶 ✓)
         if #available(macOS 14.2, *) { config.includeChildWindows = false }
-        do {
-            let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            capturedSize = (img.width, img.height)
-            return (Self.trimTransparentEdges(img), nil)
-        } catch {
-            return (nil, error.localizedDescription)
+        return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
+            // **超时兜底**(2026-09-14 实机病;原 26 分支有、<26 没有 ⇒ 顺手补齐 ✓):
+            // SCK 的回调可能永远不回来 ⇒ 整批拍图卡死。一次性旗票保证恰好 resume 一次 ✓
+            let once = Once()
+            Task {
+                do {
+                    let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                    guard once.claim() else { return }
+                    capturedSize = (img.width, img.height)
+                    cont.resume(returning: (img, nil))
+                } catch {
+                    guard once.claim() else { return }
+                    cont.resume(returning: (nil, error.localizedDescription))
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) {
+                guard once.claim() else { return }
+                cont.resume(returning: (nil, "SCK 回调超时(1.2s 未回)"))
+            }
         }
     }
 }
@@ -409,13 +357,18 @@ final class Snapshotter: ObservableObject {
 /// 录屏权限未授权的跳过账:**每进程只喊一次**(sweep 5s 一轮,不设闸就刷屏)
 nonisolated(unsafe) private var permissionSkipLogged = false
 
-/// live 开 ⇒ 快照"台上让位"的跳过账:同样**每进程只喊一次**(sweep/激活拍都指向 precapture,
-/// 不设闸就每 5s 一行 ✗)。这一行是"台上那会儿快照为什么没更新"的答案,得留个字据 ✓
+/// 快照"台上让位"的跳过账:同样**每进程只喊一次**(sweep/激活拍都指向 precapture,
+/// 不设闸就每 1.5s 一行 ✗)。这一行是"台上那会儿快照为什么没更新"的答案,得留个字据 ✓
+/// (2026-10-14 改口径:台上时只拒"全量重拍",冷窗/新窗照采 ✓;完全没冷窗可采时才走到这 ✓)
 nonisolated(unsafe) private var liveSkipLogged = false
+
+/// 卡片盒(像素)公式,由组装根(GlanceApp.init ✓)注入 —— 见 captureImage 里的说明 ✓
+/// ⚠️ 必须在第一次预拍(启动首扫 0.8s ✓)之前接线 ✓
+nonisolated(unsafe) var snapshotBoxProvider: ((WindowRecord) -> CGSize)?
 private func logLiveSkipOnce() {
     guard !liveSkipLogged else { return }
     liveSkipLogged = true
-    print("[T5] live 开 ⇒ 面板在台上时快照采集让位(流在跑);面板关着照常采,给冷窗垫图")
+    print("[T5] 面板在台上 ⇒ 快照只采冷窗/新窗,全量重拍让位(不与入场抢 WindowServer)")
 }
 
 /// `SCShareableContent` 的短命缓存:这个枚举**很贵**(要跟 WindowServer 打一轮),

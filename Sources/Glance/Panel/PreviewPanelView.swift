@@ -171,16 +171,30 @@ struct PreviewPanelView: View {
         CardRulerLog.check(wid: w.wid,
                            source: liveFrame != nil ? "live" : (shot != nil ? "快照" : "静默"),
                            box: box, imageAspect: liveAspect ?? shotAspect, shotAspect: shotAspect)
+        // ⚠️ 临时量尺(2026-10-14,定位完删 ✗):只在"快照→live 交接那一拍"把两张图各存一张
+        //   (每窗只打一发 ✓,之后不再写 ✓)—— 用户报「知道就是快照切到 live 那一下闪,但不知道原因」
+        //   ⇒ 拿到这两张图逐像素一比,是位移/色彩/还是显示层瞬态,当场见分晓 ✓
+        if liveFrame != nil, shot != nil, !HandoffDump.done.contains(w.wid) {
+            HandoffDump.done.insert(w.wid)
+            let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+            SourceDump.dump(key: "handoff-shot-\(w.wid)",
+                            shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
+            SourceDump.dump(key: "handoff-live-\(w.wid)", liveFrame, dir)
+        }
         return WindowThumb(
             record: w,
             bundleID: controller.currentGroup?.bundleID,
-            // ★★ 2026-09-24 终版(用户裁定「回到上一版,loading 显示 App 图标能接受」):
-            //   冷窗垫图(S2'')**退役** —— 垫图 ⇒ 换源那一下内容仍会"移一下"(快照走
-            //   transparentTrimRect 裁了透明衬边、live 不裁,内容的画幅位置按构造就差一层 ✗,
-            //   这正是用户实报的抖动复现)。⇒ live 开 = **不垫图**:冷窗显示静默 App 图标,
-            //   live 首帧(36–74ms)一到直接替换 —— 全程一个源,不存在"换源"这件事 ✓
-            //   (S3 的原装行为,用户明确接受这个 loading)。
-            image: LivePreviewPool.enabled ? nil : snapshotter.cache[w.wid],
+            // ★★ 2026-10-14 **三层降级重新接线**(用户定稿的架构:「app图标兜底 → 快照 → live,
+            //   层层降级,任何场景都不显示异常」✓):
+            //   快照必须喂给卡片 —— 否则 2026-09-24 那个「image: nil」就是**把第 2 层整层禁用**:
+            //   live 开着时卡片只剩 live 帧 和 App 图标两级 ✗,保温拍了也白拍(卡片根本不读它)✓
+            //   (日志铁证:启动首扫 20 窗全拍了,8 张卡在 8.3s 仍 [缺图] ✓)
+            //   当年否掉垫图的位移病根已被 de9bf1c 治了:静帧与 live 同一个 SCContentFilter/配置 ✓;
+            //   且 Snapshotter 现在 ignoreShadows=true + 不拍子窗 ⇒ trimTransparentEdges 对普通窗
+            //   是空操作,比例与真窗一致 ✓(真有透明衬边的自绘窗:换源那一下轻微移动,量尺
+            //   CardRulerLog 会报,先接受 —— 比 App 图标好一个量级 ✓)。
+            //   显示顺序不变:liveFrame 优先,快照只在 live 还没到的 ~30–100ms 里顶上 ✓。
+            image: snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
             face: nil,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
@@ -703,7 +717,19 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 self.reconcile(items, selected: selected, starts: true)
             }
             self.startDebounce = work
-            self.queue.asyncAfter(deadline: .now() + 0.15, execute: work)
+            // ★★ 2026-10-14 用户:「live 上屏的延迟…虽然有一个 app 样式兜底, 但是延迟加载的体验真的有点影响」✓
+            //   机理(那段 150ms 推迟本来就是为治"hover 那一拍丢帧" ✓):
+            //     · 面板**刚打开**时池里一条流都没有(会话收场时全停 ✓ 帧保留 ✓)
+            //       ⇒ 起流的几十毫秒正好藏在入场动画/落位那一拍里,用户看不见 ✓
+            //     · 而推迟 150ms 的代价是**先看到 App 图标兜底, 200ms 后才换成真图** ✗
+            //   ⇒ 首屏这一轮(池里**既无已有流、也无在排队的** ✓)**不推迟, 立刻起** ✓
+            //     会话中段 hover 换窗**仍然推迟 150ms** ✓(2026-09-21 那条丢帧病例没变 ✓)
+            // ⚠️ 第一版写成"整个池子空" ✗ ⇒ 实测几乎不触发(收场时**帧保留**、常留下一条流 ✓)
+            //   ⇒ 判据改成:**当前这几张卡一张流都没有**(pending 也算"有" ✓)= 这一屏的第一次填充 ✓
+            let coldOpen = items.allSatisfy {
+                self.handles[$0.wid] == nil && !self.pending.contains($0.wid)
+            }
+            self.queue.asyncAfter(deadline: .now() + (coldOpen ? 0.01 : 0.15), execute: work)
         }
     }
 
@@ -915,6 +941,18 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             cfg.scalesToFit = false
             cfg.ignoreShadowsSingleWindow = true     // 与快照链一致(病例 B6:内容框也要同源)
             let filter = SCContentFilter(desktopIndependentWindow: win)
+            // ★★ 2026-10-14 静帧占位(用户:「打开即有真图」✓;当年错位的病根 = **两个图源两把尺子** ✗)
+            //   当年:`CGWindowListCreateImage` 自己算取景/缩放 ✗ ⇒ 与 live 差一点点像素
+            //        ⇒ 切流那一刻看起来"轻微位移"(用户为它调了很久 ✓)
+            //   ⇒ 现在改用 **SCScreenshotManager + 同一个 `filter` / 同一份 `cfg`** ✓
+            //     ⇒ 取景与缩放的**来源唯一** ⇒ 与 live **逐像素对齐**(不是凑出来的 ✓)
+            //   时机:与起流**并行**发出(不 await 到流之前 ✗,否则白等一次静帧的时间 ✓)
+            Task { [weak self] in
+                guard let self else { return }
+                guard let cg = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                          configuration: cfg) else { return }
+                self.queue.async { self.deliver(cg, wid: wid) }   // 与直播帧同一条上屏路 ✓
+            }
             let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
             let out = LiveOutput(wid: wid) { [weak self] sb in self?.ingest(sb, wid: wid, gen: g) }
             do {
@@ -946,6 +984,12 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             firstFrameLogged.insert(wid)
             glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
+        deliver(img, wid: wid)
+    }
+
+    /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
+    /// ⚠️ 只在**池队列**上调用(账本 `latest`/`latestOrder`/`wanted` 全是池队列状态 ✓)
+    fileprivate func deliver(_ img: CGImage, wid: CGWindowID) {
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
         while latestOrder.count > 10 {
@@ -1156,4 +1200,10 @@ final class CardImageCache {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 
+}
+
+/// ⚠️ 临时量尺(2026-10-14,定位完删 ✗):交接那一拍的成对存图,每窗一发 ✓
+@MainActor
+private enum HandoffDump {
+    static var done: Set<CGWindowID> = []
 }
