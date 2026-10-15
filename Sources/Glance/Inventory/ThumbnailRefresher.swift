@@ -261,8 +261,15 @@ final class ThumbnailRefresher {
                 let ms = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
                 glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
             }
-            // 面板在台上 ⇒ 只补"新窗/太旧的图"(≤2s 内的不重拍 ✓,不与入场抢资源 ✓)
-            await Snapshotter.shared.precapture(windows, maxAge: onStage ? 2 : nil)
+            // 面板在台上 ⇒ **只补冷窗**(缓存里真没有的 ✓)
+            //   (2026-10-14 病例:原来 maxAge:2 ⇒ "超 2s 全重拍" ⇒ 面板开着期间
+            //    每 1.5s 一轮 18 连拍 ✗✗ = 掉帧真凶,帧账铁证 @2-3s×2 max42ms 与
+            //    [批次] 18 连发同时刻 ✓)
+            if onStage {
+                await Snapshotter.shared.precapture(windows, onlyMissing: true)
+            } else {
+                await Snapshotter.shared.precapture(windows)
+            }
             // ⚠️ 2026-10-14 撤销:曾在这里给"最前面那个 App"做 10s 轮询保鲜 ✗✗
             //   病例:屏参数事件(哪怕一次)会触发「整块缓存作废」⇒ 下一趟轻扫发现 20 窗全没图
             //   ⇒ 全量重拍(SCK 连发)⇒ 又触发屏参数事件 ⇒ 重挂风暴 ⇒ MT 投递拖死 ✗✗✗
