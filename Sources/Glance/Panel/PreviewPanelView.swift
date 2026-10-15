@@ -171,16 +171,6 @@ struct PreviewPanelView: View {
         CardRulerLog.check(wid: w.wid,
                            source: liveFrame != nil ? "live" : (shot != nil ? "快照" : "静默"),
                            box: box, imageAspect: liveAspect ?? shotAspect, shotAspect: shotAspect)
-        // ⚠️ 临时量尺(2026-10-14,定位完删 ✗):只在"快照→live 交接那一拍"把两张图各存一张
-        //   (每窗只打一发 ✓,之后不再写 ✓)—— 用户报「知道就是快照切到 live 那一下闪,但不知道原因」
-        //   ⇒ 拿到这两张图逐像素一比,是位移/色彩/还是显示层瞬态,当场见分晓 ✓
-        if liveFrame != nil, shot != nil, !HandoffDump.done.contains(w.wid) {
-            HandoffDump.done.insert(w.wid)
-            let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
-            SourceDump.dump(key: "handoff-shot-\(w.wid)",
-                            shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
-            SourceDump.dump(key: "handoff-live-\(w.wid)", liveFrame, dir)
-        }
         return WindowThumb(
             record: w,
             bundleID: controller.currentGroup?.bundleID,
@@ -1203,10 +1193,4 @@ final class CardImageCache {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 
-}
-
-/// ⚠️ 临时量尺(2026-10-14,定位完删 ✗):交接那一拍的成对存图,每窗一发 ✓
-@MainActor
-private enum HandoffDump {
-    static var done: Set<CGWindowID> = []
 }
