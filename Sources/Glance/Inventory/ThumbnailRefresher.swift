@@ -42,6 +42,7 @@ final class ThumbnailRefresher {
     ///   锁屏后指纹会变(锁屏窗出现)⇒ 轻扫触发 ⇒ **锁着屏还在起 SCK 截屏会话** ✗
     ///   ⇒ 锁屏/睡眠 = 全面停手(不拍 ✓);解锁/唤醒恢复 ✓
     private var paused = false
+    private let lockObserver = ScreenLockObserver.shared
 
     // MARK: - 轻扫的"自适应"(2026-10-10)
     ///
@@ -112,18 +113,16 @@ final class ThumbnailRefresher {
         // 现在先**比对屏幕清单**(displayID + 尺寸 + 缩放),真的变了才作废。
         // ★★ 锁屏/睡眠 → 全面停手(见 paused 的注释 ✓);解锁/唤醒 → 恢复 ✓
         //   用分布式通知:screenIsLocked 在锁屏**那一拍**就来,比睡眠通知早 ✓
-        let dnc = DistributedNotificationCenter.default()
-        dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-        ) { [weak self] _ in Task { @MainActor in self?.paused = true } }
-        dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
-        ) { [weak self] _ in Task { @MainActor in self?.paused = false } }
+        lockObserver.onLock = { [weak self] in self?.paused = true }
+        lockObserver.onUnlock = { [weak self] in self?.paused = false }
+        lockObserver.start()
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in self?.paused = true }
-            }
-        })
+            })
+        }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -339,4 +338,24 @@ final class ThumbnailRefresher {
         print("[保温] \(reason) → 缩略图缓存作废(下一局重拍)")
         Snapshotter.shared.prune(keeping: [])
     }
+}
+
+/// 锁屏/睡眠暂停的观察者宿主(2026-10-15 病例:锁屏过夜还在跑截屏 ✗✗)。
+/// ⚠️ DistributedNotificationCenter **没有 block 式 addObserver** ✗(只有 selector 式 ✓)
+///   —— 第一版按 NotificationCenter 的习惯写,编译错 ✗
+@MainActor
+private final class ScreenLockObserver: NSObject {
+    static let shared = ScreenLockObserver()
+    private var started = false
+    var onLock: (() -> Void)?
+    var onUnlock: (() -> Void)?
+    func start() {
+        guard !started else { return }
+        started = true
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(self, selector: #selector(locked), name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(unlocked), name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
+    }
+    @objc private func locked()   { Task { @MainActor in onLock?() } }
+    @objc private func unlocked() { Task { @MainActor in onUnlock?() } }
 }

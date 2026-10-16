@@ -11,17 +11,6 @@ struct GlanceApp: App {
         // ★ 快照与 live/静帧"三源一把尺"的接线(依赖倒置 ✓):Snapshotter(Inventory 层)
         //   不许认识 Design 的尺寸 token ⇒ 组装根把"卡片盒像素"公式递进去 ✓
         //   ⚠️ 必须在启动首扫(0.8s)之前 —— init 里接线,天然赶在前面 ✓
-        // ★★ 锁屏/睡眠 → 面板强制收场(2026-10-15 病例:锁屏过夜录屏标识常亮 ✗✗):
-        //   直播流长在面板手里 ⇒ 锁屏那一拍必须把面板收掉,流才停 ✓
-        //   (保温侧的暂停闸在 ThumbnailRefresher 自己身上 ✓,这里只管面板 ✓)
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-        ) { _ in Task { @MainActor in PanelController.shared.dismissForSystemSleep() } }
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
-            NSWorkspace.shared.notificationCenter.addObserver(
-                forName: name, object: nil, queue: .main
-            ) { _ in Task { @MainActor in PanelController.shared.dismissForSystemSleep() } }
-        }
         snapshotBoxProvider = { w in
             let aspect = w.bounds.width / max(w.bounds.height, 1)
             let pt = PanelMetrics.thumbSize(real: w.bounds.size, aspect: aspect)
