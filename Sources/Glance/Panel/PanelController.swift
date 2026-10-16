@@ -1334,6 +1334,14 @@ final class PanelController: ObservableObject {
         dismiss(reason: "别处输入")
     }
 
+    /// ★★ 锁屏/睡眠强制收场(2026-10-15 病例:用户锁屏过夜,「屏幕在监视中」整夜 ✗✗
+    ///   + 显示器整夜没睡 ✗✗)—— 直播流长在面板手里,面板不收流就不停 ✗
+    ///   由组装根(GlanceApp)在锁屏/睡眠那一拍调用 ✓
+    func dismissForSystemSleep() {
+        guard PanelStageProbe.isVisible() else { return }
+        dismiss(reason: "锁屏/睡眠")
+    }
+
     private func dismiss(reason: String) {
         hintWork?.cancel(); hintWork = nil; hintText = nil
         idleWork?.cancel()   // 散场就把表撤掉(免得迟到的那一发对着已关的面板说话)
