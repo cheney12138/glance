@@ -21,6 +21,7 @@
 		5A00000000000000000000E0 /* DockApps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000E1 /* DockApps.swift */; };
 		5A0000000000000000000019 /* Snapshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000030 /* Snapshotter.swift */; };
 		5A0000000000000000000020 /* PanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000039 /* PanelController.swift */; };
+		5A00000000000000000000F0 /* PanelDestructiveKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A00000000000000000000F1 /* PanelDestructiveKeys.swift */; };
 		5A0000000000000000000044 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000040 /* PanelView.swift */; };
 		5A0000000000000000000045 /* WindowFocuser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000046 /* WindowFocuser.swift */; };
 		5A0000000000000000000048 /* CmdClickFix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000049 /* CmdClickFix.swift */; };
@@ -69,6 +70,7 @@
 		5A00000000000000000000E1 /* DockApps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockApps.swift; sourceTree = "<group>"; };
 		5A0000000000000000000030 /* Snapshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshotter.swift; sourceTree = "<group>"; };
 		5A0000000000000000000039 /* PanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelController.swift; sourceTree = "<group>"; };
+		5A00000000000000000000F1 /* PanelDestructiveKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelDestructiveKeys.swift; sourceTree = "<group>"; };
 		5A0000000000000000000040 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000046 /* WindowFocuser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowFocuser.swift; sourceTree = "<group>"; };
 		5A0000000000000000000049 /* CmdClickFix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmdClickFix.swift; sourceTree = "<group>"; };
@@ -185,6 +187,7 @@
 			children = (
 				5A0000000000000000000025 /* CursorScreenAnchor.swift */,
 				5A0000000000000000000039 /* PanelController.swift */,
+				5A00000000000000000000F1 /* PanelDestructiveKeys.swift */,
 				5A0000000000000000000040 /* PanelView.swift */,
 				AA0000000000000000000121 /* PuckView.swift */,
 				5A0000000000000000000080 /* PreviewPanelView.swift */,
@@ -348,6 +351,7 @@
 				5A00000000000000000000E0 /* DockApps.swift in Sources */,
 				5A0000000000000000000019 /* Snapshotter.swift in Sources */,
 				5A0000000000000000000020 /* PanelController.swift in Sources */,
+				5A00000000000000000000F0 /* PanelDestructiveKeys.swift in Sources */,
 				5A0000000000000000000044 /* PanelView.swift in Sources */,
 				5A0000000000000000000045 /* WindowFocuser.swift in Sources */,
 				5A0000000000000000000048 /* CmdClickFix.swift in Sources */,
