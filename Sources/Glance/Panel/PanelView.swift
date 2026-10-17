@@ -105,6 +105,26 @@ if sheen {
                 // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
                 // 这层只管竖直,不然左右各叠一层就是双重边距
                 .padding(.vertical, PanelMetrics.rowPadY)
+                .mask(
+                    // ★ 环溢出的两端渐隐 ✗ 只在溢出模式生效 ✗
+                    //   (默认模式全白 = 不遮 anything ✓ 首尾图标原样 ✓)
+                    //   挂在竖直 padding 之后 ✓:mask 框 = 整块玻璃 ✓
+                    //     选中格放大头顶/下沿点阵都在玻璃内 ✓ 不会被剪 ✗
+                    //   ⚠️ 静态 ✗ 不进任何动画链 ✗(再唤起"铺满"的病根 ✗)
+                    Group {
+                        if PanelLayout.ringOverflow {
+                            HStack(spacing: 0) {
+                                LinearGradient(colors: [.clear, .white], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: 28)
+                                Rectangle().fill(.white)
+                                LinearGradient(colors: [.white, .clear], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: 28)
+                            }
+                        } else {
+                            Rectangle().fill(.white)
+                        }
+                    }
+                )
                 // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
                 // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
                 .opacity(controller.hintText == nil ? 1 : 0)
@@ -193,16 +213,6 @@ if sheen {
         //   ⇒ 玻璃服从封顶宽 ✓ 图标条带超出玻璃的部分被 .clipped 掐掉 ✓
         //   ★ 裁切框 = 玻璃自身 ✓ 含上下呼吸区 ✓(选中格放大头顶/下沿点阵都在玻璃内 ✓ 不受影响 ✓)
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
-        .clipped()
-        .mask(
-            HStack(spacing: 0) {
-                LinearGradient(colors: [.clear, .white], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 28)
-                Rectangle().fill(.white)
-                LinearGradient(colors: [.white, .clear], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 28)
-            }
-        )
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
         //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
