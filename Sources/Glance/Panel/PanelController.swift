@@ -110,11 +110,17 @@ final class PanelController: ObservableObject {
     ///   目标 = 选中格待在可视带中心 ✓;左右两端钳制 ✓
     ///   条带在视图里 `.offset(x: 本值)` ✓;sheen/puck 的 x 同步 + 本值 ✓
     func ringStripOffset(launch: Bool, selectedIndex: Int, count: Int, visibleW: CGFloat) -> CGFloat {
+        // ★ 2026-10-16 改口径(用户:「不应该默认居中 ✗ 唤起后默认选中第一/二个 ✗」✓):
+        //   平移 = **最小滑动量** ✗ —— 只有当选中格的右缘越过可视带右缘时才向左滑 ✓
+        //   滑多少 = 刚好让它回到带内 ✓;其余情况(含唤起默认选第一/二个 ✓)一律 0 ✓
+        //   ⇒ 唤起时条带永远从起点显示 ✓(用户的肌肉记忆:第一格在左 ✗ 不漂 ✓)
         guard PanelLayout.ringOverflow, count > 0, visibleW > 0 else { return 0 }
         let cw = ringContentWidth(launch: launch)
         guard cw > visibleW else { return 0 }
         let center = PanelLayout.iconCenterX(appIndex: selectedIndex, appCount: count, contentWidth: cw)
-        return max(min(visibleW / 2 - center, 0), visibleW - cw)
+        // 选中格右缘(+8pt 余量)要留在可视带内 ✗ 越过才滑 ✓
+        let overflow = center + PanelMetrics.icon / 2 + 8 - visibleW
+        return max(min(overflow, 0), visibleW - cw)
     }
 
     func sheenCenterInContent() -> CGPoint? {
@@ -1226,7 +1232,7 @@ final class PanelController: ObservableObject {
     }
 
     /// 某一环的**内容宽**(纯算术,与 entrySelected 无关 ⇒ 可以随时问"另一环多宽")。
-    private func ringContentWidth(launch: Bool) -> CGFloat {
+    func ringContentWidth(launch: Bool) -> CGFloat {
         let count = CGFloat(max(launch ? launchables.count : groups.count, 1))
         let w = count * PanelMetrics.icon + max(count - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
         return max(w, PanelMetrics.minStripWidth)

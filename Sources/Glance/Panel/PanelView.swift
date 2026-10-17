@@ -106,19 +106,28 @@ if sheen {
                 // 这层只管竖直,不然左右各叠一层就是双重边距
                 .padding(.vertical, PanelMetrics.rowPadY)
                 .mask(
-                    // ★ 环溢出的两端渐隐 ✗ 只在溢出模式生效 ✗
-                    //   (默认模式全白 = 不遮 anything ✓ 首尾图标原样 ✓)
-                    //   挂在竖直 padding 之后 ✓:mask 框 = 整块玻璃 ✓
-                    //     选中格放大头顶/下沿点阵都在玻璃内 ✓ 不会被剪 ✗
-                    //   ⚠️ 静态 ✗ 不进任何动画链 ✗(再唤起"铺满"的病根 ✗)
+                    // ★ 环溢出的渐隐(2026-10-16 ✓):**按实际裁切状态** ✓
+                    //   · 左端:条带被向左滑过(off < 0 ✗ 左缘有内容被裁 ✗)才渐隐 ✓
+                    //     条带在起点(off = 0 ✓)时**不遮** ✓ —— 第一格就是第一格,不渐隐 ✓
+                    //   · 右端:内容超出可视带(off + cw > vw ✗ 右缘有内容被裁 ✗)才渐隐 ✓
+                    //   · 未开溢出模式 ✗ 全白不遮 ✓
                     Group {
                         if PanelLayout.ringOverflow {
+                            let cw = controller.ringContentWidth(launch: controller.entrySelected)
+                            let off = mainRingOffset
+                            let vw = max(controller.contentSize().width - PanelMetrics.rowPadX * 2, 0)
+                            let leftFade = off < -0.5
+                            let rightFade = cw + off > vw + 0.5
                             HStack(spacing: 0) {
-                                LinearGradient(colors: [.clear, .white], startPoint: .leading, endPoint: .trailing)
+                                LinearGradient(colors: [.clear, .white],
+                                               startPoint: .leading, endPoint: .trailing)
                                     .frame(width: 28)
+                                    .opacity(leftFade ? 1 : 0)
                                 Rectangle().fill(.white)
-                                LinearGradient(colors: [.white, .clear], startPoint: .leading, endPoint: .trailing)
+                                LinearGradient(colors: [.white, .clear],
+                                               startPoint: .leading, endPoint: .trailing)
                                     .frame(width: 28)
+                                    .opacity(rightFade ? 1 : 0)
                             }
                         } else {
                             Rectangle().fill(.white)
