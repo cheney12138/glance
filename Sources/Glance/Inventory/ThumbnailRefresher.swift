@@ -34,6 +34,15 @@ final class ThumbnailRefresher {
     private var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
     /// 上一次被激活的 App pid(= 在下一次激活发生时刚刚失焦的那个)。见 `handleActivation` 的失焦拍
     private var lastActivatedPID: pid_t?
+    /// ★★ 破环冷却(2026-10-14 病例:三指被拖死 ✓):屏参数事件后到这个时刻之前**一律不拍**。
+    ///   环是这样的:屏事件 → 缓存全清 + 手势重挂 → 全量重拍(SCK 连发)→ SCK 又触发屏事件 ✗✗
+    ///   ⇒ 给屏事件后的重拍加冷却,环断供就停 ✓(每次事件都重置 ⇒ 事件停了 8s 后才恢复拍 ✓)
+    private var captureCooldownUntil: CFAbsoluteTime = 0
+    /// ★★ 锁屏/睡眠暂停(2026-10-15 病例:用户锁屏过夜,录屏标识常亮 + 屏幕整夜没睡 ✗✗):
+    ///   锁屏后指纹会变(锁屏窗出现)⇒ 轻扫触发 ⇒ **锁着屏还在起 SCK 截屏会话** ✗
+    ///   ⇒ 锁屏/睡眠 = 全面停手(不拍 ✓);解锁/唤醒恢复 ✓
+    private var paused = false
+    private let lockObserver = ScreenLockObserver.shared
 
     // MARK: - 轻扫的"自适应"(2026-10-10)
     ///
@@ -102,6 +111,23 @@ final class ThumbnailRefresher {
         // 显示器休眠唤醒都会发。原来只要收到就整块作废,代价是**下一局重拍十几扇窗**
         // (2026-09-15 实测:一次没有切屏的会话里突然出现 `预截 要拍 10 窗`)。
         // 现在先**比对屏幕清单**(displayID + 尺寸 + 缩放),真的变了才作废。
+        // ★★ 锁屏/睡眠 → 全面停手(见 paused 的注释 ✓);解锁/唤醒 → 恢复 ✓
+        //   用分布式通知:screenIsLocked 在锁屏**那一拍**就来,比睡眠通知早 ✓
+        lockObserver.onLock = { [weak self] in self?.paused = true }
+        lockObserver.onUnlock = { [weak self] in self?.paused = false }
+        lockObserver.start()
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.paused = true }
+            })
+        }
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.paused = false }
+        })
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
@@ -110,6 +136,7 @@ final class ThumbnailRefresher {
                 let now = Self.screenSignature()
                 guard now != self.lastScreenSignature else { return }   // 只是通知勤,屏没变
                 self.lastScreenSignature = now
+                self.captureCooldownUntil = CFAbsoluteTimeGetCurrent() + 8   // ★ 破环 ✓(每次事件重置 ✓)
                 self.invalidateAll(reason: "显示器参数变化")
             }
         })
@@ -215,6 +242,14 @@ final class ThumbnailRefresher {
             //   ⇒ 收窄成两条:
             //     ① 让开入场:等 0.6s 再走(入场动画那几拍不动它 ✓)
             //     ② **只补"没有图/图太旧"的窗**(`maxAge: 2` ✓)—— 全量重拍仍然不做 ✓
+            // ★ 破环冷却(见 captureCooldownUntil 的注释 ✓):屏事件后 8s 内不拍,
+            //   断掉「屏事件 → 全量重拍 → 更多屏事件」的环 ✓(真实插拔屏代价 ≤8s 图标 ✓ 可接受 ✓)
+            if await MainActor.run(body: { self.paused }) { return }   // 锁屏/睡眠 ✗ 不拍 ✓
+            let cooldownUntil = await MainActor.run { self.captureCooldownUntil }
+            if CFAbsoluteTimeGetCurrent() < cooldownUntil {
+                if isTraceEnabled { glog("[保温] 跳过:屏变化后截屏冷却中 ✓") }
+                return
+            }
             let onStage = await MainActor.run(body: { PanelStageProbe.isVisible() })
             if onStage {
                 try? await Task.sleep(nanoseconds: 600_000_000)
@@ -249,8 +284,15 @@ final class ThumbnailRefresher {
                 let ms = Int((CFAbsoluteTimeGetCurrent() - beganAt) * 1000)
                 glog("[保温] \(reason):\(windows.count) 窗(枚举 \(ms)ms)→ 交预截")
             }
-            // 面板在台上 ⇒ 只补"新窗/太旧的图"(≤2s 内的不重拍 ✓,不与入场抢资源 ✓)
-            await Snapshotter.shared.precapture(windows, maxAge: onStage ? 2 : nil)
+            // 面板在台上 ⇒ **只补冷窗**(缓存里真没有的 ✓)
+            //   (2026-10-14 病例:原来 maxAge:2 ⇒ "超 2s 全重拍" ⇒ 面板开着期间
+            //    每 1.5s 一轮 18 连拍 ✗✗ = 掉帧真凶,帧账铁证 @2-3s×2 max42ms 与
+            //    [批次] 18 连发同时刻 ✓)
+            if onStage {
+                await Snapshotter.shared.precapture(windows, onlyMissing: true)
+            } else {
+                await Snapshotter.shared.precapture(windows)
+            }
             // ⚠️ 2026-10-14 撤销:曾在这里给"最前面那个 App"做 10s 轮询保鲜 ✗✗
             //   病例:屏参数事件(哪怕一次)会触发「整块缓存作废」⇒ 下一趟轻扫发现 20 窗全没图
             //   ⇒ 全量重拍(SCK 连发)⇒ 又触发屏参数事件 ⇒ 重挂风暴 ⇒ MT 投递拖死 ✗✗✗
@@ -296,4 +338,24 @@ final class ThumbnailRefresher {
         print("[保温] \(reason) → 缩略图缓存作废(下一局重拍)")
         Snapshotter.shared.prune(keeping: [])
     }
+}
+
+/// 锁屏/睡眠暂停的观察者宿主(2026-10-15 病例:锁屏过夜还在跑截屏 ✗✗)。
+/// ⚠️ DistributedNotificationCenter **没有 block 式 addObserver** ✗(只有 selector 式 ✓)
+///   —— 第一版按 NotificationCenter 的习惯写,编译错 ✗
+@MainActor
+private final class ScreenLockObserver: NSObject {
+    static let shared = ScreenLockObserver()
+    private var started = false
+    var onLock: (() -> Void)?
+    var onUnlock: (() -> Void)?
+    func start() {
+        guard !started else { return }
+        started = true
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(self, selector: #selector(locked), name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(unlocked), name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
+    }
+    @objc private func locked()   { Task { @MainActor in onLock?() } }
+    @objc private func unlocked() { Task { @MainActor in onUnlock?() } }
 }

@@ -209,6 +209,41 @@ final class ThreeFingerTap {
     private var attachSucceededAt: CFAbsoluteTime = 0
     /// **MT 投递整体已死**(2026-10-11 病例,见 `reviveIfFramesDead` 里的那段)
     private var mtDeliveryDead = false
+    /// ★★ 2026-10-14:「MT 投递整体已死」时**自动重启自己** ✓
+    ///
+    /// 为什么需要它(用户原话:「那用户不是也会出现这个问题? 那还做个屁功能」✓):
+    ///   · 这个状态是**系统那一侧**卡住(Multitouch 驱动),App 怎么 register/start 都唤不回帧 ✗
+    ///   · 2026-10-14 试过"换 IOHID 共享直读"⇒ 本机实测**收不到任何多点报文** ✗
+    ///     (厂商页 0xFF00 的 8 个接口全挂上,8 秒 0 包;要收就得 seize ⇒ 系统失去触控板 ✗✗)
+    ///     ⇒ 报告在 `docs/手势-输入源-IOHID-可行性.md` ✓
+    ///   · 只剩一条路:**重开进程**(唯一被验证有效的恢复手段 = 重启 Glance ✓)
+    ///     ⇒ 那就让 App 自己重启,别把这件事丢给用户 ✓
+    ///
+    /// 做法:用一个**游离的 shell** 先睡 1 秒再拉起新实例,然后本进程干净退出 ✓
+    ///   (不能先 open 再退出:本仓有单实例闸 ⇒ 新实例会被老实例挤掉 ✗;
+    ///    也不能用强杀:会跳过"归还原生热键"✓)
+    /// 防打转:同一台机器 10 分钟内最多自动重启一次(写进 UserDefaults ✓,
+    ///   否则"本来就永远没帧"的机器会陷入重启循环 ✗)
+    static func autoRelaunchIfNeeded(reason: String) {
+        let key = "tap.lastAutoRelaunch"
+        let now = Date().timeIntervalSince1970
+        let last = UserDefaults.standard.double(forKey: key)
+        if last > 0, now - last < 600 {
+            glog("[指点按] 距上次自动重启不足 10 分钟 ⇒ 不再自动重启(避免打转 ✗)")
+            return
+        }
+        UserDefaults.standard.set(now, forKey: key)
+        let path = Bundle.main.bundlePath
+        glog("[指点按] ⇒ 自动重启 Glance(\(reason)):1 秒后拉起新实例、本进程退出 ✓")
+        let t = Process()
+        t.executableURL = URL(fileURLWithPath: "/bin/sh")
+        t.arguments = ["-c", "sleep 1; /usr/bin/open -n \"\(path)\""]
+        try? t.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSApp.terminate(nil)     // 干净退出:原生热键归还会照常跑 ✓
+        }
+    }
+
     /// 上一个**触点帧**的时刻 —— "久闲后自愈"的判据 ✓(回调线程写、主线程读,只当一个时间戳用 ✓)
     private var lastFrameAt: CFAbsoluteTime = 0
 
@@ -261,7 +296,8 @@ final class ThreeFingerTap {
                 mtDeliveryDead = true
                 glog("[指点按] ⚠️ 重挂已成功(register+start ✓)但 3s 内仍无任何触点帧"
                      + " ⇒ **MT 投递整体已死**(多触点驱动那一侧卡住,App 救不了)"
-                     + " ⇒ 停止重试;重启 Glance 即可恢复 ✓")
+                     + " ⇒ 停止重试 + **自动重启自己**(用户不再需要手动重启 ✓)")
+                Self.autoRelaunchIfNeeded(reason: "MT 投递整体已死")
             }
             return
         }

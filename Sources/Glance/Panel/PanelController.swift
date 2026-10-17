@@ -7,6 +7,19 @@ import SwiftUI
 /// 四状态无旁路。确认的真实聚焦在 T7 接 WindowFocuser,现在只打日志。
 @MainActor
 final class PanelController: ObservableObject {
+    /// ★★ 锁屏/睡眠强制收场的接线(2026-10-15 病例:用户锁屏过夜,直播流整夜没停 ✗✗
+    ///   「屏幕在监视中」常亮 + 显示器整夜没睡 ✗)—— 流长在面板手里,
+    ///   锁屏那一拍必须把面板收掉 ✓(保温侧的暂停闸在 ThumbnailRefresher ✓)
+    init() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
+        ) { [weak self] _ in Task { @MainActor in self?.dismissForSystemSleep() } }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in Task { @MainActor in self?.dismissForSystemSleep() } }
+        }
+    }
     @Published private(set) var groups: [AppGroup] = []
     /// 上一局的名单**副本** + 它属于哪块屏(用于"陈旧名单先上屏" ✓)
     ///
@@ -1332,6 +1345,14 @@ final class PanelController: ObservableObject {
         guard isVisible else { return }
         trace("[T91] 别处有输入 → 收面板(表一 ⑤)")
         dismiss(reason: "别处输入")
+    }
+
+    /// ★★ 锁屏/睡眠强制收场(2026-10-15 病例:用户锁屏过夜,「屏幕在监视中」整夜 ✗✗
+    ///   + 显示器整夜没睡 ✗✗)—— 直播流长在面板手里,面板不收流就不停 ✗
+    ///   由组装根(GlanceApp)在锁屏/睡眠那一拍调用 ✓
+    func dismissForSystemSleep() {
+        guard PanelStageProbe.isVisible() else { return }
+        dismiss(reason: "锁屏/睡眠")
     }
 
     private func dismiss(reason: String) {

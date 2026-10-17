@@ -152,7 +152,7 @@ final class Snapshotter: ObservableObject {
         print("[T5] 屏幕录制权限未授权,后台截图停摆(每批跳过;弹窗只留给权限引导窗)")
     }
 
-    func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil) {
+    func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil, onlyMissing: Bool = false) {
         guard !windows.isEmpty else { return }
         // ★★ 2026-10-14 **这道闸重立**(用户定稿的三层降级:「app图标兑底 → 快照 → live,
         //   层层降级,任何场景都不显示异常」✓):
@@ -195,7 +195,11 @@ final class Snapshotter: ObservableObject {
         // 说明图不是被删的,而是"压根没存进去"或"过期了"。这两种原因对应完全不同的修法,
         // 所以直接量出来,不再靠推理(本次会话已经因为推理翻过两次车)。
         var missNoEntry = 0, missExpired = 0, missLost = 0
-        let stale = force ? windows : windows.filter { w in
+        // ★ onlyMissing(2026-10-14):面板在台上的补拍只认"缓存里真没有"的冷窗 ✓
+        //   (病例:maxAge:2 的本意是"只补新窗",实际语义成了"图超 2s 就重拍" ✗✗
+        //    ⇒ 面板开着期间每 1.5s 一轮 18 连拍 ✗✗✗ = 用户实报的掉帧 ✗)
+        let tail = force || onlyMissing
+        let stale = tail ? windows.filter { !onlyMissing || cache[$0.wid] == nil } : windows.filter { w in
             guard cache[w.wid] != nil else {
                 missNoEntry += 1
                 if everCaptured.contains(w.wid) { missLost += 1 }   // 拍到过却没留下来 = 真丢了
@@ -211,6 +215,7 @@ final class Snapshotter: ObservableObject {
         }
         let batch = stale
         let current = session
+        if isTraceEnabled { glog("[批次] 发单 force=\(force) maxAge=\(maxAge.map { String($0) } ?? "TTL") 批=\(current) 窗数=\(batch.count)") }
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             // **逐窗拍、逐张回主**(T86):整批拍完一次性合并 = 一批图同时到的爆发,
@@ -259,7 +264,10 @@ final class Snapshotter: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(250_000_000) * UInt64(attempt))
             let pending = missing // 值捕获:别把 var 提进并发闭包(Swift 6 会拒)
             await MainActor.run {
-                guard current == self.session else { return }
+                guard current == self.session else {
+                    if isTraceEnabled { glog("[批次] 作废 批=\(current) 现=\(self.session)(窗口集合变了,回填丢弃)") }
+                    return
+                }
                 self.precapture(pending, attempt: attempt + 1, force: force, maxAge: maxAge)
             }
         }
@@ -278,6 +286,7 @@ final class Snapshotter: ObservableObject {
         // 首图上屏时刻(相对按键):trace 下单独一行。逐张合并后它量的是
         // 第一张图落地的时刻,比旧的整批合并时刻更贴近用户第一次看见图的那一拍
         if first { SessionMarks.noteFirstThumb(batchSize) }
+        if isTraceEnabled { glog("[批次] 回填 wid=\(wid) 批=\(batch) ✓") }
     }
 
 
