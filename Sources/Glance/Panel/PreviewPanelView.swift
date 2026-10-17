@@ -942,8 +942,24 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             //   时机:与起流**并行**发出(不 await 到流之前 ✗,否则白等一次静帧的时间 ✓)
             Task { [weak self] in
                 guard let self else { return }
-                guard let cg = try? await SCScreenshotManager.captureImage(contentFilter: filter,
-                                                                          configuration: cfg) else { return }
+                // ★ 26+ 必须走 captureScreenshot ✗(2026-10-15 事故:captureImage 在 26 上
+                //   每次 anew 一个短命 stream ✗ = 「绕过选择器」权限弹窗瀑布 ✗✗
+                //   同一把尺子 = 同一套参数,不是同一个函数 ✗)
+                var cg: CGImage?
+                if #available(macOS 26.0, *) {
+                    let sc = SCScreenshotConfiguration()
+                    sc.width = cfg.width; sc.height = cfg.height
+                    sc.showsCursor = false
+                    sc.ignoreShadows = true
+                    sc.includeChildWindows = false
+                    let out = try await SCScreenshotManager.captureScreenshot(
+                        contentFilter: filter, configuration: sc)
+                    cg = out.sdrImage
+                } else {
+                    cg = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                     configuration: cfg)
+                }
+                guard let cg else { return }
                 self.queue.async { self.deliver(cg, wid: wid) }   // 与直播帧同一条上屏路 ✓
             }
             let s = SCStream(filter: filter, configuration: cfg, delegate: nil)

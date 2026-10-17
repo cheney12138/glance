@@ -185,6 +185,13 @@ enum PanelMotion {
             return Gear(select: .spring(response: 0.48, dampingFraction: 0.92),
                         slide: .spring(response: 0.52, dampingFraction: 0.94),
                         entrance: .spring(response: 0.40, dampingFraction: 0.92))
+        case "lab":      // 2026-10-16 用户 UX Lab(glance-ux-lab.html)带来的手感 ✓:
+                         //   顺滑缓出 + 轻微过冲(cubic-bezier .3,.9,.35,1.18 ✓)
+                         //   对照现状 fast(阻尼 0.60)弹跳感明显 ✗;lab ≈ 阻尼 0.88 的顺滑 ✓
+                         //   入场档保留现状(那个另有定案 ✗ 不跟这次手感走 ✓)
+            return Gear(select: .timingCurve(0.3, 0.9, 0.35, 1.18, duration: 0.22),
+                        slide: .timingCurve(0.32, 0.9, 0.34, 1.10, duration: 0.26),
+                        entrance: .spring(response: 0.16, dampingFraction: 0.62))
         case "snappy":   // 试下限(更快更弹:用来确认"是不是快到看不清")
             return Gear(select: .spring(response: 0.14, dampingFraction: 0.50),
                         slide: .spring(response: 0.16, dampingFraction: 0.55),

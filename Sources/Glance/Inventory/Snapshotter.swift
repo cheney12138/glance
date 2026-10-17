@@ -333,6 +333,39 @@ final class Snapshotter: ObservableObject {
                             w.wid, w.bounds.width, w.bounds.height, aspect, pxW, pxH, got))
             }
         }
+        // ★★ 2026-10-15 事故修正:26+ 必须走 captureScreenshot ✗✗
+        //   病例(用户,弹窗瀑布):把 26 分支删掉、"统一"成 captureImage 之后,每 1.5s 一轮
+        //   18 连拍 = 每拍一个短命 capture stream ✗(仓档:alt-tab #5786/#5861,26 上旧 API
+        //   每次 anew 一个 stream ✗)⇒ macOS 26.5 的「绕过无痕窗口选择器」权限门
+        //   **每个 stream 起来都要一次授权** ⇒ 桌面弹窗叠了几十层 ✗✗✗
+        //   教训:「同一把尺子」= 同一套**参数**(取景/尺寸/flags ✓),不是同一个**函数** ✗
+        //   26 的新 API 是系统要求 ✗ 不能为了一致性省掉分支 ✗
+        if #available(macOS 26.0, *) {
+            let cfg = SCScreenshotConfiguration()
+            cfg.width = pxW
+            cfg.height = pxH
+            cfg.showsCursor = false
+            cfg.ignoreShadows = true                 // 与 live 的 ignoreShadowsSingleWindow 同义 ✓
+            cfg.includeChildWindows = false          // 同一把尺子的 flags ✓
+            return await withCheckedContinuation { (cont: CheckedContinuation<(CGImage?, String?), Never>) in
+                let once = Once()
+                SCScreenshotManager.captureScreenshot(contentFilter: filter, configuration: cfg) { output, error in
+                    guard once.claim() else { return }
+                    if let error {
+                        cont.resume(returning: (nil, error.localizedDescription))
+                    } else if let img = output?.sdrImage {
+                        capturedSize = (img.width, img.height)
+                        cont.resume(returning: (img, nil))
+                    } else {
+                        cont.resume(returning: (nil, nil))
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) {
+                    guard once.claim() else { return }
+                    cont.resume(returning: (nil, "SCK 回调超时(1.2s 未回)"))
+                }
+            }
+        }
         let config = SCStreamConfiguration()
         config.width = pxW
         config.height = pxH

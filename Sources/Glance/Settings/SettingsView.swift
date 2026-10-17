@@ -166,6 +166,11 @@ struct SettingsView: View {
     }
 
     private var content: some View {
+        // ★ 视口高度不走 preference ✗(2026-10-15 病例:.background 上的 GeometryReader
+        //   在滚动视图上量出了 0 ✗✗,「到底规则」被 vh > 0 卡死,3fc5b7f 起从未生效 ✗)
+        //   ⇒ 包一层 GeometryReader,把 vh 当**布局期常量**传下去 ✓(无 preference 无坑 ✓)
+        GeometryReader { vp in
+        let vh = vp.size.height
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: SettingsMetrics.groupGap) {
@@ -188,10 +193,6 @@ struct SettingsView: View {
                             value: g.frame(in: .named(SettingsScrollSpace.name)).maxY)
                     })
             }
-            // 视口高度(ScrollView 自己的 frame ✓)—— 跟着上面那个哨兵一起判"到底" ✓
-            .background(GeometryReader { g in
-                Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
-            })
             // **关掉到顶回弹**(2026-09-19,用户录屏自诊:「滚到头之后回弹不顺畅,一卡一卡的」):
             // 帧账证明滚动期主线程很闲(P95 8.4ms@120Hz),磕绊出在系统橡皮筋动画本身的节奏,
             // App 摸不到它 —— 那就不要回弹:惯性到顶后顺滑减速停住。SwiftUI 没有这个开关,
@@ -245,8 +246,18 @@ struct SettingsView: View {
             // ★ 反向:**滚动 → 左侧导航跟着走**(2026-09-22 用户实报后新增;此前只有单向 ✓→✗)
             .coordinateSpace(name: SettingsScrollSpace.name)
             .onPreferenceChange(ContentBottomKey.self) { contentBottom = ($0 == .greatestFiniteMagnitude ? nil : $0) }
-            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
             .onPreferenceChange(GroupOffsetKey.self) { offsets in
+                // ⚠️ 临时量尺(2026-10-15,定位完删 ✗):无条件一发,报全量数值 ✗
+                if SpyProbe.count < 3 {
+                    SpyProbe.count += 1
+                    let la = page.groups.last.map { page.anchor($0) }
+                    glog(String(format: "[导航] 采样#%d: bottom=%@ vh=%@ lastOffset=%@ minOffset=%.1f",
+                                SpyProbe.count,
+                                contentBottom.map { String(format: "%.1f", $0) } ?? "nil",
+                                String(format: "%.1f", vh),
+                                la.flatMap { offsets[$0] }.map { String(format: "%.1f", $0) } ?? "nil",
+                                offsets.values.min() ?? 0))
+                }
                 guard CFAbsoluteTimeGetCurrent() > suppressNavSpyUntil else { return }   // 程序化滚动期间不回写
                 // ★ **到底规则**(2026-10-09 病例,见 `ContentBottomKey`):最后一组永远到不了那条线 ✗
                 //   三个条件**同时**成立才动手 —— 它们分别挡住三种误伤:
@@ -256,8 +267,8 @@ struct SettingsView: View {
                 //   (点了倒数第二组但因为到底而滚不动的情形:那次滚动在 `suppressNavSpyUntil` 里 ⇒
                 //    动画跑完就没新变化了 ⇒ 这里不会再把它改成最后一组 ✓)
                 let lastAnchor = page.groups.last.map { page.anchor($0) }
-                if let lastAnchor, let bottom = contentBottom, let vh = viewportHeight, vh > 0,
-                   (offsets.values.min() ?? 0) < -1, bottom <= vh + 1, (offsets[lastAnchor] ?? 0) > 40 {
+                if let lastAnchor, let bottom = contentBottom, vh > 0,
+                   (offsets.values.min() ?? 0) < -1, bottom <= vh + 2, (offsets[lastAnchor] ?? 0) > 40 {
                     if navSelection != lastAnchor { navSelection = lastAnchor }
                     return
                 }
@@ -267,6 +278,7 @@ struct SettingsView: View {
                     ?? offsets.min { $0.value < $1.value }?.key          // 一个都没越过(最顶上)⇒ 取最靠上的
                 if let current, navSelection != current { navSelection = current }
             }
+        }
         }
     }
 
@@ -1004,4 +1016,10 @@ struct ShortcutPane: View {
         if flags.contains(.control) { return "control" }
         return nil
     }
+}
+
+/// ⚠️ 临时量尺宿主(2026-10-15,定位完删 ✗):到底规则三条件数值,一次会话只报一发 ✓
+@MainActor
+enum SpyProbe {
+    static var count = 0
 }
