@@ -187,6 +187,22 @@ if sheen {
         //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
         //   里那层**同时**在转 ⇒ 用户那四格消元实验(3D/2D × 长度变/不变)**全部失效** ✗✗
         //   ⇒ 翻牌只由 `RingFlipEffect` 作用在**环里那块容器**上;玻璃/阴影/受光边在这一层保持不动 ✓
+        // ★★ 环溢出(2026-10-16 ✓ UX Lab app-switcher-ring ✓):玻璃**钉死框架** = contentSize
+        //   (病例:玻璃按内容自然宽自撑 ✗ 窗框封顶了 ✗ 玻璃不理 ✗ 窗口不裁溢出 ✗✗
+        //    ⇒ 屏幕上玻璃比窗框宽出一大截 ✗✗✗)
+        //   ⇒ 玻璃服从封顶宽 ✓ 图标条带超出玻璃的部分被 .clipped 掐掉 ✓
+        //   ★ 裁切框 = 玻璃自身 ✓ 含上下呼吸区 ✓(选中格放大头顶/下沿点阵都在玻璃内 ✓ 不受影响 ✓)
+        .frame(width: controller.contentSize().width, height: controller.contentSize().height)
+        .clipped()
+        .mask(
+            HStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .white], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 28)
+                Rectangle().fill(.white)
+                LinearGradient(colors: [.white, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 28)
+            }
+        )
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
         //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
@@ -202,6 +218,13 @@ if sheen {
     /// (2026-10-08 原 `segmentTransition` / `_segmentTransitionLegacy` 已删:
     ///  翻牌改由 `controller.ringFlipAngle` 参数驱动,挂在整个面板根上 —— 见 body 尾部 ✓
     ///  它们原来挂在 `iconStrip` 的 `.id() + .transition()` 上,只会翻"图标条"而且归不了 Glance 的设置 ✗)
+
+    /// ★★ 环溢出:主环条带平移量(2026-10-16 ✓)—— 条带与 puck 共用 ✓
+    private var mainRingOffset: CGFloat {
+        let vw = max(controller.contentSize().width - PanelMetrics.rowPadX * 2, 0)
+        return controller.ringStripOffset(launch: false, selectedIndex: controller.appIndex,
+                                          count: controller.groups.count, visibleW: vw)
+    }
 
     private var iconStrip: some View {
         // spacing 归零、格子自己吃掉左右各半个间隙(hitSlop),App 区两端再负 padding 收回来 ——
@@ -296,6 +319,12 @@ if sheen {
             }
             .padding(.horizontal, -PanelMetrics.iconGap / 2) // App 区首格左、末格右各收回半个间隙
         }
+        // ★ 环溢出:条带平移让选中保持居中 ✓ 左缘起排 ✓(与平移公式前提一致 ✓)
+        //   动画走 selectionAnimation ✓(开局第一帧返回 nil ⇒ 再唤起不滑移 ✓ 与 puck 同机制 ✓)
+        //   ⚠️ 不加 .clipped 在这一层 ✗(裁切在玻璃层 ✓ 这层剪会伤头顶/点阵 ✗)
+        .offset(x: mainRingOffset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.appIndex)
         // 主环 hover 的兜底轮询不挂在这里:TimelineView(.animation) 在静态窗口上**不跳帧**
         // (macOS 不给静止窗口排帧,"每帧"实际只是"有视图更新的那几拍"),兜不住
         // "界面静止、指针开始动"的那一刻 —— 帧拍已由控制器里的 60Hz 定时器统一驱动
@@ -332,7 +361,7 @@ if sheen {
     /// 几何/视觉/动效/落点数学全在那边,改它不用翻这个 500 行的视图 ✓)。
     /// 这里只负责"喂当前状态"。
     private var puck: some View {
-        Puck(offsetX: Puck.offsetX(appIndex: controller.appIndex),
+        Puck(offsetX: Puck.offsetX(appIndex: controller.appIndex) + mainRingOffset,
              entryRise: controller.contentEntryRise,
              visible: !controller.entrySelected,
              animation: controller.selectionAnimation(PanelMotion.slide),

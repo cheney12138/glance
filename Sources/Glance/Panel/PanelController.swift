@@ -106,11 +106,24 @@ final class PanelController: ObservableObject {
     /// X 与托盘锚点/确认涟漪同源(`PanelLayout.iconCenterX`)—— 三处各算一遍必然有一处歪着 ✓;
     /// y = 选中图标(含 14pt 上浮)的中心,与涟漪那条口径一字不差 ✓
     /// 视图每 30Hz 问一次 ⇒ 必须便宜:这里只有一次算术(没有事件、没有查询 ✓)
+    /// ★★ 环溢出:条带平移量(2026-10-16 ✓ UX Lab app-switcher-ring ✓)
+    ///   目标 = 选中格待在可视带中心 ✓;左右两端钳制 ✓
+    ///   条带在视图里 `.offset(x: 本值)` ✓;sheen/puck 的 x 同步 + 本值 ✓
+    func ringStripOffset(launch: Bool, selectedIndex: Int, count: Int, visibleW: CGFloat) -> CGFloat {
+        guard PanelLayout.ringOverflow, count > 0, visibleW > 0 else { return 0 }
+        let cw = ringContentWidth(launch: launch)
+        guard cw > visibleW else { return 0 }
+        let center = PanelLayout.iconCenterX(appIndex: selectedIndex, appCount: count, contentWidth: cw)
+        return max(min(visibleW / 2 - center, 0), visibleW - cw)
+    }
+
     func sheenCenterInContent() -> CGPoint? {
         guard isVisible, !entrySelected, groups.indices.contains(appIndex) else { return nil }
         guard ringFlipAngle == 0 else { return nil }      // 翻牌期间不画:圆心正在变宽,画了会飘 ✗
         let x = PanelLayout.iconCenterX(appIndex: appIndex, appCount: groups.count,
                                         contentWidth: contentSize().width)
+            + ringStripOffset(launch: false, selectedIndex: appIndex, count: groups.count,
+                              visibleW: contentSize().width - PanelMetrics.rowPadX * 2)
         return CGPoint(x: x, y: PanelMetrics.rowPadY + PanelMetrics.icon / 2 - PanelMetrics.iconLift)
     }
 
@@ -637,7 +650,9 @@ final class PanelController: ObservableObject {
         let stripBase = contentSize().width / s
         PanelMetrics.sessionCap = saved
 
-        var cap = availW / max(stripBase, 1)
+        var cap = PanelLayout.ringOverflow
+            ? CGFloat.greatestFiniteMagnitude                 // ★ 溢出模式:环永不缩 ✓
+            : availW / max(stripBase, 1)
         var worstAspects: [CGFloat] = []
         var worstN = 0
         var worstScale = CGFloat.greatestFiniteMagnitude
@@ -1191,7 +1206,12 @@ final class PanelController: ObservableObject {
             w = ringContentWidth(launch: entrySelected)
         }
         // 尾格(分割线 + 点阵)已随 T91 撤掉:入口靠键(↓),不再靠显眼的占位 ⇒ 不再留位
-        return NSSize(width: w, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
+        // ★ 环溢出:玻璃内容宽封顶 ✓(图标条带超出部分被玻璃裁切+平移 ✓)
+        var glassW = w
+        if PanelLayout.ringOverflow, let screen = contextScreen ?? NSScreen.main {
+            glassW = min(glassW, PanelLayout.ringVisibleCap(screenW: screen.frame.width))
+        }
+        return NSSize(width: glassW, height: PanelMetrics.rowPadY * 2 + PanelMetrics.icon)
     }
 
     /// 环内容在**玻璃**里的左缘(2026-09-22)。
@@ -1222,7 +1242,11 @@ final class PanelController: ObservableObject {
     ///        按两环更宽的那个开窗,换环只换**内容**(玻璃仍按各自环宽居中画 ✓),边缘一动不动 ✓
     /// 说话局(只剩芯片)不参与:那是"表三"的另一套尺寸,不跟环互换 ✓
     private func ringWindowWidth() -> CGFloat {
-        max(ringContentWidth(launch: false), ringContentWidth(launch: true))
+        let w = max(ringContentWidth(launch: false), ringContentWidth(launch: true))
+        // ★ 环溢出:窗宽同步封顶 ✓(与 contentSize 同一个 cap ✓ 两环更宽者封顶后仍为常数 ✓
+        //   「换环不变宽」不变量照常成立 ✓)
+        guard PanelLayout.ringOverflow, let screen = contextScreen ?? NSScreen.main else { return w }
+        return min(w, PanelLayout.ringVisibleCap(screenW: screen.frame.width))
     }
 
     /// 🔬 首帧探针(T91「一道白光」排查)——只回答一个问题:**上屏那一刻,我们的内容画上去了没有。**

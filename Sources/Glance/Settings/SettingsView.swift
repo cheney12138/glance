@@ -90,6 +90,8 @@ struct SettingsView: View {
     /// App 间距:选中放大后与左右邻居之间**还剩**多少净空(pt)。间隙由它倒推
     /// (旧名"图标呼吸感"是内部黑话,2026-09-15 按用户口径改成"App 间距")
     @AppStorage(Keys.panelIconClearance) private var iconClearance: Double = 13
+    /// 环溢出可视上限(个;默认 8 ✓ 只在溢出模式生效 ✓)
+    @AppStorage(Keys.panelRingOverflowMax) private var ringOverflowMax: Double = Double(KeyDefaults.ringOverflowMax)
     /// 悬停触感(键名来自 `GlanceCore.HapticPolicy.defaultsKey` ✓ 一个源,不写两遍 ✓)
     /// 触感强度档("light"/"medium"/"strong")
     @AppStorage(Keys.hapticStrength) private var hapticStrength = "medium"
@@ -308,6 +310,19 @@ struct SettingsView: View {
                             .frame(width: 150)
                             .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                         Text("\(Int(iconClearance)) pt")
+                    }
+                }
+                SettingsRow(title: "环显示上限",
+                            desc: "环溢出模式下可视区最多显示的 App 数(需开启环溢出)。",
+                            hairline: false) {
+                    HStack(spacing: 8) {
+                        Slider(value: Binding(
+                            get: { ringOverflowMax },
+                            set: { ringOverflowMax = $0.rounded() }), in: 4...16, step: 1)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text("\(Int(ringOverflowMax)) 个")
                             .font(SettingsFont.rowValue)
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()

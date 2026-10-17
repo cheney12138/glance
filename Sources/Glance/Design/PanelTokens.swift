@@ -783,6 +783,24 @@ enum PanelLayout {
     ///
     /// **唯一来源**:确认涟漪的圆心、指针高光要挖的洞、以及托盘的横向锚点都取它。
     /// 三处各算一遍的话,只要有一处漏改就会错位(而且错得很小,看不出来但一直歪着)。
+    // ★★ 环溢出模式(2026-10-16,用户拍板,UX Lab app-switcher-ring ✓):
+    //   App 太多不再缩小整环 ✓ 尺寸恒定 ✓ 环宽封顶 + 条带平移让选中保持居中 ✓
+    //   试法:defaults write com.cheney12138.macswitcher debug.ringOverflow -bool true ✓
+    static var ringOverflow: Bool {
+        UserDefaults.standard.bool(forKey: "debug.ringOverflow")
+    }
+    /// 溢出可视上限(个)。默认 8 ✓(设置面板「外观 → 环显示上限」可调 ✓)
+    static var ringOverflowMax: Int {
+        let v = UserDefaults.standard.object(forKey: Keys.panelRingOverflowMax) as? Int
+        return min(max(v ?? KeyDefaults.ringOverflowMax, 4), 16)
+    }
+    /// 环玻璃的宽度封顶 = 上限 N 个图标格 ✓(另受屏宽 88% 兜底 ✓)
+    static func ringVisibleCap(screenW: CGFloat) -> CGFloat {
+        let n = CGFloat(ringOverflowMax)
+        let countW = n * PanelMetrics.icon + max(n - 1, 0) * PanelMetrics.iconGap + PanelMetrics.rowPadX * 2
+        return min(countW, screenW * 0.88)
+    }
+
     static func iconCenterX(appIndex: Int, appCount: Int, contentWidth: CGFloat) -> CGFloat {
         RingGrid.iconCenterX(appIndex: appIndex, appCount: appCount, contentWidth: contentWidth,
                              icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)

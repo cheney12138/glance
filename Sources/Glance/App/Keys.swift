@@ -133,6 +133,8 @@ enum Keys {
     static let panelAppearance = "panel.appearance"
     /// `panel.iconClearance`
     static let panelIconClearance = "panel.iconClearance"
+    /// `panel.ringOverflowMax`:环溢出模式下可视带的 App 数上限(默认 8 ✓)
+    static let panelRingOverflowMax = "panel.ringOverflowMax"
     /// `panel.scrollSpeed`
     static let panelScrollSpeed = "panel.scrollSpeed"
     /// `panel.sheen`
@@ -214,6 +216,8 @@ enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true
     static let summonPop = true
+        /// 环溢出模式的可视上限(App 个数)。**8**:UX Lab 定稿 ✓
+        static let ringOverflowMax = 8
     /// 展示 Dock 常驻应用。**开**:未启动的 App 也能在环尾找到 ✓
     static let showLaunchables = true
     /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓
