@@ -38,7 +38,7 @@ final class PanelController: ObservableObject {
     /// 本局开局时刻(开局 0.6s 内是"开门过程":窗口要经过 0x0 → 芯片 → 全量 两次布局 ⇒ 不比较 ✓)
     private var sessionOpenedAt: CFAbsoluteTime = 0
     /// 托盘窗的显隐状态机(懒建:窗口是 buildPreviewPanelIfNeeded 时才有的)
-    private var trayChrome: ChromeWindow?
+    var trayChrome: ChromeWindow?
     /// 选中态动效的**上膛标识**:开局第一帧必须不上膛(否则会从上一局的残影位置滑过来)。
     /// 上面说的"上一局残影"只在 `puckEntersFromLeft = false`(承接模式)时才是**故意**的 ——
     /// 那种情况下上膛反而要提前,见 showPanel。
@@ -71,7 +71,7 @@ final class PanelController: ObservableObject {
     var panel: NSPanel?
     private var hostingView: ClickThroughHostingView<PanelView>?
     var previewPanel: NSPanel?
-    private var previewHostingView: ClickThroughHostingView<PreviewPanelView>?
+    var previewHostingView: ClickThroughHostingView<PreviewPanelView>?
     var contextScreen: NSScreen?
     var outsideClickMonitor: Any?
     /// 自己窗口的点击(全局监听看不见自己家的事件,见 `installOutsideClickMonitor`)
@@ -116,312 +116,6 @@ final class PanelController: ObservableObject {
 
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
     var expandedCount: Int { currentGroup?.windows.count ?? 0 }
-
-    // MARK: 启动区(方案 E「入口槽」,T83;设计稿 design/启动区实验台.html,用户 2026-09-16 拍板)
-    //
-    // 未启动 App = Dock 常驻且没在跑的(「无窗应用」是**在跑没窗**,这是两个概念,别混)。
-    // 它们不进主环 —— 主环是"切换的世界",一格 = 一个活跃 App;它们住在**入口槽后面的托盘里**:
-    // 托盘本来就承载"选中格的内容"(活跃格 → 窗口卡,入口槽 → 启动图标行),零新增语法。
-    // 常态下面板与今天一个像素不差(没有第二行);Tab 走到主环末尾再按一次 = 选中入口槽。
-    /// Dock 常驻且未在跑的 App(每局 begin 时取一次,按 Dock 顺序)
-    @Published private(set) var launchables: [DockAppsProvider.LaunchableApp] = []
-    /// 入口槽被选中(托盘切到启动行)
-    @Published private(set) var entrySelected = false
-    /// 启动行内的选中下标(nil = 入口槽选中但还没进到行内某格)
-    @Published private(set) var launchIndex: Int?
-    /// T91:"换环到未启动"的意图(四指轻点专用)。
-    /// 触发层那一发比后台枚举**先到**,名单还没装好 ⇒ 先记在这里,`finishBegin` 里兑现。
-    private var pendingLaunchRing = false
-    /// 意图的**出生时刻**。给意图加寿命是结构性兜底:它只可能活在"触发层比枚举先到"的那一瞬。
-    /// 病例(2026-09-17,用户实报「启动之后唤起了一次, 后面就变成启动环了」)—— 症状=意图活了不止一瞬。
-    /// 与其猜是哪条路漏了清,不如让**过期本身就等于丢弃**:这样无论漏清在哪,幽灵都活不过 1.5s。
-    private var pendingLaunchAt: CFAbsoluteTime = 0
-    private static let pendingMaxAge: Double = 1.5
-
-    /// **名单还没到、手已经松了**的那一次确认(2026-09-22 用户实报「快速 cmd tab 连续切换, 偶尔换不起来」)。
-    ///
-    /// 病例(日志铁证):
-    /// ```text
-    /// [2125575ms] [tap] flagsChanged kc=55 down=true  state=idle
-    /// [2125620ms] [tap] hotkey forward pressed …      → emit begin
-    /// [2125668ms] [tap] flagsChanged kc=55 down=false … → emit confirm
-    /// [2125668ms] [T6] 确认(空列表):面板关闭           ← 枚举(46–69ms)还没回来 ⇒ 什么都没换 ✗
-    /// ```
-    /// 枚举在**后台**跑(2026-09-22 之前就是:为了不卡 tap 回调 ✓),而"按下→松开"只要 40–60ms
-    /// ⇒ 快速 ⌘Tab 会跑在名单前面 ✗ ⇒ 确认时 `groups` 还是空的 ✓
-    /// 口径:**意图已经被接受,就必须执行** —— 先记下来,等名单落地(`finishBegin`)当场兑现 ✓
-    /// (与 `pendingLaunchRing` 同款:触发层比枚举先到的那一瞬,只记意图 ✓)
-    ///
-    /// ⚠️ 这里**不能**顺手 `dismiss()`:那会 `beginGeneration += 1` ⇒ 枚举回来直接被丢弃 ✗
-    ///    (所以这一局要留着等名单;万一名单永远不来,有 `confirmWaitWork` 兜底 ✓)
-    var confirmBeforeList = false
-    /// 本局名单是否已落地(区分"还没到"与"真的空")✓
-    var listReady = false
-    /// 等名单的兜底闹钟(见 `confirmBeforeList`)
-    var confirmWaitWork: DispatchWorkItem?
-
-    /// 段切换的行进方向(见 `SegmentTravel`)。PanelView 靠它挑过渡:
-    /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
-    @Published private(set) var segmentTravel: SegmentTravel = .direct
-
-    /// **整条环的翻牌角度**(0 = 正对;±`PanelMetrics.ringFlipLimit` = 侧立)。
-    ///
-    /// ★ 2026-10-08 用户口径:「换环要**整条环**翻(玻璃 + 图标一起),不是只翻图标」+「先做 88°」。
-    ///   为什么自己做而不用 `.transition`:系统「减弱动态效果」开着时 SwiftUI 会**自己**把过渡
-    ///   降级成淡入淡出,而 `\.accessibilityReduceMotion` 是**只读**的、覆盖不了 ✗
-    ///   ⇒ 用户实报「Glance 里开了强制完整动效,换环的翻牌还是只剩环变形」✗
-    ///   ⇒ 改成参数驱动(与托底 PuckView 同一套哲学):**设置说什么就是什么** ✓
-    @Published private(set) var ringFlipAngle: Double = 0
-
-    /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
-    /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
-    @Published private(set) var ringFlipTarget = false
-
-    /// **入场渐入的进度**(0 = 还没出现,1 = 落定)。
-    ///
-    /// ★ 2026-10-08:用户提「Spotlight 唤起有个 Q 弹的动效」⇒ 按 Apple 录屏**逐帧量**出来的参数实现:
-    ///   起始比最终宽 ~7%、130ms 内 ease-out 收位、并快速淡入 ✓(与我第一版"从小涨大"的方向相反 ✓)
-    /// ⚠️ 只作用于**环里那块内容**,不动玻璃 —— 原生玻璃不能被变换(材质会掉 ✗)
-    /// ⚠️ 起跳**延后一拍**(见 showPanel):提前起跳会踩 AppKit 的"Update Constraints in Window pass"
-    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一活路 ✓)
-    ///   渐入虽不动几何,这条**照旧保留** —— 它保护的是"上屏那一拍的布局",与动什么无关 ✓
-    @Published private(set) var entryFadeProgress: Double = 1
-
-    /// 入场渐入的总开关(设置 → 通用 →「唤起渐入」✓;键名仍是 `panel.summonPop`,不改 ✓)
-    /// ⚠️ 老版这里还要求"起始倍率 != 1.0"才有意义 —— 渐入没有倍率了,那个条件随之作废 ✓
-    private var summonFadeEnabled: Bool {
-        UserDefaults.standard.object(forKey: Keys.panelSummonPop) as? Bool ?? KeyDefaults.summonPop
-    }
-
-    /// **入场渐入的进度**(0 = 还没出现 · 1 = 落定)。视图拿它当 `.opacity` —— **不动任何几何** ✓
-    ///
-    /// 史(2026-10-08 一天之内):这里先后是「整块横向 1.04→1.00 的拉伸」→「带 duang 的弹簧」
-    /// →「纯 transform 的横向橡皮筋」;用户三评之后定为**渐入**:
-    ///   「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢, 比之前的两段弹簧要好」
-    /// 换掉的**硬理由**(不是审美):动几何 ⇒ 命中区(用落定尺寸)与画面(被拉伸)**不一致** ✗
-    ///   —— 9 个 App 那局最外侧那颗被推离 ≈22pt,而格距才 68pt ⇒ 想点的那颗可能正好在缝里 ✓
-    ///   渐入没有这个病:从第一帧起"看到的就是点得到的" ✓
-    var entryFade: Double { entryFadeProgress }
-
-    /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
-    ///
-    /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
-    /// ⚠️ 曾经以为"逐帧改玻璃宽度会掉材质" ✗ —— 那是**假结论**:当时容器层还挂着
-    ///   `rotation3DEffect`,玻璃一直在被转 ✗(见 PanelView 尾部那段注释)。
-    ///   残留删掉之后,逐帧改宽度是安全的 ✓
-    /// ⚠️ 它只在翻牌期间有意义:`contentSize()` 在"角度为 0"时一律以 `entrySelected` 为准
-    ///   (唯一真源 ⇒ 万一哪里漏了同步,静止态也自愈 ✓)
-    @Published private(set) var ringWidthBlend: Double = 0
-
-    /// 每次换环 +1;收尾回调靠它判过期(又按了一次 ⇒ 旧回调丢弃 ✓)
-    private var ringFlipToken = 0
-    /// 已经走完"侧立那一拍"的 token(兜底定时与完成回调谁先到都只算一次 ✓)
-    private var ringFlipMidDone = -1
-
-    /// "换环进行中"的窗口(2026-09-22):托盘内容在换环那一拍要**当拍**换(与环的翻牌同步 ✓),
-    /// 而 hover 换组时要**滑**(用户实报「hover app 托盘只会闪现, 没有滑动了」✓)。
-    /// 用时间窗而不是开关:换环是同步一瞬间的事,没有"结束"回调可挂 ✓
-    private var ringSwapUntil: CFAbsoluteTime = 0
-    var isRingSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < ringSwapUntil }
-
-    /// 启动行 hover 的**帧拍兜底**(与 SheenOverlay 同一哲学:非 key 窗口的事件投递靠不住
-    /// —— 先"哑"后"迟钝"两次实咬 —— 每帧问一次全局指针位置,自己算格子,事件丢了也有帧拍)。
-    /// 几何与 `hoverLaunchAt` 同源;由 PreviewPanelView 里的 TimelineView 每帧驱动,
-    /// 只在启动区活着时跑。与逐格 onHover 并存:两边写同一个 launchIndex,等值守卫不抖。
-    ///
-    /// ⚠️ 本函数运行在 Canvas 的**绘制闭包**里(视图更新中)——**不许在这里直接写 @Published**,
-    /// 否则 Runtime 警告 "Publishing changes from within view updates" 并引发布局递归
-    /// (2026-09-16 实机两连:警告 + `-layoutSubtreeIfNeeded` 递归)。算好下标,异步一跳再落账。
-    func pollLaunchHover() {
-        guard entrySelected, isVisible, !launchables.isEmpty,
-              let previewPanel, previewPanel.isVisible, !previewPanel.ignoresMouseEvents,
-              let glass = previewContentRect() else { return }
-        let p = NSEvent.mouseLocation
-        guard glass.contains(p) else { return }
-        let (rows, cols) = launchLayout(count: launchables.count)
-        let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
-        // 玻璃 → 内容:水平从 trayPadX − iconGap/2 起算(行两端负 padding),纵向自玻璃下沿 + trayPadBottom
-        let x = p.x - glass.minX - PanelMetrics.trayPadX + PanelMetrics.iconGap / 2
-        let yUp = p.y - (glass.minY + PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
-        guard x >= 0, yUp >= 0 else { return }
-        let c = max(0, min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)))
-        let r = max(0, min(max(rows - 1, 0), Int(yUp / rowH)))
-        let i = r * cols + c
-        guard launchables.indices.contains(i), i != launchIndex else { return }
-        let hovered = i
-        Task { @MainActor in
-            // 异步一跳后核对:这一跳的间隙里可能已关面板/换局
-            guard self.entrySelected, self.launchables.indices.contains(hovered) else { return }
-            self.launchIndex = hovered
-            trace("[T6] 启动区选中(帧拍): [\(hovered + 1)/\(self.launchables.count)] \(self.launchables[hovered].name)")
-        }
-    }
-    /// 主环 hover 的**帧拍兜底**(与 pollLaunchHover / pollWindowHover 同一套哲学):非 key 窗口的
-    /// 鼠标事件投递靠不住 —— 先"哑"后"迟钝"两次实咬,而主环此前只靠逐格 onHover,是三块里
-    /// 唯一没有帧拍的。键盘操作必然让 strip 重渲染过,tracking area 哑掉,第一下 hover 被吞
-    /// ⇒ 键盘→鼠标交接"慢半拍"(2026-09-18 用户实报)。每帧问一次全局指针位置、自己算格子:
-    /// **指针动了 = 当帧接管**(事件一炮没到也接管);指针没动 = 闸还关着,键盘优先
-    /// (见 panelOpenPoint —— 键盘唤起时鼠标恰好压在某格上,不许它抢选中)。
-    /// 落账直接走 hoverApp(闸 / 等值守卫 / 拍图 / 托盘更新全在那边,不另立一本);
-    /// 这里只做几何 + 等值预判 —— 每帧都进 hoverApp 会把 bumpIdle 的闲置计时天天清零,
-    /// "指针停在面板上 = 永不闲置"是顺手改出来的语义,不是设计(见 bumpIdle)。
-    func pollRingHover() {
-        // ★ 换环翻牌期间指针轮询跳过:此刻"哪一环"还在切换中,算出来的格子属于旧环 ✗
-        guard ringFlipAngle == 0 else { return }
-        guard isVisible, hintText == nil,
-              let panel, panel.isVisible, !panel.ignoresMouseEvents,
-              let glass = panelContentRect() else { return }
-        let p = samplePointer()   // 帧拍顺带采样指针位移(谁后动听谁的账本)
-        guard glass.contains(p) else { return }
-        // ★ **热区内缩**(2026-09-19 用户实报「碰到边边就选中」):hover 选中要求指针
-        //   落在格子内缩后的中心区(见 pointerInRingHotZone);点按确认走点按手势不受影响。
-        let x = p.x - glass.minX - ringContentLeftInset - PanelMetrics.rowPadX + PanelMetrics.iconGap / 2
-        guard x >= 0 else { return }
-        let i = RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap)
-        guard pointerInRingHotZone(i) else { return }
-        // 绘制闭包里**读**状态没问题(禁的是写),等值预判放同步侧:没变化连 Task 都不发
-        let current = entrySelected ? (launchIndex ?? -1) : appIndex
-        guard i != current else { return }
-        let hovered = i
-        Task { @MainActor in self.hoverApp(hovered, source: "帧拍 hover") }   // 异步一跳(病例见 pollLaunchHover 头注)
-    }
-
-    /// **指针帧拍的心跳**(2026-09-18 实测翻案):TimelineView(.animation) 在**静态窗口上不跳帧**
-    /// —— macOS 不给静止的窗口排帧,所谓"每帧兜底"实际只在"有视图更新的那几拍"生效。
-    /// 实测账:warp 挪指针后 300ms 内一次采样都没发生,直到下一次键盘动作触发重绘才补上
-    /// —— 这就是"键盘操作完、鼠标接管慢半拍"的真身:兜底只在界面刚动过时活着,
-    /// 而恰恰是"界面静止、指针开始动"的那一刻最需要它。
-    /// 现在面板在台期间挂 60Hz 定时器,统一驱动主环与托盘的指针重定位;散场即停。
-    private var hoverPollTimer: DispatchSourceTimer?
-
-    /// 光晕要用的颜色 = **选中的那个 App 图标的主色**（2026-09-24 用户口径：
-    /// 固定白高光 → 图标本色的晕染 ✓）。nil = 那枚图标基本是灰的 ⇒ 视图退回白色 ✓
-    ///
-    /// 视图每 30Hz 会问一次 ⇒ 必须便宜：`IconTint` 内部有缓存，这里是纯查表 ✓
-    /// 未启动段里那些 App 没在跑（没有 pid）⇒ 用 `launch:<id>` 当缓存键 ✓
-    /// 上面那个颜色属于哪个 App（**同一个源** ⇒ 日志与实际画出来的必然一致 ✓）
-    var sheenTintOwner: String? {
-        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
-            return launchables[li].name
-        }
-        guard groups.indices.contains(appIndex) else { return nil }
-        return groups[appIndex].appName
-    }
-
-    var sheenTint: NSColor? {
-        if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
-            let app = launchables[li]
-            return IconTint.color(for: app.icon, key: "launch:\(app.id)")
-        }
-        guard groups.indices.contains(appIndex) else { return nil }
-        let g = groups[appIndex]
-        return IconTint.color(for: IconProvider.art(for: g.pid).image,
-                              key: "pid:\(g.pid):\(g.bundleID ?? "")")
-    }
-
-    private func startHoverPolling() {
-        guard hoverPollTimer == nil else { return }
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(4))
-        t.setEventHandler { [weak self] in
-            guard let self, self.isVisible else { return }
-            self.updateStripClickGate()   // Bug2:指针在托盘玻璃里就让长条对合成器隐身
-            self.pollRingHover()
-            self.resyncSelectionUnderPointer()
-            // ★ 2026-09-24:未启动段那一行原本靠它自己视图里的 TimelineView 每帧轮询
-            //   (而且那个 TimelineView **没有 paused**)現在三处 hover 轮询共用这一个定时器 ✓
-            self.pollLaunchHover()
-        }
-        t.resume()
-        hoverPollTimer = t
-    }
-
-    private func stopHoverPolling() {
-        hoverPollTimer?.cancel()
-        hoverPollTimer = nil
-    }
-
-    /// 启动区这局关了(设置开关/名单为空)—— 视图与键盘路径都靠它短路
-    private var launchSectionEnabled: Bool { !launchables.isEmpty }
-
-    /// **Tab 能不能进未启动段**(2026-09-18 用户要求,默认开)。关掉后 Tab/滚轮走到主环端点
-    /// 就地折返(moveApp 的 else 分支照旧取模绕回),段只能靠 ↓/↑ 进出 —— 模型 C 的"逻辑一条环"
-    /// 在这条开关下退化成"两条独立环"。滚轮走 handle(.next/.prev) 同路,自动跟着这个开关走
-    private var tabEntersLaunchSection: Bool {
-        UserDefaults.standard.object(forKey: Keys.panelTabEntersLaunchSection) as? Bool ?? true
-    }
-
-    // (2026-09-19)「悬停回退单」机制整段退役 —— 病例:四指/键盘进段后,指针不在面板上,
-    // 0.12s 后段被它静默收掉,白名单 App 还没确认就回到主环(用户实报「白名单的 App 没办法启动」,
-    // 日志:段内选中 → 半分钟后主环选中 → 确认,中间无任何段操作)。回退单是"入口槽 +
-    // 悬停预览"时代的语义(指针离开启动区 = 用户不要了);模型 C 里段只能由 ↓/四指/Tab
-    // **主动**进入,指针在不在面板上与段的生死无关 —— 段保持粘性,由 ↑/Tab/Esc/闲置超时收场。
-    /// 本局内被 H 隐藏的 App。为什么要记:
-    /// 隐藏是**异步**的(0.2–0.3s 动画),这期间重枚举**还看得见它的窗** ——
-    /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
-    var hiddenPIDs: Set<pid_t> = []
-
-    /// 本局已被我们**退出**的 App(pid)。
-    ///
-    /// 和 hiddenPIDs 是**同一个病,换了个动作**:系统的 AX 窗口表在进程死透之前
-    /// 那 0.2–0.3s 里仍然报得出它的窗,而 `mergeRefreshed` 对"重枚举里新出现的 App"
-    /// 的处理是**挂到尾部**(不插队)—— 于是刚被处决的 App 在环尾复活。
-    ///
-    /// 病例(2026-09-16,用户实报):"cmd q 退出 app, 此时面板还没关闭, 就又出现在尾部了,
-    /// 重新唤起面板后不再出现。" 日志一字不差:
-    ///     [T12] 退出应用: zoom.us
-    ///     [T12] 本地先摘: 8 个 App / 12 窗 → 7 个 App / 11 窗
-    ///     [处决后] 7 个 App,选中 [2/7] 大象          ← 对了
-    ///     [处决后] 8 个 App,选中 [2/8] 大象          ← 0.7s 后那次重枚举把它捞了回来
-    ///     [T12] 处决后顺序 [… | DataGrip | zoom.us]   ← 复活的它挂在**末位**
-    /// "重新唤起就没了"也对得上:新一局重新枚举,那时进程真的死透了 —— 所以这条记忆
-    /// 只活一局(begin 里清空),不跨局。
-    var quitPIDs: Set<pid_t> = []
-
-    /// 本局已被我们**关掉/最小化**的窗(CGWindowID),等着复核。
-    ///
-    /// 病例(2026-09-17,用户实报):"点击关闭之后, 面板没关闭, 就又出现了."
-    /// 日志一字不差:`[T12] 关闭窗口: DataGrip — Confirm Exit` → `本地先摘 17 窗 → 16 窗`
-    /// → 0.2s 后 `[处决后顺序]` 它又回来了,来回三次。
-    /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
-    /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
-    var purgedWIDs: Set<CGWindowID> = []
-    /// **本局被我们缩小(Cmd+M)过的窗与 App**(2026-09-22 用户实报)。
-    ///
-    /// 病例:「唤起面板的时候, cmd m 会缩小, 这时候面板上的 app 是没变化的, 松开之后会立马把缩小的窗口
-    ///   又换起来」✗ —— 最小化窗本来就不在列表里(`optimisticRemoval(.minimize)` ✓),但**组还在环里** ✓
-    ///   ⇒ 松开时走 `confirmSelection` 的"无窗应用 ⇒ 激活它"那条路 ✗ ⇒ 刚缩下去的窗又被抬起来 ✓
-    /// 这与当初 `H` 那个 bug **是同一个病**(「松开 ⌥ 又把刚隐藏的 App 唤起来了」✓)⇒ 照它的先例办:
-    ///   **本局不许再唤醒它** ✓;顺带把 App 标记上(用户第 2 条诉求:标记被缩小收纳的 app ✓)
-    /// ⚠️ **跨局常驻**(2026-09-22 用户第 2 条修正:「角标要常驻」✗ 只活一局是错的):
-    /// 一扇窗被收进 Dock 之后,**只要它还在 Dock 里就该有记号** ✓ —— 与"这一局"无关 ✓
-    /// ⇒ 记 `wid → pid`(pid 用来在 App 退出后剪掉 ✓,wid 用来认"还是那一扇窗" ✓)
-    var minimizedWIDs: [CGWindowID: pid_t] = [:]
-    /// 环上要打"已收纳"记号的 App(由上面那张表推出来 ✓ —— 单一源 ✓)
-    var minimizedPIDs: Set<pid_t> { Set(minimizedWIDs.values) }
-    /// 让 `minimizedWIDs` 的变化**一定会**触发重绘(它是普通字典,不会自己 publish ✗)
-    @Published var marksRevision = 0
-    /// 环上这枚图标该打什么记号 —— 判据在领域层(`PanelMarkPolicy` ✓),这里只喂两个事实 ✓
-    ///
-    /// ⚠️ 优先级 2026-09-22 反转过(用户:「又退回不可见的角标了, 不是遗照灰」✗):
-    ///   原来"隐藏优先" ⇒ 一个 App 同时满足"有窗收在 Dock 里"与"系统说它 hidden"时,显示角标 ✗
-    ///   而用户刚按的是 ⌘M,要看见的是"那扇窗收起来了" ⇒ **有收纳就显示灰** ✓
-    func mark(for pid: pid_t) -> PanelMark? {
-        PanelMarkPolicy.mark(hidden: hidingPIDs.contains(pid), tucked: minimizedPIDs.contains(pid))
-    }
-
-    /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓
-    ///
-    /// ⚠️ 它与上面那张**常驻**表是**两种寿命**,别混(2026-09-22 用户两条实报互相约束):
-    ///   · ① 「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗ ⇒ 本局不许唤醒 ✓(否则那次缩小等于白按)
-    ///   · ② 「关闭再唤起之后, 选中 app 拉不起窗口了」✗ ⇒ **另起一局**的确认必须能把它拉回来 ✓
-    /// ⇒ 记号(视觉)常驻 ✓;守卫只活一局 ✓ —— 用户的手离开键盘之后再确认,就是"我要它回来" ✓
-    var sessionMinimizedPIDs: Set<pid_t> = []
-    var didObserveHiding = false
-
-    /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
-    /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
-    @Published var hidingPIDs: Set<pid_t> = []
 
     // MARK: - 触发层入口
 
@@ -487,7 +181,7 @@ final class PanelController: ObservableObject {
     @Published private(set) var hintText: String?
     private var hintWork: DispatchWorkItem?
 
-    private func showHint(_ text: String) {
+    func showHint(_ text: String) {
         hintWork?.cancel()
         // ★ 不带动画(2026-09-17 修「环一闪而过」):
         // 原来包着入场弹簧 —— 环的退场(opacity 1→0)被弹簧拖住 ~0.3s,窗口上屏时环还
@@ -520,7 +214,7 @@ final class PanelController: ObservableObject {
     private static let idleLimit: Double = 3.0
 
     /// 任何"用户在动它"的动作都调它(键盘 / 指针 / 滚轮)。
-    private func bumpIdle() {
+    func bumpIdle() {
         idleWork?.cancel()
         idleWork = nil
         let mods = NSEvent.modifierFlags
@@ -898,7 +592,7 @@ final class PanelController: ObservableObject {
     /// 本会期托盘可用的**玻璃**空间(2026-09-14 换行那轮引入)。
     /// 宽 = 可视宽 − 两侧安全边;高 = 长条**头顶**那一半 —— 长条是垂直居中的,
     /// 托盘挂在它上沿之上,所以只有 (可视高 − 长条高) / 2 可用,不是整个屏高。
-    private var trayRoomW: CGFloat = 1440
+    var trayRoomW: CGFloat = 1440
     private var trayRoomH: CGFloat = 420
 
     /// 把本会期的尺寸上限算出来(放不下就收紧,见 `PanelMetrics.sessionCap`)。
@@ -1064,7 +758,7 @@ final class PanelController: ObservableObject {
                                    rows: rows, cols: cols)
     }
 
-    private static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
+    static func maxRowWidth(_ widths: [CGFloat], rows: Int, cols: Int) -> CGFloat {
         TrayGrid.maxRowWidth(widths, rows: rows, cols: cols, gap: PanelMetrics.thumbGap)
     }
 
@@ -1269,7 +963,7 @@ final class PanelController: ObservableObject {
     /// **只要保证第一个容器里的卡片不动**就算解决」✓
     /// ⇒ 这一支直接报**屏幕绝对 x**:第一张卡(应当恒定 ✓)与第二张卡(应当随组变 ✓)。
     /// 口径:`窗左缘 + shadowPadPop + trayPadX`,再按槽宽/间隙推第二张。
-    private func logRowAlignment(_ reason: String) {
+    func logRowAlignment(_ reason: String) {
         guard isTraceEnabled, let panel = previewPanel, let g = currentGroup else { return }
         let content = previewContentSize(for: g)
         let rowW = content.width - PanelMetrics.trayPadX * 2
@@ -1506,7 +1200,7 @@ final class PanelController: ObservableObject {
     ///   而命中区/帧拍仍在按"内容从玻璃左缘开始"算 ✗ ⇒ 整排选中**右移**,
     ///   用户实报:「目前未启动环指针 hover 选中的位置, 跟 app 是对不齐的」✓
     /// ⇒ 命中的横坐标必须**同时**扣掉这个居中偏移(主环偏移为 0 ⇒ 只有未启动环看得出 ✓)。
-    private var ringContentLeftInset: CGFloat {
+    var ringContentLeftInset: CGFloat {
         let w = ringContentWidth(launch: entrySelected)
         return (ringWindowWidth() - w) / 2
     }
@@ -1729,7 +1423,7 @@ final class PanelController: ObservableObject {
         self.hostingView = hosting
     }
 
-    private func makeChromePanel(keyable: Bool = true) -> NSPanel {
+    func makeChromePanel(keyable: Bool = true) -> NSPanel {
         let p = GlancePanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -1758,662 +1452,25 @@ final class PanelController: ObservableObject {
         return p
     }
 
-    // MARK: - 预览浮窗(分容器构型:与主面板同皮不同窗,中心正对选中 App 头顶)
+    // MARK: - 确认与放弃
 
-    private func buildPreviewPanelIfNeeded() {
-        guard previewPanel == nil else { return }
-        previewPanel = makeChromePanel(keyable: false)
-        if let previewPanel { trayChrome = ChromeWindow(previewPanel, role: "托") }
-        // 托盘低一层:它向下的阴影尾会伸进长条的呼吸区,demo 里长条(后一个兄弟)盖住托盘阴影,
-        // 托盘在上就会把那层灰纱糊到长条玻璃顶上——"黑影"换个地方复活
-        // (2026-09-19 Bug2 期间做过"翻到长条前面"的判别实验,已还原:点击死区由
-        // `updateStripClickGate` 的合成器闸解决,不需要动 z 序)
-        previewPanel!.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
-        let hosting = ClickThroughHostingView(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
-        hosting.pad = PanelMetrics.shadowPadPop
-        hosting.autoresizingMask = [.width, .height]
-        previewPanel!.contentView = hosting
-        previewHostingView = hosting
-    }
+    /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
+    /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
+    /// ⚠️ 2026-09-22 修:这里原来读 `DebugFlags.pinPanelOnRelease`(**淘汰的调试键**)✗
+    /// ⇒ 设置/菜单里打开的「保持面板打开」,到这一句就断了:面板外点击照样关面板 ✗
+    /// 现在两个读取点都走 `Keys.pinOnRelease`(唯一来源 ✓)
+    var pinPanel: Bool { Keys.pinOnRelease }
+    /// 长条点击闸(2026-10-16 平移到 PanelDestructiveKeys ✗ 存储属性不能进 extension ⇒ 留在主类 ✓)
+    var stripClickGateOn = false
 
-    /// 托盘内容尺寸 = 题头行 + 一排 128 缩略图 + 内边(16/18/14)。
-    /// 与 PreviewPanelView 的 .frame(previewContentSize) 同源。
-    /// 带参数的版本给"本会期尺寸上限"用:它要量**所有组**里最宽的那个,而不是当前选中组。
-    /// T88:卡宽随窗比例,尺寸按每张卡的实际宽算(不再有 count × 定尺的省事)
-    func previewContentSize(for group: AppGroup?) -> NSSize {
-        guard let group, !group.windows.isEmpty else { return .zero }
-        let sizes = Self.cardSizes(group.windows)
-        // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
-        let widths = sizes.map(\.width)
-        let (rows, cols) = trayLayout(widths: widths)
-        // 高度 = 各行最大卡高之和 + 行距(卡片大小不一 ⇒ 不能用"行数 × 常量" ✗)
-        let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
-        return NSSize(
-            width: Self.maxRowWidth(widths, rows: rows, cols: cols) + PanelMetrics.trayPadX * 2,
-            height: PanelMetrics.trayPadTop
-                + rowH.reduce(0, +) + max(CGFloat(max(rows, 1)) - 1, 0) * PanelMetrics.trayRowGap
-                + PanelMetrics.trayPadBottom
-                // ★ 2026-10-13:容器与环之间那**固定的一段空气** ✓
-                //   (内容贴底摆 ⇒ 不论几行,芯片到环的距离一样 ✓;它不进 `trayFitScale` ✓)
-                + PanelMetrics.trayBottomBreath
-        )
-    }
-
-    /// 启动行(方案 E v2)的托盘尺寸:**主环的图标节距**(icon + iconGap),不是窗口卡的壳 ——
-    /// v1 借窗口卡壳被用户实评否决(「丑的要死」:一枚小图标浮在大灰卡上,空得难受)。
-    /// v2 = 第二条主环,尺寸数学与主环同源
-    func previewContentSize(launchCount n: Int) -> NSSize {
-        guard n > 0 else { return .zero }
-        let (rows, cols) = launchLayout(count: n)
-        let c = CGFloat(cols)
-        let r = CGFloat(max(rows, 1))
-        return NSSize(
-            width: c * PanelMetrics.pitch - PanelMetrics.iconGap
-                + PanelMetrics.trayPadX * 2,
-            height: PanelMetrics.trayPadTop + r * PanelMetrics.icon
-                + max(r - 1, 0) * PanelMetrics.trayRowGap + PanelMetrics.trayPadBottom
-                + PanelMetrics.trayBottomBreath
-        )
-    }
-
-    /// 启动行的行 × 列:与 `trayLayout` 同一套"放得下的最少行数"逻辑,只是格距换成图标节距。
-    /// (数学同源,不许各算各的 —— 同 trayLayout 头上的那条规矩)
-    func launchLayout(count n: Int) -> (rows: Int, cols: Int) {
-        TrayGrid.fitRows(count: n,
-                         cellPitch: PanelMetrics.pitch,
-                         padW: PanelMetrics.trayPadX * 2 - PanelMetrics.iconGap,
-                         roomW: trayRoomW,
-                         maxRows: PanelMetrics.trayMaxRows)
-    }
-
-    /// 当前托盘该显示的内容的尺寸(窗口卡 / 启动行,随选中格切换)
-    func previewContentSize() -> NSSize {
-        return entrySelected ? previewContentSize(launchCount: launchables.count) : previewContentSize(for: currentGroup)
-    }
-
-    /// 托盘窗几何的**唯一来源**(P0-2):尺寸与原点都在 `TrayGeometry` 里算,这里只负责喂输入。
-    /// 原来这里有一份"窗口尺寸"的算法 —— 它与 `previewFrame()` 的 x、与视图的内容尺寸是三本账,
-    /// 只要取整规则或取数来源差一点就互相改(实机:一局 100+ / 104 / 335 次重排)⇒ 已并入 TrayGeometry ✓。
-    /// 面板**内容**(玻璃)在本屏坐标里的矩形。面板窗口 = 内容 + 四周 shadowPadStrip,所以窗口往内收
-    /// 一圈就是玻璃。与 `previewContentRect()` 同一个口径(ADR-0006 的推论:凡判"指针/点击在不在"都用内容矩形)。
-    func panelContentRect() -> NSRect? {
-        guard let p = panel, p.isVisible else { return nil }
-        return p.frame.insetBy(dx: PanelMetrics.shadowPadStrip, dy: PanelMetrics.shadowPadStrip)
-    }
-
-    /// 托盘**内容**(玻璃)在本屏坐标里的矩形。窗口可能比内容大,所以凡是判"托盘在哪"的地方
-    /// (指针重定位、面板外点击)都必须用这个,不能用窗口 frame。
-    func previewContentRect() -> NSRect? {
-        guard let p = previewPanel, p.isVisible else { return nil }
-        // ★★ 2026-10-08 病例(用户:「之前修复过的有个 bug 又出现了 —— 切换到未启动环,选中一个 app 之后,
-        //   指针在**面板之外**移动 hover,也能做 app 选中」):
-        //   未启动环里托盘**没有内容** ⇒ 走 `previewFrame() == nil` 那条路 ⇒ 内容隐藏
-        //   (`alphaValue = 0` + `ignoresMouseEvents = true`,2026-09-21 为了省掉窗口排序而定 ✓)。
-        //   但它的**窗口还留在台上** ⇒ `isVisible` 仍是 true ✗ ⇒ 这个函数照样吐出一块
-        //   **看不见的地板**的矩形 ✗ ⇒ 三个消费者全中招:
-        //     · `resyncSelectionUnderPointer()` ⇒ 指针在面板之外(那扇隐藏托盘的位置)照样改选中 ✗
-        //     · 点击闸(`长条点击闸 开…点击让给托盘`)⇒ 点那块空地会把 app **启动**掉 ✗
-        //     · 面板外点击判据 ⇒ 拿它当"点在托盘里" ⇒ 该收场时不收场 ✗
-        //   真机复现(2026-10-08):托盘 window layer=100 **alpha=0.00**,日志却打
-        //   `[T6] 视图挪位后指针重定位(启动区): [3/5] JetBrains Toolbox`,松手直接把它启动了 ✗
-        //   ⇒ 收口收在**门口**(这个函数),而不是去每个调用方补一行 ——
-        //     调用方以后还会加,门口的判据只有一个 ✓(同一课:见 previewFrame 头注的"守卫住在门口")
-        if trayChrome?.isContentHidden ?? false { return nil }
-        guard p.alphaValue > 0.01, !p.ignoresMouseEvents else { return nil }   // 双保险:与上面同源 ✓
-        let c = previewContentSize()
-        guard c.width > 0, c.height > 0 else { return nil }
-        // 内容在窗口里:水平居中、**底部对齐**(与窗口等尺寸时 = 今天的布局,一个像素不差)
-        return NSRect(x: p.frame.midX - c.width / 2,
-                      y: p.frame.minY + PanelMetrics.shadowPadPop,
-                      width: c.width, height: c.height)
-    }
-
-    /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
-    private var trayOverflowLogged = false
-    /// 托盘本局是否已经上屏过(只为上面那行日志:区分"首次渐入"与"后续更新" ✓)
-    private var trayShownOnce = false
-
-    /// 托盘正中 = 长条正中(demo 的 .switcher-wrap 是 column 居中,托盘不跟图标滑移);
-    /// 超界时**只在玻璃层面**收进语境屏;视觉缝 = seam。
-    ///
-    /// ★ 2026-09-14 修「窗口一多,最左边那张预览卡被推出屏幕」:
-    ///
-    /// 旧写法是 `min(max(desired, area.minX + 12), area.maxX - size.width - 12)` —— 边界里的
-    /// `size` 是**窗口**宽 = 玻璃 + 两侧 `shadowPadPop`(96pt)的**透明呼吸区**。透明区根本不渲染,
-    /// 它越出屏幕什么也看不见,拿它算"放不放得下"是算错了对象;更要命的是**呼吸区一旦把可用宽吃穿,
-    /// 两条边界就反向**(lo > hi),`min(max())` 静默退化成"把右缘钉在 area.maxX - 12":
-    ///
-    ///   实测(14" MBP,屏宽 1512,6 扇窗 → 会话上限把 scale 收到 113.5%):
-    ///     玻璃 1464 + 呼吸区 192 = 窗口 1656  >  可用 1488
-    ///     → 窗口 x = -156,玻璃左缘 **-60**,右缘 1404(离屏右还白空 108)
-    ///     → 最左那张卡左缘 -35:卡被切掉 35pt,托盘的左圆角与左边距整片出屏,右侧却对着空气
-    ///
-    /// 现在把约束换成玻璃:只要玻璃放得下(会话上限保证了这一点),**一定居中且不出屏**。
-    private func previewFrame() -> NSRect? {
-        // 入口槽选中时托盘显示启动行,与"当前组有窗"互斥地撑起托盘 T91:换环后环里就是那些 App,托盘**收起**(它们没有窗可预览)。
-        // ⚠️ 2026-09-17:说话时**不要**让托盘出现 —— 用户实拍「先出现了 2 个芯片」,
-        // 而且托盘那本尺寸账与面板不同源 ⇒ 紧接着就是 Update Constraints 崩溃。
-        // 芯片只由面板那一扇窗承担。
-        //
-        // ★ 守卫必须住在**这里**(2026-09-17 修「预览窗岿然不动」):说话局的 orderOut
-        // 曾经写在 finishBegin 里,而 showPanel 末尾的 updatePreview() 会把它**再拉起来**
-        // (托盘上屏的唯一入口就是 updatePreview → 这里)。补丁打在调用方 = 每个新调用点
-        // 都会让 bug 复活;打在门口 = 谁来都出不去。
-        // 🔬 调试键 debug.hideTray:整个托盘不出现(用来**单测纯环上浮**是否掉帧)。
-        //   放在门口(与下面那批守卫同一处)—— 打在这里,任何调用方都绕不过去。
-        //   `defaults write com.cheney12138.macswitcher debug.hideTray -bool true` / delete 即装回
-        guard !DebugFlags.hideTray else { return nil }
-        guard hintText == nil, !entrySelected, expandedCount > 0, let panel,
-              let area = contextScreen?.visibleFrame else { return nil }
-        // ★ P0-2:几何**只问一处**(TrayGeometry)。这里不再算尺寸/位置,也不做取整 ——
-        //   取整规则(尺寸向上、原点向下)住在那个类型里,别处改了也不会分叉 ✓。
-        // ★★ 2026-10-13 用户裁定(第三、四次明说):「变化的始终是容器的宽和高」——
-        //   改前用 `trayMaxContentSize`(本局**所有组**里最大的那个内容)⇒ 容器/玻璃按本局最大撑开 ✗
-        //   病例(用户实拍访达那组 8 窗):
-        //   ```
-        //   窗=2625x505 · 内容=285x184 · 本局max=2432x344
-        //   ⇒ 玻璃比卡片宽出一大截 ⇒ 用户:「太宽了, 收窄一点」/「边距还是有问题」✓
-        //   ```
-        //   ⇒ 改成**跟着当前组**收(入口槽那扇也一样 ⇒ 用 `previewContentSize()` ✓,它已按选中状态分支 ✓)
-        //   ⚠️ 代价(与旧 ADR-0006 相反,已请用户确认 ✓):换组时会**改一次窗框尺寸**
-        //      ⇒ 实测这个动作用 0.1–0.4ms(主线程 ✓),且内容贴底 ⇒ 位置不动、只有玻璃左右收 ✓
-        //     —— 即“旧口径:窗框是一局的不变量”改成了“窗框跟着当前组走” ✓
-        let maxContent = previewContentSize()
-        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
-        if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
-            trayOverflowLogged = true
-            glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")
-        }
-        return geo.frame
-    }
-
-
-    func updatePreview() {
-        // 🔬 分段计时(2026-09-21):"指针换选中 13–30ms"到底花在哪一段 —— 只在总量 >3ms 时打一行。
-        //   病例:托盘更新平时 0.30ms ✓,但 176 个样本里 13 个 ≥10ms ✗;两个图像缓存都没干掉它 ⇒ 拆段量。
-        let __t0 = CFAbsoluteTimeGetCurrent()
-        var __prev = __t0
-        var __segs: [String] = []
-        func __mark(_ s: String) {
-            let n = CFAbsoluteTimeGetCurrent()
-            __segs.append(String(format: "%@ %.1fms", s, (n - __prev) * 1000))
-            __prev = n
-        }
-        // ★ S1 接线:把"当前该活的窗口"交给流池(它只管起流收帧,不参与绘制)。
-        //   选这里是因为 updatePreview 是**唤起 + 每次换 app/换窗**的唯一公共出口。
-        // 卡片底图预缩放到"卡片像素尺寸"⇒ 托盘重建时不再 decode/缩放(见 CardImageCache)。
-        // 目标尺寸 = 卡片那套"不放大"的口径(与视图里的 imageBox 同一算法,免得预热出的图与绘制不一致)。
-        // (「座」的模糊预热门已随座整体退役 —— 2026-09-24 深夜遮罩改成容器自己的静态雾檐,
-        //   见 `PanelColors.thumbHaze`;垫图(S2'')同日退役 ⇒ live 开时快照**不采也不显示**,
-        //   这条预热只在快照链(live 关)下有意义 ✓。)
-        // ★ 顺带修一处笔误(2026-09-24):下面原来手算 `min(1, max(宽比, 高比))` ✗ ——
-        //   "不放大"的口径是 **min**(CardSizing.size ✓);max 会把图预热到**超过卡片高**的尺寸
-        //   ⇒ 渲染时键对不上 ⇒ 预热整批白算。直接调同一个函数,不再手抄公式 ✓。
-        if !LivePreviewPool.enabled {
-            let shots = groups.flatMap { $0.windows }.compactMap { w -> (wid: CGWindowID, source: NSImage, target: CGSize)? in
-                guard let img = Snapshotter.shared.cache[w.wid] else { return nil }
-                return (wid: w.wid, source: img,
-                        target: PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect))
-            }
-            CardImageCache.shared.prewarm(shots)
-        }
-        __mark("预热")
-        if !entrySelected {
-            // ★★ 2026-09-21 修正(S1.2 → S1.3):**只预热"当前这一组"的窗口**,不再预热整个环。
-            // 病历(用户实报「卡的,要死,不仅唤起切换不流畅,选中之后打开也会卡半秒」):
-            //   预热整个环 ⇒ 一局起 **13 条**捕获会话 ✗ ⇒
-            //     ① 开场:13×40ms 错峰起流 ≈ 520ms(唤起不流畅)
-            //     ② 收场:13 条会话一起拆(系统级工作)⇒ **确认后卡半秒**(日志 `全部停流 … 共 13 条`)
-            //     ③ 稳态:13 条在采 ⇒ 切换不流畅
-            //   ⇒ 换来的只是"hover 到任意 app 都零延迟";而池本来就有 **5s keepAlive** ✓ ⇒
-            //     在同一批 app 之间来回 hover 根本不会重启流 ✓ —— 那个收益**不需要**全环预热 ✓。
-            //   代价:第一次进某个 app,卡片会先显示静默态(实测首帧 36–74ms)✓ 可接受。
-            // ★ A 修(2026-09-24):盒子随名单一起交给池 —— 出流像素规格的**输入**与卡片盒
-            //   同一份账(`record.bounds` ⇒ `PanelMetrics.thumbSize` ✓),池不再从 SCWindow.frame 重算 ✗
-            let items = (currentGroup?.windows ?? []).map {
-                (wid: $0.wid, aspect: $0.aspect,
-                 box: PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect))
-            }
-            if items.isEmpty {
-                LivePreviewPool.shared.stopAll(reason: "环里没有窗口")
-            } else {
-                // 选中的那一扇按用户档位,其余 5fps(成本 = 1×档位 + (N-1)×5fps)
-            let sel = currentGroup?.windows.indices.contains(winIndex) == true
-                ? currentGroup?.windows[winIndex].wid : nil
-            LivePreviewPool.shared.sync(items, selected: sel)
-            }
-        } else {
-            LivePreviewPool.shared.stopAll(reason: "入口槽选中(启停生活动)")
-        }
-        __mark("池")
-        let __tf = CFAbsoluteTimeGetCurrent()
-        guard let frame = previewFrame() else {
-            // ★★ 2026-09-21 定版:**没内容也不要 orderOut**。
-            //   病例(分段计时):`orderFront` 在 hover 途中被调用 **27/33 次** ✗,托盘窗重排 157 次 ✗
-            //   —— 因为"没内容"(hover 到无窗应用 / 说话局)时我 orderOut 了它,下一个 app 又 orderFront ✗
-            //   每次窗口排序 4–24ms,且都落在滑块弹簧正在跑的那一帧 ⇒ 掉帧。
-            //   ⇒ 改用 **alpha 0 + 忽略鼠标**:窗口留在台上,显/隐只是图层属性(微秒级 ✓)。
-            //   真正的 orderOut 只留在**整局收场**那一处(现在由 ChromeWindow 的 teardown 承担)。
-            trayChrome?.setContentHidden(true)      // 内容隐藏 = 只改图层属性(不再收窗,见 ChromeWindow)
-            return
-        }
-        __segs.append(String(format: "previewFrame %.1fms", (CFAbsoluteTimeGetCurrent() - __tf) * 1000))
-        __prev = CFAbsoluteTimeGetCurrent()
-        let __tb = CFAbsoluteTimeGetCurrent()
-        buildPreviewPanelIfNeeded()
-        __segs.append(String(format: "buildPanel %.1fms", (CFAbsoluteTimeGetCurrent() - __tb) * 1000))
-        __prev = CFAbsoluteTimeGetCurrent()
-        guard let previewPanel else { return }
-        // 换组只换内容,窗不滑(demo 行为);入场由 SwiftUI 播放。
-        // 帧一样就不 setFrame:hover 每格都来一次,白白发一轮窗口布局
-        // ★ 2026-10-08 可观测:托盘上屏这一拍,人眼看到的"它是不是从淡到实"取决于
-        //   ① 此刻入场进度(entryFadeProgress,0 = 全透明)② 它是不是第一次上屏。
-        //   这两件事以前只能靠盯屏猜 ⇒ 打一行(只在**真正转场**时打,不是每帧 ✓)
-        if isTraceEnabled, previewPanel.alphaValue < 0.5 || !trayShownOnce {
-            glog(String(format: "[托盘] 上屏 · 入场进度 %.2f · 首次=%@(与环同一个源 ✓)",
-                        entryFadeProgress, trayShownOnce ? "否" : "是"))
-        }
-        trayShownOnce = true
-        previewPanel.alphaValue = 1
-        let before = previewPanel.frame
-        // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
-        // (整块 tray 内容重排 + 后备存储重分配)。实机日志里 `[工] 键盘换选中 主线程 13–26ms`
-        // 基本都出在这里,这会直接吃掉 1–1.5 帧 —— 入场上浮时再按一下 Tab 就"顿"一下
-        traceCost("托盘改尺寸") {
-            setFrameIfNeeded(previewPanel, frame)
-            // 🔬 临时探针(2026-10-10 · 修"关一扇窗就错位"用):**同一拍**把四个数并排打出来 ✓
-            //   为什么需要它:读代码显示两侧本来已经分开(内容跟当前组 ✓ / 窗框跟一局 max ✓),
-            //   可屏幕上确实是错的 ⇒ 中间还有一个我没看见的数在带偏它 ✗ ⇒ 先量,不猜 ✓
-            if isTraceEnabled {
-                let content = previewContentSize()
-                let wins = currentGroup?.windows ?? []
-                let (r, c) = trayLayout(widths: wins.map { PanelMetrics.thumbWidth(aspect: $0.aspect) })
-                let pf = previewPanel.frame
-                let w = String(format: "%.0fx%.0f@%.0f,%.0f", pf.width, pf.height, pf.minX, pf.minY)
-                glog("[托] 窗=\(w) · 内容=\(Int(content.width))x\(Int(content.height)) · 网格=\(r)x\(c)"
-                     + " · 组窗数=\(wins.count) · 本局max=\(Int(trayMaxContentSize.width))x\(Int(trayMaxContentSize.height))")
-            }
-        }
-        __mark("setFrame")
-        // ★★ 2026-09-21 真凶(分段计时抓到):`orderFrontRegardless()` 在**每次 hover 更新**都被调用 ✗
-        //   ⇒ AppKit 窗口排序 4–35ms/次 ✗(日志:[工] 托盘分段 … **orderFront 34.8**)。
-        //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套
-        //   borderless + nonactivatingPanel + level=.popUpMenu 的组合上它**不可靠**(常常报 false),
-        //   于是每次更新都重排一次窗口。⇒ 改为**自己记账**:上屏一次就记下,只有 orderOut 才清掉。
-        trayChrome?.place()                          // 一整局只 orderFront 一次(其余靠 alpha)
-        __mark("orderFront")
-        // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
-        let __tr = CFAbsoluteTimeGetCurrent()
-        if previewPanel.frame != before { resyncSelectionUnderPointer() }
-        __segs.append(String(format: "resync %.1fms(调用了: %@)",
-                             (CFAbsoluteTimeGetCurrent() - __tr) * 1000,
-                             previewPanel.frame != before ? "是" : "否"))
-        __prev = CFAbsoluteTimeGetCurrent()
-        __mark("尾")
-        let __total = (CFAbsoluteTimeGetCurrent() - __t0) * 1000
-        if __total > 3 {
-            glog(String(format: "[工] 托盘分段 共 %.1fms | %@", __total, __segs.joined(separator: " · ")))
-        }
-    }
-
-    /// 视图在指针底下**自己挪位**时,SwiftUI 不会补发 hover(它只在指针移动时发声)→
-    /// 选中态停在旧位置,用户读作"指针移过去了但选中不跟,要等一下"。
-    ///
-    /// 病例(2026-09-14,用户报"⌘Tab 起来后选多窗口 App,再移向对应窗口约 0.5s 延迟"):
-    /// 日志里每一对 `hover 到窗` → `窗口选中(指针)` 都相差 **0ms**,说明我们处理零延迟;
-    /// 而托盘**换组会换宽度**(1 扇 288pt、2 扇 540pt,各自按长条中线居中)→
-    /// 卡片整体平移 ~126pt,比一张卡还宽 —— 指针其实已经骑在另一张卡上,
-    /// 却没有任何事件告诉我们(手还在动,但一直落在"同一张卡"里)。
-    ///
-    /// 所以:尺寸变了之后,**自己按指针位置重判一次**,不依赖 hover。
-    /// 长条(图标)不走这条路:本局 App 数不变,长条宽度就是常量,图标不会在指针底下来回挪。
-    ///
-    /// ⚠️ 驱动方有**两处**(2026-09-18 起):① `updatePreview` 里窗框变化时补判一次(原有);
-    /// ② PreviewPanelView thumbGrid 的**帧拍兜底**(与 pollLaunchHover 同一套 —— 托盘换内容后
-    /// tracking area 哑掉、hover 事件丢失,正是用户实报「鼠标接管窗口选择慢半拍」的主因)。
-    ///
-    /// ⚠️ 2026-09-18 修**多行盲区**:原来 `y <= thumbH` 只认得第一行 —— 托盘两行以上时
-    /// 第 2 行永远命不中。它以前只在窗框变化时被调一次、而 hover 事件平时兜着,所以没炸;
-    /// 升级成每帧兜底后必须自己会走多行网格(行距 = 卡高 + 行隙,行内左对齐,
-    /// 与 thumbGrid 的 VStack/HStack 同一分布)。
-    private func resyncSelectionUnderPointer() {
-        // ★ 换环翻牌期间指针轮询跳过:此刻"哪一环"还在切换中,算出来的格子属于旧环 ✗
-        guard ringFlipAngle == 0 else { return }
-        guard isVisible else { return }
-        samplePointer()                                        // 托盘帧拍每帧路过:顺手采样指针位移
-        guard pointerMayTakeOver() else { return }             // 键盘后动中,指针停着不许抢(与 hover 同一道闸)
-        // 托盘两种内容(窗口卡 / 启动图标行)共用同一套卡壳几何,只有名单不同 —— 几何算一份
-        let count: Int; let names: [String]
-        if entrySelected {
-            count = launchables.count; names = launchables.map(\.name)
-        } else if let g = currentGroup {
-            count = g.windows.count; names = g.windows.map(\.title)
-        } else { return }
-        // 同上:只有一格时也要能选中它(循环才需要 > 1)
-        guard count > 0 else { return }
-        let p = NSEvent.mouseLocation
-        // 窗框 ≠ 玻璃(窗口按整局最大布局开,内容底部居中)→ 必须用内容矩形
-        guard let glass = previewContentRect(), glass.contains(p) else { return }
-        // 玻璃 → 内容:视图是 .padding(top: trayPadTop, horizontal: trayPadX, bottom: trayPadBottom),
-        // 卡片那一横条因此从玻璃下沿 + trayPadBottom 起算
-        let x = p.x - glass.minX - PanelMetrics.trayPadX
-        let yUp = p.y - glass.minY - PanelMetrics.trayPadBottom - PanelMetrics.trayBottomBreath
-        guard x >= 0, yUp >= 0 else { return }
-        if entrySelected {
-            // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
-            let (rows, cols) = launchLayout(count: count)
-            // 同一个颠倒(见窗口卡那段的病例):行号要从**顶**往下数 ✓
-            let bandFromBottom2 = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let r = max(0, max(rows, 1) - 1 - bandFromBottom2)
-            let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
-            guard launchables.indices.contains(i), i != launchIndex else { return }
-            bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
-            launchIndex = i
-            // ★ 悬停触感(2026-09-22 用户实报「预览容器的 hover 没做震感吗」):
-            //   托盘**实际走的是帧拍这条路**(逐格 `.onHover` 早就"实测会哑" ⇒ 见 hoverWindow 的注释),
-            //   第一版把触感挂在 `hoverWindow` 里 ⇒ 等于挂在了用不到的那条路上 ✗
-            //   托盘两种内容(窗口卡 / 启动图标行)都算"预览容器" ⇒ 同一个事件 ✓
-            Haptics.fire(.hoverPreviewThumb)
-            trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
-        } else {
-            // 窗口卡:T88 卡宽随窗比例,按**每张卡的实际宽**走查命中;
-            // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
-            guard let g = currentGroup else { return }
-            let sizes = Self.cardSizes(g.windows)
-            let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
-            let (rows, cols) = trayLayout(widths: widths)
-            // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
-            // ★★ 2026-10-13 病例(用户实报:「鼠标在第一排第二个选不中, 选中的是第二排」✓):
-            //   `yUp` 是**从内容底往上**量的,所以下面循环数出来的行号是**从下往上**的 ✗
-            //   而视图(VStack)的行是**从上往下**排的 ⇒ 两排时整块**上下颠倒** ✗
-            //   ⇒ 循环得到的是"离内容底第几条带",真正的行号 = rows − 1 − 带号 ✓
-            var bandFromBottom = 0
-            var rowTop: CGFloat = 0
-            let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
-            for k in 0..<max(rows, 1) where yUp >= rowTop + rowH[k] + PanelMetrics.trayRowGap {
-                rowTop += rowH[k] + PanelMetrics.trayRowGap
-                bandFromBottom = k + 1
-            }
-            let r = max(0, max(rows, 1) - 1 - min(max(rows, 1) - 1, bandFromBottom))
-            let start = r * cols
-            let end = min(start + cols, widths.count)
-            guard start < end else { return }
-            var cursor: CGFloat = 0
-            var hit: Int?
-            for j in start..<end {
-                let w = widths[j]
-                // ★★ 2026-10-13 病例(用户:「预览窗口边缘选中错位到相邻的这个问题还是存在」✓):
-                //   卡片之间那道缝(thumbGap)原来**整条判给下一张** ✗
-                //   ⇒ 在第一张卡的右侧边缘扫过时,高亮会跳到第二张 ✓(点击路径一直是"归最近那张" ✓
-                //     见 thumbGrid 的"行级点击"注释 —— 两条路口径不一致本身就是病 ✗)
-                //   ⇒ 缝以中线为界:左半归左边那张、右半归右边那张 ✓
-                if x < cursor + w + PanelMetrics.thumbGap / 2 { hit = j; break }
-                cursor += w + PanelMetrics.thumbGap
-            }
-            hit = hit ?? (end - 1)      // 行最右缘 ⇒ 归最后一张(也是"最近"的那张 ✓)
-            // 卡片高亮已交回 `.onHover` ⇒ 这里只留"未命中"的日志(不再写 winIndex ✓)
-            guard hit != nil else {
-                // 玻璃内但没命中卡片(点在 padding/行间隙):节流打一行,给"点击吞没"定位用
-                if CFAbsoluteTimeGetCurrent() - Self.lastCardMissLog > 0.5 {
-                    Self.lastCardMissLog = CFAbsoluteTimeGetCurrent()
-                    trace("[T6] 卡片未命中 (x=\(Int(x)) yUp=\(Int(yUp)) 行=\(r) start=\(start) end=\(end))")
-                }
-                return
-            }
-            // ★★ 2026-10-13 病例(用户第五次报,并红框标出范围:「指针移动到红框的范围内之后,
-            //   就会选中到右边的卡片」✓):
-            //   托盘卡片的高亮有**两个写入者** —— 视图的 `.onHover`(按卡片真实帧 ✓ 最准)
-            //   与本函数(按指针坐标重算 ✗)。两者只要差几十 pt,就会在卡内偏右的地方先跳过去 ✗
-            //   量过两次都对不上(2026-10-13 那两轮:视图行左缘 122.5 vs 命中假设 122.9 只差 0.4pt,
-            //   但用户现场仍能稳定复现 ⇒ 说明差在**别处**(行内偏移/换组后的旧帧),而这条重算本来就
-            //   是"内容在指针底下换了"的兜底 —— 为了兜一个罕见场景,天天让用户吃"选错卡"的亏 ✗
-            //   ⇒ 卡片高亮**只认 `.onHover`**(用户眼睛看到的那张 ✓),本函数不再写它 ✓
-            //   代价:换组后指针不动时,高亮会停在旧卡上,直到指针动一下 ✓(可接受 ✓ 点击路径不受影响 ✓)
-        }
-    }
-
-    nonisolated(unsafe) static var lastCardMissLog: CFAbsoluteTime = 0
-
-    /// 帧拍兜底入口(与 `pollLaunchHover` 并排):窗口卡网格的**每帧**指针重定位。
-    /// 为什么只做异步一跳:本函数跑在 Canvas 的绘制闭包里(视图更新中)——
-    /// **不许在这里直接写 @Published**,否则 Runtime 警告 + `-layoutSubtreeIfNeeded`
-    /// 布局递归(2026-09-16 实机两连的病例,见 pollLaunchHover 头上的注释)。
-    /// 落账在 `resyncSelectionUnderPointer`,它自己带全部门卫(在台上 / 指针挪过窝 / 等值守卫)。
-    // MARK: - 选中移动(键盘与 hover 共写同一状态,谁后动谁说了算)
-
+    // MARK: 平移回迁的存储属性(2026-10-16 重构:extension 不能有存储属性 ✗)
     /// 滚轮 / 双指滑动 = 面板里的「Tab」。事件由 **navTap** 转来(会话期才存在的那个 tap,
     /// 它把滚动吞掉,所以底下的 App 收不到),动作仍走 Tab 那条路(`handle(.next/.prev)`)。
-    private var lastScrollAt: TimeInterval = 0
-    /// 节流间隔**由设置里的"速度(次/秒)"算出**:interval = 1 / speed。
-    /// 滑杆线性映射的是**速度**而不是间隔 —— 否则慢端几乎不动(两者是倒数关系)。
-    /// 默认 10 次/秒 = 原来的 0.10s,升级后手感不变。
-    private var scrollInterval: TimeInterval {
-        let speed = UserDefaults.standard.object(forKey: Keys.panelScrollSpeed) as? Double ?? 10
-        return 1.0 / max(3, min(20, speed))
-    }
-
-    /// 两条细节照抄 LumaRing 实测经验:惯性滚动不算一次操作;节流(一次滑动会送几十个事件)。
-    /// 吞事件的部分在 navTap —— 这里只管"要不要动选中"。
-    func handleScrollEvent(_ e: NSEvent) {
-        bumpIdle()
-        guard panel?.isVisible == true else { return }   // 双保险:面板不在就什么都不做
-        // 设置开关(默认开)。用 object(forKey:) 取,而不是 bool(forKey:) —— 后者的
-        // "没写过"和"写成 false"是同一个值,默认值就没法表达(与 switch.advanceOnOpen 同一处理)。
-        guard UserDefaults.standard.object(forKey: Keys.switchScrollMovesSelection) as? Bool ?? true else { return }
-        guard e.momentumPhase == [] else { return }
-        let dx = e.scrollingDeltaX, dy = e.scrollingDeltaY
-        let d = abs(dy) >= abs(dx) ? dy : dx
-        guard abs(d) > 0.1 else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastScrollAt > scrollInterval else { return }
-        lastScrollAt = now
-        trace("[T6] 选中(滚轮/双指滑): dx=\(Int(dx)) dy=\(Int(dy)) → \(d < 0 ? "下一组" : "上一组")")
-        handle(d < 0 ? .next : .prev)
-    }
-
-    private func moveApp(_ delta: Int) {
-        guard !groups.isEmpty else { return }
-        // ★ 键盘换选中也要打"选中变更"点(2026-09-21 修):原来只有指针 hover 会打 ⇒
-        //   用户实报的复现是**「tab 切到大象那一拍掉帧」**,而这条路径**从不打点** ✗
-        //   ⇒ 我们前几轮量到的长帧全是指针那一路的,压根没量到用户报的那一下 ✗✗
-        FrameProbe.lastHoverMark = CACurrentMediaTime()
-        traceCost("键盘换选中") {
-            // 模型 C(ADR-0013):**逻辑上只有一条环** —— 主环走完 `Tab` 自然进入未启动段,
-            // 未启动段走完接回主环;`⇧Tab` 反向对称。两条旧裁定(2026-09-16「不经 Tab 到达」、
-            // spec 落地清单 #4)已随入口槽的死一起翻案,全程见 ADR-0013。
-            // 段切换 = entrySelected 翻转 + applyRingSwap(尺寸/内容同一拍,实验台 ⑤);
-            // 段内移动不碰窗框(与主环同一条纪律)。
-            let backward = delta < 0
-            if entrySelected {
-                let n = launchables.count
-                guard n > 0 else {              // 局中名单清空(最后一个也启动完了):段没了
-                    appIndex = min(appIndex, groups.count - 1); winIndex = 0
-                    setSegment(false, travel: .backward, launchIndex: nil)  // ↑ = 向上一环(反向滑)
-                    trace("[T91] 段切换: 未启动名单已空 → 主环 [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
-                    return
-                }
-                // launchIndex == nil(↓/四指刚进段还没选)时,nil 的语义是"站在段门口":
-                // 正向 Tab 从第一格进,反向 ⇧Tab 从最后一格进 —— 而不是从段尾绕回主环!
-                // 病例(2026-09-19):↓ 进段后按 Tab 被 cur = n-1 的兜底直接推出段,
-                // 白名单 App 用键盘永远选不中 ⇒「没办法启动」。
-                let cur = launchIndex ?? (backward ? n : -1)
-                let next = cur + delta
-                if next < 0 {                   // 段头反向
-                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环最后一格 ✓
-                        appIndex = groups.count - 1; winIndex = 0
-                        setSegment(false, travel: .backward, launchIndex: nil)
-                        trace("[T91] 段切换(⇧Tab): 未启动 → 主环 [\(groups.count)/\(groups.count)] \(groups[appIndex].appName)")
-                    } else {                    // ★ 设置关着 ⇒ 不跨段,在**段内绕回**末格(与主环绕回同一种手感 ✓)
-                        launchIndex = n - 1
-                        trace("[T6] 选中(键盘 Tab): 未启动 [\(n)/\(n)] \(launchables[n - 1].name)(段内绕回)")
-                    }
-                } else if next >= n {           // 段尾正向
-                    if tabEntersLaunchSection { // 设置开着 ⇒ 跨回主环第一格(绕环不断)✓
-                        appIndex = 0; winIndex = 0
-                        setSegment(false, travel: .forward, launchIndex: nil)
-                        trace("[T91] 段切换(Tab): 未启动 → 主环 [1/\(groups.count)] \(groups[appIndex].appName)")
-                    } else {                    // ★ 设置关着 ⇒ 段内绕回首格 ✓
-                        launchIndex = 0
-                        trace("[T6] 选中(键盘 Tab): 未启动 [1/\(n)] \(launchables[0].name)(段内绕回)")
-                    }
-                } else {
-                    launchIndex = next
-                    trace("[T6] 选中(键盘 Tab): 未启动 [\(next + 1)/\(n)] \(launchables[next].name)")
-                }
-            // ★ 2026-09-22 修「回得来、去不了」:门禁要**对称** ——
-            //   用户口径:设置关着时 Tab **两个方向都不该跨段**(进出口交给 ↑/↓ 与四指 ✓)。
-            //   而当时只有这一边挂了门禁、另一边从来没挂 ⇒ 才出现"去不了、回得来" ✗
-            } else if !backward, appIndex == groups.count - 1, launchSectionEnabled, tabEntersLaunchSection {
-                setSegment(true, travel: .forward, launchIndex: 0)
-                trace("[T91] 段切换(Tab): 主环 → 未启动(选中 [1/\(launchables.count)] \(launchables[0].name))")
-            } else if backward, appIndex == 0, launchSectionEnabled, tabEntersLaunchSection {
-                setSegment(true, travel: .backward, launchIndex: launchables.count - 1)
-                trace("[T91] 段切换(⇧Tab): 主环 → 未启动(选中 [\(launchables.count)/\(launchables.count)] \(launchables[launchables.count - 1].name))")
-            } else {
-                appIndex = (appIndex + delta + groups.count) % groups.count
-                winIndex = 0
-                // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
-                trace("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
-                traceCost("  ↳拍图") { refreshSnapshotForSelection() }
-                traceCost("  ↳托盘更新") { updatePreview() }
-            }
-        }
-    }
-
-    /// 主线程耗时记账(GLANCE_TRACE=1)。与 FrameProbe 分工:这里量的是"同步阻塞了多久",
-    /// 那里量的是"帧间隔有没有崩" —— 两者对上就是结论
-    private static let traceOn = isTraceEnabled
-
-    /// trace 灰度里的行也带毫秒时间戳(原来它用裸 print,复盘时对不上别的时间)
-    func trace(_ line: String) {
-        guard Self.traceOn else { return }
-        glog(line)
-    }
-
-    /// 主线程耗时记账。**两道阈值,平时也开着**(2026-09-15 改,借 AltTab `MainThreadStall` 的口径):
-    ///   · trace 全开(诊断中)→ 超过 **2ms** 就报,细到能做对照;
-    ///   · 平时 → 超过 **16ms(一帧)** 才报 —— 那才是"用户看得见"的门槛。
-    ///
-    /// 为什么平时也要开:以前它是 trace 灰度的,于是**只有我在调的时候才有账**,用户平时卡了没记录;
-    /// 更要命的是"关掉 trace 之后到底还卡不卡"这件事**测不出来**(量尺跟着一起关了)。
-    /// 代价:每次调用两次取表(约几十纳秒),不超阈值不打印。
-    /// 计时括号。**认父子关系**(2026-09-15 修):子账由父账自己汇总在一行里打出来。
-    ///
-    /// 为什么必须这样:上一版靠"日志里谁挨着谁"来配对父子 —— 而同一个标签(`指针换选中`)
-    /// 在**三条路径**里都用了,于是解析时把 Tab 的子账配到了 hover 的外账上,得出"外层 12ms、
-    /// 三笔子账加起来 0.2ms"这种自相矛盾的结论 ✗。现在子账挂在父账身上,顺序无关。
-    private final class CostNode {
-        let label: String
-        let t0 = CFAbsoluteTimeGetCurrent()
-        var children: [(String, Double)] = []
-        init(_ label: String) { self.label = label }
-    }
-    nonisolated(unsafe) private static var costStack: [CostNode] = []   // 只在主线程用
-
-    private func traceCost(_ label: String, _ body: () -> Void) {
-        let node = CostNode(label)
-        Self.costStack.append(node)
-        body()
-        let ms = (CFAbsoluteTimeGetCurrent() - node.t0) * 1000
-        Self.costStack.removeLast()
-        if let parent = Self.costStack.indices.last {
-            Self.costStack[parent].children.append((label.trimmingCharacters(in: .whitespaces), ms))
-        }
-        let isSub = label.hasPrefix("  ↳")
-        if isSub { guard isTraceEnabled, !node.children.isEmpty || ms > 2 else { return } }
-        else { guard ms > (Self.traceOn ? 2.0 : 16.0) else { return } }
-        // 子账**并进父账同一行** —— 一次选中只占一行日志,而不是四行
-        let kids = node.children.isEmpty ? ""
-            : "(" + node.children.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: " · ") + ")"
-        glog(String(format: "[工] %@ 主线程 %.1fms%@", label.trimmingCharacters(in: .whitespaces), ms, kids))
-    }
-
-
-    /// ←/→ = **跳到当前段最左 / 最右的一格**(用户 2026-09-15 重新设计,2026-09-18 推广到两段)。
-    /// 为什么改:原来的 ←/→ 是"在当前 App 的窗口间移动",而这正是 ` 的职责 —— 功能重复;
-    /// 走组的职责在 Tab。把 ←/→ 换成"跳到两端",是最便宜的一条效率提升(H/M/L 的心智)。
-    private func jumpToGroupEdge(_ target: Int) {
-        // ★ ←/→ 的语义对两段一视同仁(用户 2026-09-18:「左右的语义不要只服务启动环」):
-        //   跳的就是**当前正在看的那一段**的两端 —— 主环里跳最左/最右 App,
-        //   未启动段里跳行内最左/最右。曾经的实现让段内的 ←/→ 出段回主环,已经推翻。
-        if entrySelected {
-            // 段内跳:只挪高亮、不换窗框(与段内 Tab 同一条纪律)。
-            //   ⚠️ 不能像旧版那样直接写 entrySelected = false 出段 —— 内容当帧换回主环、
-            //   窗框还停在段的短尺寸上,整条环被挤在半截窗里(2026-09-18 用户实报)。
-            let n = launchables.count
-            guard n > 0 else { return }
-            let targetIndex = target == 0 ? 0 : n - 1
-            guard launchIndex != targetIndex else { return }   // 已在那一端 = 夹住,不环绕
-            launchIndex = targetIndex
-            trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): 未启动 [\(targetIndex + 1)/\(n)] \(launchables[targetIndex].name)")
-            return
-        }
-        guard groups.indices.contains(target), target != appIndex else { return }   // 两端 = 夹住,不环绕
-        launchIndex = nil
-        appIndex = target
-        winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
-        trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
-        // ★★ 2026-10-08 病例(用户实报「通过左右移动到头尾这种方式, 选中的 App **没有 live**、
-        //   不会主动接入;指针 hover 选中之后 live 才正常」):
-        //   真因:选中一变必须跟的**两笔**在这里漏了 ✗ —— `Tab`(moveApp)/指针(hoverApp)/
-        //   换窗口(moveWindow)三条路都有 `refreshSnapshotForSelection()` + `updatePreview()`,
-        //   **只有 ←/→ 这条路没有** ⇒ 静默图不换、`LivePreviewPool.sync` 不跑
-        //   ⇒ 那一组窗的**流从来没起过**(hover 那一路会补上,所以"hover 一下就好了" ✓)
-        //   ⇒ 补齐这两笔(与另外三条路同一个写法、同一本账 ✓ 以后加新的选中路径照抄这里 ✓)
-        traceCost("  ↳拍图") { refreshSnapshotForSelection() }
-        traceCost("  ↳托盘更新") { updatePreview() }
-    }
-
-    private func moveWindow(_ delta: Int) {
-        // 权责冻结(用户拍板):App 移动归 Tab 与指针,←→ 只管展开层的窗;
-        // 组内 ≤1 窗时 ←→ 无语义,静默吞掉
-        let n = expandedCount
-        // 启动行有它自己的"窗"序列:` = 行内循环(与主环的 ` 同一个心智:在当前位置前后挪一格)。
-        // 用户实报「未启动的app不能用`切换选中」—— 启动行的成员本来就是**它自己的内容**,
-        // 拿"它不是窗"把它挡掉是把代码的分类当成了用户的分类。
-        if entrySelected {
-            let m = launchables.count
-            // ⚠️ 不能写 m > 1:只剩一个待启动 App 时(用户实报),` 会被直接 return 掉,
-            // launchIndex 永远停在 nil ⇒ 那一格**无法被选中**。循环需要 2 个以上,
-            // 但"选中"只需要 1 个 —— 这两件事不是同一件。
-            guard m > 0 else { return }
-            if m == 1 { launchIndex = 0; trace("[T6] 启动行选中(`): [1/1] \(launchables[0].name)"); return }
-            // launchIndex == nil(只在入口槽、还没进到行里)时,第一下 ` 落到第一格;
-            // 否则按 delta 在行内循环,两个方向都取正模
-            let cur = launchIndex
-            let next = cur == nil ? 0 : (((cur! + delta) % m) + m) % m
-            launchIndex = next
-            trace("[T6] 启动行选中(`): [\(next + 1)/\(m)] \(launchables[next].name)")
-            return
-        }
-        guard n > 1 else { return }
-        // 补记账(2026-09-15):日志里出现过一局 `长帧 4(6%)`,全部落在连按 ←→ 的那 3 秒里 ——
-        // 而这条路径一直没有括号,是个黑盒。和 `键盘换选中` 同一口径,方便直接比。
-        FrameProbe.lastHoverMark = CACurrentMediaTime()   // 同"键盘换选中":选中一变就打点
-        traceCost("窗口选中") {
-            winIndex = (winIndex + delta + n) % n
-            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
-            traceCost("  ↳托盘更新") { updatePreview() }
-        }
-        trace("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
-    }
-
+    var lastScrollAt: TimeInterval = 0
     /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
     /// 钉住浏览几秒后已是旧图。异步不阻塞导航;同 wid 后到覆盖先到,天然取新。
     /// 防抖:同一组 0.5s 内不重复拍(横扫面板时边缘组会被扫过多次)
-    private var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
-
-    private func refreshSnapshotForSelection() {
-        guard let g = currentGroup else { return }
-        let now = CFAbsoluteTimeGetCurrent()
-        if let last = lastRefreshAt[g.pid], now - last < 0.5 { return }
-        lastRefreshAt[g.pid] = now
-        // 拍图全程在后台(见 Snapshotter 头注):这里只递一批目标,不发任务、不等结果
-        // **选中即重拍**(force):应用内部的画面变化系统不发事件,只有"被显示"这一刻能抓住它
-        Snapshotter.shared.precapture(g.windows, force: true)
-        // (这里不再另打一行账:与 Snapshotter 的 `[T5]` 重复,而 print 自己就吃主线程时间)
-    }
-
+    var lastRefreshAt: [pid_t: CFAbsoluteTime] = [:]
     /// **谁后动听谁**的仲裁账本(2026-09-18 用户口径:「就看谁在活跃」):
     ///   · `lastKeyAt` = 键盘最近一次发言(唤起 + 每个导航动作);
     ///   · `lastPointerMoveAt` = 指针最近一次**真实位移**;
@@ -2425,394 +1482,175 @@ final class PanelController: ObservableObject {
     ///   ② 只有"开/关"两态,表达不了"指针动过、又停下、键盘接着操作"的交替 ——
     ///      键盘操作完,指针想接管还得靠"它恰好没在面板出现时压在玻璃上"这个运气。
     /// 位移阈值 2pt:手搭在鼠标上的传感器抖动远低于此,真实的"动一下"远高于此
-    private var lastKeyAt: CFAbsoluteTime = 0
-    private var lastPointerMoveAt: CFAbsoluteTime = 0
-    private var lastPointerSample: CGPoint?
-    private static let pointerMoveThreshold: CGFloat = 2
+    var lastKeyAt: CFAbsoluteTime = 0
+    var lastPointerMoveAt: CFAbsoluteTime = 0
+    var lastPointerSample: CGPoint?
     /// "hover 被闸掉"这行账每局只打一次(见 hoverAllowedByGate)
-    private var gateBlockedLogged = false
+    var gateBlockedLogged = false
 
-    /// 每帧采一次指针位移,返回当前位置。位移过门槛 = 指针"发言"了(拿到接管权)。
-    /// 采样点:主环帧拍 + 托盘指针重定位 —— 两条帧拍路各 60Hz,足够密
-    @discardableResult
-    private func samplePointer() -> CGPoint {
-        let p = NSEvent.mouseLocation
-        if let s = lastPointerSample,
-           abs(p.x - s.x) > Self.pointerMoveThreshold || abs(p.y - s.y) > Self.pointerMoveThreshold {
-            lastPointerMoveAt = CFAbsoluteTimeGetCurrent()
-            if isTraceEnabled {
-                glog(String(format: "[闸] 指针位移 → 发言(%.0f,%.0f)", p.x, p.y))
-            }
-        }
-        lastPointerSample = p
-        return p
-    }
+    /// 托盘出屏的兜底日志:一个会期只喊一次(见 `previewFrame`)
+    var trayOverflowLogged = false
+    /// 托盘本局是否已经上屏过(只为上面那行日志:区分"首次渐入"与"后续更新" ✓)
+    var trayShownOnce = false
 
-    /// 键盘发言:唤起与每个导航动作都算。键盘刚动过 ⇒ 指针此前的位移不再有优先权
-    private func noteKeyboardAction() {
-        lastKeyAt = CFAbsoluteTimeGetCurrent()
-    }
-
-    /// 鼠标**点击**也是指针发言(点格选中/确认不走位移采样 —— 点击本身没有位移)
-    func notePointerClick() {
-        lastPointerMoveAt = CFAbsoluteTimeGetCurrent()
-    }
-
-    /// 指针此刻可否接管选中 = **指针比键盘后动**。
-    /// 面板开在停着的指针下方:键盘(唤起)必然后动 ⇒ 闸关着,指针不许抢(⌘Tab 移得动);
-    /// 指针一动 ⇒ 指针后动 ⇒ 当帧接管 ——「但凡鼠标动了,就必须要立马响应」
-    private func pointerMayTakeOver() -> Bool {
-        lastPointerMoveAt >= lastKeyAt
-    }
-
-    /// 同一道闸,但**被闸掉时记一笔**(每局一次)。
+    // MARK: 启动区(方案 E「入口槽」,T83;设计稿 design/启动区实验台.html,用户 2026-09-16 拍板)
+    //
+    // 未启动 App = Dock 常驻且没在跑的(「无窗应用」是**在跑没窗**,这是两个概念,别混)。
+    // 它们不进主环 —— 主环是"切换的世界",一格 = 一个活跃 App;它们住在**入口槽后面的托盘里**:
+    // 托盘本来就承载"选中格的内容"(活跃格 → 窗口卡,入口槽 → 启动图标行),零新增语法。
+    // 常态下面板与今天一个像素不差(没有第二行);Tab 走到主环末尾再按一次 = 选中入口槽。
+    /// Dock 常驻且未在跑的 App(每局 begin 时取一次,按 Dock 顺序)
+    @Published var launchables: [DockAppsProvider.LaunchableApp] = []
+    /// 入口槽被选中(托盘切到启动行)
+    @Published var entrySelected = false
+    /// 启动行内的选中下标(nil = 入口槽选中但还没进到行内某格)
+    @Published var launchIndex: Int?
+    /// T91:"换环到未启动"的意图(四指轻点专用)。
+    /// 触发层那一发比后台枚举**先到**,名单还没装好 ⇒ 先记在这里,`finishBegin` 里兑现。
+    var pendingLaunchRing = false
+    /// 意图的**出生时刻**。给意图加寿命是结构性兜底:它只可能活在"触发层比枚举先到"的那一瞬。
+    /// 病例(2026-09-17,用户实报「启动之后唤起了一次, 后面就变成启动环了」)—— 症状=意图活了不止一瞬。
+    /// 与其猜是哪条路漏了清,不如让**过期本身就等于丢弃**:这样无论漏清在哪,幽灵都活不过 1.5s。
+    var pendingLaunchAt: CFAbsoluteTime = 0
+    /// **名单还没到、手已经松了**的那一次确认(2026-09-22 用户实报「快速 cmd tab 连续切换, 偶尔换不起来」)。
     ///
-    /// 2026-09-14 病例:用户报"多窗口 App 的卡片,指针移上去焦点不跟随、点不动,得等一会"。
-    /// 那种描述有两种完全不同的病因,而日志里当时只有"没反应"——
-    ///   · hover 事件**根本没到**(窗口/层级/事件投递问题);
-    ///   · 事件到了但**被这道闸吃了**(面板恰好开在指针下方)。
-    /// 有了这一行,下次一看就知道是哪一种,不用猜(本仓库的老规矩:先让它可观测,再改)。
-    private func hoverAllowedByGate() -> Bool {
-        if pointerMayTakeOver() { return true }
-        if !gateBlockedLogged {
-            gateBlockedLogged = true
-            trace("[T6] 指针 hover 被闸掉(键盘比指针后动 —— 指针停着,不许抢选中)")
-        }
-        return false
-    }
-
-    /// hover 从 SwiftUI 直接进来;与键盘共写 appIndex/winIndex,天然"谁后动听谁的"。
-    /// `source` 区分来路(事件 / 帧拍)—— 两条路在这行账里长得一样就永远查不清"刚才谁选的"
-    /// 指针是否落在第 i 格的 **hover 热区**(格子内缩后的中心区,见 PanelMetrics.hoverInset*)
-    /// 几何与 iconStrip 同源:首格左缘 = 玻璃左 + rowPadX − iconGap/2,格宽 = icon + iconGap
-    private func pointerInRingHotZone(_ i: Int) -> Bool {
-        guard let glass = panelContentRect() else { return false }
-        let pitch = PanelMetrics.pitch
-        let tileLeft = glass.minX + ringContentLeftInset + PanelMetrics.rowPadX - PanelMetrics.iconGap / 2 + CGFloat(i) * pitch
-        let rect = CGRect(
-            x: tileLeft + PanelMetrics.hoverInsetX,
-            y: glass.minY + PanelMetrics.rowPadY + PanelMetrics.hoverInsetY,
-            width: pitch - PanelMetrics.hoverInsetX * 2,
-            height: PanelMetrics.icon - PanelMetrics.hoverInsetY * 2)
-        return rect.contains(NSEvent.mouseLocation)
-    }
-
-    func hoverApp(_ i: Int, source: String = "指针 hover", strict: Bool = true) {
-        DispatchQueue.main.async { [weak self] in self?.logRowAlignment("换组") }
-        FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 换 app 打点
-        // ★ 热区内缩:指针只蹭到格子边缘 = "路过",不算选中(2026-09-19 用户裁定)。
-        //   点按路径传 strict:false —— 点击目标仍是整格,精度要求不同
-        if strict && !pointerInRingHotZone(i) { return }
-        bumpIdle()
-        // T91:换环后 strip 里装的是"未启动的 App" —— 同一格上的 hover 归 launchIndex,
-        // 不能落到主环的 appIndex 上(那会把一套看不见的选中改掉)
-        if entrySelected {
-            guard hoverAllowedByGate(), launchables.indices.contains(i), i != launchIndex else { return }
-            launchIndex = i
-            Haptics.fire(.hoverAppRow)       // ★ 悬停触感(设置里可关;策略层已把"只保留 hover"写死 ✓)
-            trace("[T91] 启动选中(\(source)): [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
-            return
-        }
-        // 选中没变 = 同块地砖上挪指针,免工——onHover 每像素都发声,不设闸就是现拍风暴
-        // (实机现形:日志被系统 QUARANTINED 截流)
-        // entrySelected 也要放行:指针从启动区挪回主环,等于选回主环
-        guard hoverAllowedByGate(), groups.indices.contains(i), i != appIndex || entrySelected else { return }
-        // ★ 悬停触感:指针**换到另一个 App 格**上时震一下(用户 2026-09-22 要求 ✓)
-        //   放在这道闸之后 ⇒ 每像素发声的 onHover 不会变成震动风暴 ✓(同格重复不进账 ✓)
-        Haptics.fire(.hoverAppRow)
-        traceCost("指针换选中") {
-            // App 层原来没有这行账(窗口层一直有),于是"指针选中"和"键盘 Tab"在日志里长得一样——
-            // 查"指针到底有没有动"时只能猜。口径与窗口层拉齐:括号里写明来源
-            trace("[T6] 选中(\(source)): [\(i + 1)/\(groups.count)] \(groups[i].appName)"
-                  + "(共 \(groups[i].windows.count) 窗)")
-            // 拆账(2026-09-15):`指针换选中` 中位 12ms × 123 次,是现在最大的主线程开销 ✗。
-            // 第一轮只拆了"拍图 / 托盘更新",结果**两笔都没超过 2ms** —— 说明钱不在这两处 ✗,
-            // 于是把仅剩的候选(两个 @Published 写入,会同步惊动整棵观察者)也单独记一笔。
-            traceCost("  ↳写状态") { entrySelected = false; launchIndex = nil; appIndex = i; winIndex = 0 }
-            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
-            traceCost("  ↳托盘更新") { updatePreview() }
-        }
-    }
-
-    // MARK: - T91 换环(↓ / ↑)
-    
-    /// ↓:环里换成"未启动的 App"。
-    ///
-    /// 为什么复用 `entrySelected`:它本来就表达"这一局在看未启动的 App"(托盘切启动行、
-    /// 确认即启动、`` ` `` 在启动项里循环 —— 下游全挂在它身上)。换的只是**画在哪**:
-    /// 旧形态画在环尾那枚记号 + 托盘里;新形态把**环本身**换掉(用户:完全覆盖掉)。
-    ///
-    /// `launchIndex` 故意留 nil:只按一下 ↓ 就松手 = 没有可生效之物 ⇒ 什么都不启动,
-    /// 面板照常散场(与旧的"只选中入口槽"同一个语义)。
-    /// **触发层专用入口**(四指轻点)。
-    ///
-    /// 病例(2026-09-17,用户实报「四指没生效」——日志给出了铁证):
+    /// 病例(日志铁证):
+    /// ```text
+    /// [2125575ms] [tap] flagsChanged kc=55 down=true  state=idle
+    /// [2125620ms] [tap] hotkey forward pressed …      → emit begin
+    /// [2125668ms] [tap] flagsChanged kc=55 down=false … → emit confirm
+    /// [2125668ms] [T6] 确认(空列表):面板关闭           ← 枚举(46–69ms)还没回来 ⇒ 什么都没换 ✗
     /// ```
-    /// [ 85309ms] [T91] 换环 → 未启动的 App(共 2 个)      ← 触发了
-    /// [ 85354ms] [T6] 落点顺序 [Ghostty | 大象 | …]      ← 45ms 后新一局开始,把它抹掉
-    /// ```
-    /// 根因:`onFireFour` 在 `beginPinnedSession()` 之后**立刻**调 `enterLaunchRing()`,
-    /// 而那一刻 `launchables` 里装的还是**上一局留下的名单**(非空)⇒ 守卫放行、当场换环;
-    /// 紧接着新一局的 `finishBegin` 才跑,一句 `entrySelected = false` 把环换了回去。
+    /// 枚举在**后台**跑(2026-09-22 之前就是:为了不卡 tap 回调 ✓),而"按下→松开"只要 40–60ms
+    /// ⇒ 快速 ⌘Tab 会跑在名单前面 ✗ ⇒ 确认时 `groups` 还是空的 ✓
+    /// 口径:**意图已经被接受,就必须执行** —— 先记下来,等名单落地(`finishBegin`)当场兑现 ✓
+    /// (与 `pendingLaunchRing` 同款:触发层比枚举先到的那一瞬,只记意图 ✓)
     ///
-    /// 所以触发层的入口**只记意图**:等本局的名单装好(finishBegin)再兑现 ——
-    /// 与"四指那一发比枚举先到"是同一个道理,那条路本来就存在(pendingLaunchRing)。
-    func requestLaunchRing() {
-        guard !entrySelected else { return }
-        pendingLaunchRing = true
-        pendingLaunchAt = CFAbsoluteTimeGetCurrent()
-        trace("[T91] 换环意图已记下(触发层:等本局的名单)")
-    }
-
-    func enterLaunchRing() {
-        guard !entrySelected else { return }
-        // ★ 病例(2026-09-17,用户实报「唤起的还是启动的环, 不是未启动的」):四指轻点那一发
-        // 到得**比枚举早** —— `begin()` 把枚举丢进后台 Task(见那里的注释),名单是在
-        // `finishBegin` 里才装上的。那时这里 isEmpty ⇒ 静默 return ⇒ 面板照常显示主环,
-        // 用户读到的是"四指没生效"。症状像没接线,其实是**时序**。
-        guard !launchables.isEmpty else {
-            // ⚠️ 2026-09-17 修(用户实报「倒是展示了, 但是别给启动环同时唤起来了呀」)。
-            // 这里**绝不能**再把意图置成 true —— 日志原样:
-            //   兑现换环意图(等了 72ms,未启动的 App 共 0 个)
-            //   换环意图已记下(名单还没到:枚举在后台跑)   ← 又武装一次 ⇒ 每局都会再来换环
-            // 没有可换之物 ⇒ 意图到此为止:**消费掉**就走。
-            pendingLaunchRing = false
-            showHint("没有未启动的 App")
-            trace("[T91] 没有未启动的 App ⇒ 不换环,芯片说一句就散场")
-            return
-        }
-        // 名单连名字一起打:一句话分清"到底换没换、换成了谁"(用户报"还是唤起来了"时,
-        // 只有"共 N 个"是分不清的 —— 这条让报告能对号入座)
-        trace("[T91] 换环 → 未启动的 App(共 \(launchables.count) 个): \(launchables.map(\.name).joined(separator: " · "))")
-        setSegment(true, travel: .forward, launchIndex: nil)   // ↓ = 向下一环(滑动方向:新内容从右进)
-    }
-
-    /// ↑:换回"已启动的 App 组"
-    func leaveLaunchRing() {
-        guard entrySelected else { return }
-        trace("[T91] 换环 → 已启动的 App 组(共 \(groups.count) 个)")
-        setSegment(false, travel: .direct, launchIndex: nil)
-    }
-    
-    /// 尺寸与内容**同一拍**(实验台 ⑤)。
+    /// ⚠️ 这里**不能**顺手 `dismiss()`:那会 `beginGeneration += 1` ⇒ 枚举回来直接被丢弃 ✗
+    ///    (所以这一局要留着等名单;万一名单永远不来,有 `confirmWaitWork` 兜底 ✓)
+    var confirmBeforeList = false
+    /// 本局名单是否已落地(区分"还没到"与"真的空")✓
+    var listReady = false
+    /// 等名单的兜底闹钟(见 `confirmBeforeList`)
+    var confirmWaitWork: DispatchWorkItem?
+    /// 段切换的行进方向(见 `SegmentTravel`)。PanelView 靠它挑过渡:
+    /// 沿环走 = 内容横滑,↓/↑ 跳段 = 淡切
+    @Published var segmentTravel: SegmentTravel = .direct
+    /// **整条环的翻牌角度**(0 = 正对;±`PanelMetrics.ringFlipLimit` = 侧立)。
     ///
-    /// 老病(T76 之前)是"内容先变、尺寸后到"—— 屏幕会闪一帧"内容在旧尺寸里"。所以顺序钉死:
-    /// 算尺寸(此时 entrySelected 已改,`paddedSize()` 自然给出那一套)→ 同一拍 setFrame。
-    /// 瞬时改尺寸(不补间):与"关闭要已经没了"同一条纪律,而且**不可能掉帧**。
-    /// 将来若实测觉得"跳",再改 `animate: true`,并且**用 [帧] 探针量 P95 与长帧占比**,不靠感觉。
+    /// ★ 2026-10-08 用户口径:「换环要**整条环**翻(玻璃 + 图标一起),不是只翻图标」+「先做 88°」。
+    ///   为什么自己做而不用 `.transition`:系统「减弱动态效果」开着时 SwiftUI 会**自己**把过渡
+    ///   降级成淡入淡出,而 `\.accessibilityReduceMotion` 是**只读**的、覆盖不了 ✗
+    ///   ⇒ 用户实报「Glance 里开了强制完整动效,换环的翻牌还是只剩环变形」✗
+    ///   ⇒ 改成参数驱动(与托底 PuckView 同一套哲学):**设置说什么就是什么** ✓
+    @Published var ringFlipAngle: Double = 0
+    /// 换环的**目标**环(连按时的意图)。与 `entrySelected` 分开存:
+    /// "内容什么时候换"只看目标 ⇒ 翻牌中途改主意也不会半路换错 ✓
+    @Published var ringFlipTarget = false
+    /// **入场渐入的进度**(0 = 还没出现,1 = 落定)。
     ///
-    /// 指针重定位:面板宽度变了 ⇒ 指针底下那块地砖可能已不是原来那一格,自己补判一次
-    /// (SwiftUI 只在指针移动时发 hover)。
-    /// 段切换的**行进方向**(PanelView 靠它选过渡的方向):
-    /// `forward`/`backward` = Tab/⇧Tab 沿环走(内容横滑,行进感);`direct` = ↓/↑ 跳段(淡切)。
-    enum SegmentTravel { case forward, backward, direct }
-
-    /// 换环翻牌的**一半时长**(翻出去 / 翻进来各一半,合计 = `debug.ringFlipDurationMs` 默认 180ms ✓)
-    private static var flipHalfSeconds: Double { max(0.03, Double(DebugFlags.ringFlipDurationMs) / 2000) }
-    /// 整段时长(给"换环进行中"那个时间窗用 ✓)
-    private static var flipSeconds: Double { 2 * flipHalfSeconds }
-
-    private static func flipAnimation(_ full: Animation) -> Animation? {
-        if DebugFlags.noSegmentAnim { return nil }        // 消元开关:关掉换环动效(当拍换)
-        return MotionPolicy.animation(full, reduced: flipHalfSeconds)
-    }
-
-    /// **侧立那一拍**:换内容 + 换长度都放在这里(各只做一次 ✓)。
+    /// ★ 2026-10-08:用户提「Spotlight 唤起有个 Q 弹的动效」⇒ 按 Apple 录屏**逐帧量**出来的参数实现:
+    ///   起始比最终宽 ~7%、130ms 内 ease-out 收位、并快速淡入 ✓(与我第一版"从小涨大"的方向相反 ✓)
+    /// ⚠️ 只作用于**环里那块内容**,不动玻璃 —— 原生玻璃不能被变换(材质会掉 ✗)
+    /// ⚠️ 起跳**延后一拍**(见 showPanel):提前起跳会踩 AppKit 的"Update Constraints in Window pass"
+    ///   递归 ⇒ 一唤起就 SIGABRT ✗(缩放/位移两版都验过;延后一拍是唯一活路 ✓)
+    ///   渐入虽不动几何,这条**照旧保留** —— 它保护的是"上屏那一拍的布局",与动什么无关 ✓
+    @Published private(set) var entryFadeProgress: Double = 1
+    /// **入场渐入的进度**(0 = 还没出现 · 1 = 落定)。视图拿它当 `.opacity` —— **不动任何几何** ✓
     ///
-    /// 为什么必须挤在这一帧(两轮截图验过的两条硬约束):
-    ///   ① 玻璃**不能转**(一转材质就掉 ✗);② 玻璃**不能逐帧 resize**(每帧改宽度同样掉材质 ✗)
-    ///   ⇒ 唯一能改宽度的时刻:内容侧立(看不见)的那一帧 ✓ 长度差因此由"翻转中途顺手变短/变长"交代 ✓
-    private func ringFlipSwitch(token: Int) {
-        guard ringFlipToken == token, ringFlipMidDone != token else { return }
-        ringFlipMidDone = token
-        traceCost("翻牌换环那一帧") {
-            var instant = Transaction()
-            instant.disablesAnimations = true
-            withTransaction(instant) {
-                entrySelected = ringFlipTarget
-                // 反相:新环从**另一侧**翻进来(与旧 asymmetric transition 的方向一字不差 ✓)
-                ringFlipAngle = ringFlipAngle > 0 ? -PanelMetrics.ringFlipLimit : PanelMetrics.ringFlipLimit
-            }
-            applyRingSwap(animated: false)      // 内容 + 宽度**同一拍**(实验台 ⑤)✓
-        }
-        trace("[翻牌] 换环那一帧 · 现在是\(entrySelected ? "未启动环" : "主环") · 玻璃宽 \(Int(contentSize().width))pt")
-        withAnimation(Self.flipAnimation(.easeOut(duration: Self.flipHalfSeconds))) {
-            ringFlipAngle = 0
-        }
-    }
-
-    /// **翻牌还没落地就来新输入 ⇒ 先把这一发当拍收尾**,动作再照常执行 ✓
-    ///   ① 不许吞输入(本仓纪律:"意图已被接受就必须执行" ✓);
-    ///   ② 连按 ↓↑ 不会半路换错内容(收尾 + 随后开新一发;过期回调由 token 丢弃 ✓);
-    ///   ③ 输入"先到"、画面"还没到"时,判定一律按**目标环**(按了 ↓ 就是想去未启动 ✓)
-    func finishRingFlip() {
-        guard ringFlipAngle != 0 else { return }
-        ringFlipToken += 1
-        ringFlipMidDone = ringFlipToken
-        var instant = Transaction()
-        instant.disablesAnimations = true
-        withTransaction(instant) {
-            entrySelected = ringFlipTarget
-            ringWidthBlend = ringFlipTarget ? 1 : 0      // 长度当拍落到目标(与内容同一帧 ✓)
-        }
-        ringFlipAngle = 0
-        applyRingSwap(animated: false)
-    }
-
-    /// 段切换的唯一入口。
+    /// 史(2026-10-08 一天之内):这里先后是「整块横向 1.04→1.00 的拉伸」→「带 duang 的弹簧」
+    /// →「纯 transform 的横向橡皮筋」;用户三评之后定为**渐入**:
+    ///   「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢, 比之前的两段弹簧要好」
+    /// 换掉的**硬理由**(不是审美):动几何 ⇒ 命中区(用落定尺寸)与画面(被拉伸)**不一致** ✗
+    ///   —— 9 个 App 那局最外侧那颗被推离 ≈22pt,而格距才 68pt ⇒ 想点的那颗可能正好在缝里 ✓
+    ///   渐入没有这个病:从第一帧起"看到的就是点得到的" ✓
+    var entryFade: Double { entryFadeProgress }
+    /// **玻璃长度的插值**(0 = 主环那份宽,1 = 未启动环那份宽),与翻牌同拍。
     ///
-    /// ★★ 2026-10-08 定版(**用户裁定 A**):**玻璃不参与翻转**。
-    ///   硬约束:原生玻璃一旦被 3D 变换,材质就掉(变一块暗板,角度回 0 才长回来 ✗)——
-    ///   SwiftUI 的 `.rotation3DEffect` 与"在 AppKit 层转整个窗口内容层"两种实现都验过,一样掉 ✗;
-    ///   它由 WindowServer 按窗口几何合成,转出平面即失效 ✓
-    ///   ⇒ "整条环翻过去"与"材质不掉"在这个材质上天然冲突 ⇒ 用户选 A:
-    ///     翻的只有**环里的内容**(两块牌面同时演 ✓),玻璃只做**平滑变宽/变窄**,
-    ///     两环长度差由玻璃自己交代 ✓ 材质全程完好 ✓
-    ///   窗框仍然**一动不动**(一局的窗框按"两环更宽者"开 ✓)⇒ 没有双动画系统 ⇒ 不抖 ✓
-    private func setSegment(_ toLaunch: Bool, travel: SegmentTravel, launchIndex target: Int?) {
-        segmentTravel = travel
-        // 已经是那一环、也没有正翻着它 ⇒ 只更新段内选中,不翻牌 ✓
-        if entrySelected == toLaunch, ringFlipTarget == toLaunch {
-            if toLaunch, let t = target { launchIndex = t }
-            return
-        }
-        ringFlipTarget = toLaunch
-        if toLaunch, let t = target { launchIndex = t }    // 段内选中先记下(进段前不可见 ⇒ 无观感影响 ✓)
-        ringFlipToken += 1
-        let token = ringFlipToken
-        // 托盘(窗口卡/启动行)在换环这一拍**当拍换** ⇒ 窗口窗开到整段翻完 ✓(见 isRingSwapInFlight)
-        ringSwapUntil = CFAbsoluteTimeGetCurrent() + Self.flipSeconds + 0.2
-        let sign: Double = (travel == .forward) ? 1 : -1   // ↓ 往上翻;↑/反向 ⇒ 反着翻 ✓
-        trace("[翻牌] \(toLaunch ? "主环 → 未启动环" : "未启动环 → 主环") · 88°×2 · 每半 \(Int(Self.flipHalfSeconds * 1000))ms")
-        // ① 环里那块容器翻出去(玻璃不动 ✓)
-        withAnimation(Self.flipAnimation(.easeIn(duration: Self.flipHalfSeconds))) {
-            ringFlipAngle = sign * PanelMetrics.ringFlipLimit
-        }
-        // ② 玻璃长度**整段平滑**过去(easeInOut 铺满翻转;用户在换环那一下看得出"顺手变短/变长" ✓)
-        withAnimation(Self.flipAnimation(.easeInOut(duration: Self.flipSeconds))) {
-            ringWidthBlend = toLaunch ? 1 : 0
-        }
-        // ② 侧立那一拍:换内容 + 换长度(看不见 ✓),再反相翻进来
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.flipHalfSeconds) { [weak self] in
-            self?.ringFlipSwitch(token: token)
-        }
-    }
-
-    private func applyRingSwap(animated: Bool = false) {
-        // ★★ 铁律(用户 2026-09-17 明确):**不管在哪个环,面板一律相对当前屏幕居中** ——
-        // 上下居中 + 左右居中。左缘**不许**钉偏移。
-        //
-        // 走错的弯路(记在这里,别再走):上一版为了"环不要右移"把左缘钉住了 —— 结果更糟:
-        // ① 托盘是按面板 `midX` 定位的 ⇒ 面板一左偏,托盘跟着偏;
-        // ② 屏幕上出现了"两套锚点"(面板看左缘、托盘看中线),对齐关系当场崩。
-        // 环宽窄变化时的平移是**居中该有的样子**:向中线收缩,左右对称。
-        //
-        // 尺寸与内容同一拍(实验台 ⑤):算尺寸(此时 entrySelected 已改)→ 同一拍 setFrame。
-        // 瞬时改尺寸(不补间):与"关闭要已经没了"同一条纪律,而且不可能掉帧。
-        guard let panel else { updatePreview(); return }
-        if let target = centerFrame(for: paddedSize()) {
-            // ★★ 2026-09-22:这里原本是"AppKit 动窗框 + SwiftUI 动内容"**两个动画系统** ✗ ——
-            //   双系统的相位差就是用户实报的"换环抖一下"。现在窗框**当拍**(而且它的尺寸本就是
-            //   一局的不变量,见 `ringWindowWidth`)⇒ 只剩内容一个动画系统 ⇒ 抖从构造上不存在 ✓
-            //   旧路留档,别再走:union 外框窗口(玻璃左锚定、从第一格向右长)/ 根部弹性 frame
-            //   (Update Constraints 递归 FAULT,实机崩溃)。`animated` 形参只为调用点可读,窗框不补间 ✓
-            _ = animated
-            setFrameIfNeeded(panel, target)
-        }
-        resyncSelectionUnderPointer()
-        updatePreview()
-    }
-    
-    /// 启动行内 hover:只挪高亮(内容已在托盘里),不重排窗框
-    /// 指针在启动行内的位置 → 格子下标。**由位置推导,不依赖 hover 事件**。
+    /// 用户口径(2026-10-08):「环长度变化那一下没有动画,直接缩短了」⇒ 要**平滑**过去 ✓
+    /// ⚠️ 曾经以为"逐帧改玻璃宽度会掉材质" ✗ —— 那是**假结论**:当时容器层还挂着
+    ///   `rotation3DEffect`,玻璃一直在被转 ✗(见 PanelView 尾部那段注释)。
+    ///   残留删掉之后,逐帧改宽度是安全的 ✓
+    /// ⚠️ 它只在翻牌期间有意义:`contentSize()` 在"角度为 0"时一律以 `entrySelected` 为准
+    ///   (唯一真源 ⇒ 万一哪里漏了同步,静止态也自愈 ✓)
+    @Published var ringWidthBlend: Double = 0
+    /// 每次换环 +1;收尾回调靠它判过期(又按了一次 ⇒ 旧回调丢弃 ✓)
+    var ringFlipToken = 0
+    /// 已经走完"侧立那一拍"的 token(兜底定时与完成回调谁先到都只算一次 ✓)
+    var ringFlipMidDone = -1
+    /// "换环进行中"的窗口(2026-09-22):托盘内容在换环那一拍要**当拍**换(与环的翻牌同步 ✓),
+    /// 而 hover 换组时要**滑**(用户实报「hover app 托盘只会闪现, 没有滑动了」✓)。
+    /// 用时间窗而不是开关:换环是同步一瞬间的事,没有"结束"回调可挂 ✓
+    var ringSwapUntil: CFAbsoluteTime = 0
+    var isRingSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < ringSwapUntil }
+    /// **指针帧拍的心跳**(2026-09-18 实测翻案):TimelineView(.animation) 在**静态窗口上不跳帧**
+    /// —— macOS 不给静止的窗口排帧,所谓"每帧兜底"实际只在"有视图更新的那几拍"生效。
+    /// 实测账:warp 挪指针后 300ms 内一次采样都没发生,直到下一次键盘动作触发重绘才补上
+    /// —— 这就是"键盘操作完、鼠标接管慢半拍"的真身:兜底只在界面刚动过时活着,
+    /// 而恰恰是"界面静止、指针开始动"的那一刻最需要它。
+    /// 现在面板在台期间挂 60Hz 定时器,统一驱动主环与托盘的指针重定位;散场即停。
+    var hoverPollTimer: DispatchSourceTimer?
+    /// 启动区这局关了(设置开关/名单为空)—— 视图与键盘路径都靠它短路
+    var launchSectionEnabled: Bool { !launchables.isEmpty }
+    // (2026-09-19)「悬停回退单」机制整段退役 —— 病例:四指/键盘进段后,指针不在面板上,
+    // 0.12s 后段被它静默收掉,白名单 App 还没确认就回到主环(用户实报「白名单的 App 没办法启动」,
+    // 日志:段内选中 → 半分钟后主环选中 → 确认,中间无任何段操作)。回退单是"入口槽 +
+    // 悬停预览"时代的语义(指针离开启动区 = 用户不要了);模型 C 里段只能由 ↓/四指/Tab
+    // **主动**进入,指针在不在面板上与段的生死无关 —— 段保持粘性,由 ↑/Tab/Esc/闲置超时收场。
+    /// 本局内被 H 隐藏的 App。为什么要记:
+    /// 隐藏是**异步**的(0.2–0.3s 动画),这期间重枚举**还看得见它的窗** ——
+    /// 不记住的话,卡片会在 0.18s 后闪回来(用户实报:「先是消失了,然后又出现了」)。
+    var hiddenPIDs: Set<pid_t> = []
+    /// 本局已被我们**退出**的 App(pid)。
     ///
-    /// 病例(2026-09-16 实机日志):hover 到网易云后再把指针移向微信,`[T6] 启动区 hover` 再也没有输出
-    /// —— 事件根本没送达。这是本仓库记过的一类病(见 `resyncSelectionUnderPointer`):SwiftUI 的
-    /// tracking area 在**视图于指针底下改变外观/重排**之后就哑了,不补发 hover。
-    /// 当初那份补丁只覆盖了窗口卡,启动行是新代码、没继承到。
+    /// 和 hiddenPIDs 是**同一个病,换了个动作**:系统的 AX 窗口表在进程死透之前
+    /// 那 0.2–0.3s 里仍然报得出它的窗,而 `mergeRefreshed` 对"重枚举里新出现的 App"
+    /// 的处理是**挂到尾部**(不插队)—— 于是刚被处决的 App 在环尾复活。
     ///
-    /// `onContinuousHover` 不走 tracking area:指针只要在行内移动就持续回调**位置**,我们自己算格子,
-    /// 因此不存在"事件丢失"。位置 → 下标是纯几何:x 按格距分列,y 按行高分行。
-    func hoverLaunchAt(x: CGFloat, y: CGFloat, count: Int, cols: Int, rows: Int) {
-        let pitch = PanelMetrics.pitch
-        let rowH = PanelMetrics.icon + PanelMetrics.trayRowGap
-        let c = max(0, min(cols - 1, Int(floor(x / pitch))))
-        let r = max(0, min(max(rows - 1, 0), Int(floor(y / rowH))))
-        let i = r * cols + c
-        guard launchables.indices.contains(i) else { return }
-        if !entrySelected { entrySelected = true }
-        launchIndex = i
-        trace("[T6] 启动区选中(位置推导): [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
-    }
-
-    func hoverLaunch(_ i: Int) {
-        // hover 到启动行某一格,**本身就意味着**入口槽是选中的 —— 不能再要求 entrySelected 为真:
-        // 指针从入口槽(面板)走到托盘是跨窗口的一段路,状态可能已被清掉,于是"鼠标再移动也选不中"
-        // (用户实报)。这里直接把它补回来,而不是让 hover 去依赖一段可能丢失的记忆。
-        guard hoverAllowedByGate(), launchables.indices.contains(i) else { return }
-        // ★★ 2026-10-08 门口收口之二(同一病例):这个函数**只有托盘那一行**在调
-        //   (环里的启动格走 `hoverApp` 的 entrySelected 分支 ✓),所以"指针真的在托盘的可见内容里"
-        //   就是它的前提 ✓ —— 而托盘内容隐藏时 `previewContentRect()` 一律 nil ✓。
-        //   病例:未启动环里托盘内容已隐藏(alpha 0),指针停在**面板之外**那扇隐藏托盘上,
-        //   它的 tracking area 照样回调 `.onHover` ⇒ 这一发把 launchIndex 改掉了 ✗
-        //   (真机日志:`[T6] 启动区 hover: [2/4] Pearcleaner`,而指针在面板之外 ✓)
-        guard let tray = previewContentRect(), tray.contains(NSEvent.mouseLocation) else { return }
-        entrySelected = true
-        guard launchIndex != i else { return }
-        trace("[T6] 启动区 hover: [\(i + 1)/\(launchables.count)] \(launchables[i].name)")
-        launchIndex = i
-    }
-
-    func hoverWindow(_ i: Int) {
-        bumpIdle()
-        guard i != winIndex else { return } // 同一格的重复 hover(指针每像素都发声)不进账
-        // **到达**与**接受**分两行记:这一行证明"hover 事件到了",下一行证明"我们认了"。
-        // 两行之间的时间差 = 我们这边的处理耗时;两行都晚 = 事件本身就投递晚了(窗口/层级/系统侧)
-        if let g = currentGroup, g.windows.indices.contains(i) {
-            trace("[T6] hover 到窗 [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)(闸:\(pointerMayTakeOver() ? "开" : "关"))")
-        }
-        guard hoverAllowedByGate() else { return }
-        FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 悬停打点(量"含悬停那几拍")
-        winIndex = i
-        Haptics.fire(.hoverPreviewThumb)     // ★ 悬停触感:指针换到托盘里另一扇窗 ✓
-        if let g = currentGroup, g.windows.indices.contains(i) {
-            trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
-        }
-    }
-
-    /// **卡片行点击**(2026-09-19):行内任何位置都归属最近的一张卡(含卡片之间的空隙)。
-    /// `localX` = 行坐标系横向位置(行原点 = 首卡左缘,宽度口径与 resync 完全同源)。
-    /// 曾经行内空隙是命中空洞,点击穿透托盘落到长条上,什么都不发生
-    /// (用户实报「多窗口 App 的第二张卡要点两遍」)。
-    func cardTapped(localX: CGFloat) {
-        guard let g = currentGroup, !g.windows.isEmpty else { return }
-        var cum: CGFloat = 0
-        var hit: Int?
-        let sizes = Self.cardSizes(g.windows)
-        for i in g.windows.indices {
-            let cw = sizes[i].width                     // 卡有多宽就命中多宽(与视图同源)
-            if localX < cum + cw { hit = i; break }
-            cum += cw + PanelMetrics.thumbGap
-        }
-        guard let i = hit ?? g.windows.indices.last else { return }   // 行尾空隙 = 归最后一张
-        bumpIdle()
-        if winIndex != i {
-            trace("[T6] 卡片点击(行级): [\(i + 1)/\(g.windows.count)] \(g.windows[i].title)")
-            winIndex = i
-        }
-        confirmSelection()
-    }
-
-    // MARK: - 确认与放弃
-
-    /// 松手不合面板(T10 毕业为设置面板正式项,UserDefaults key 不变):松手语义在
-    /// 触发层处理(那边保持导航态、不发确认),这里只剩一件事——面板外点击是否免死
-    /// ⚠️ 2026-09-22 修:这里原来读 `DebugFlags.pinPanelOnRelease`(**淘汰的调试键**)✗
-    /// ⇒ 设置/菜单里打开的「保持面板打开」,到这一句就断了:面板外点击照样关面板 ✗
-    /// 现在两个读取点都走 `Keys.pinOnRelease`(唯一来源 ✓)
-    var pinPanel: Bool { Keys.pinOnRelease }
-    /// 长条点击闸(2026-10-16 平移到 PanelDestructiveKeys ✗ 存储属性不能进 extension ⇒ 留在主类 ✓)
-    var stripClickGateOn = false
+    /// 病例(2026-09-16,用户实报):"cmd q 退出 app, 此时面板还没关闭, 就又出现在尾部了,
+    /// 重新唤起面板后不再出现。" 日志一字不差:
+    ///     [T12] 退出应用: zoom.us
+    ///     [T12] 本地先摘: 8 个 App / 12 窗 → 7 个 App / 11 窗
+    ///     [处决后] 7 个 App,选中 [2/7] 大象          ← 对了
+    ///     [处决后] 8 个 App,选中 [2/8] 大象          ← 0.7s 后那次重枚举把它捞了回来
+    ///     [T12] 处决后顺序 [… | DataGrip | zoom.us]   ← 复活的它挂在**末位**
+    /// "重新唤起就没了"也对得上:新一局重新枚举,那时进程真的死透了 —— 所以这条记忆
+    /// 只活一局(begin 里清空),不跨局。
+    var quitPIDs: Set<pid_t> = []
+    /// 本局已被我们**关掉/最小化**的窗(CGWindowID),等着复核。
+    ///
+    /// 病例(2026-09-17,用户实报):"点击关闭之后, 面板没关闭, 就又出现了."
+    /// 日志一字不差:`[T12] 关闭窗口: DataGrip — Confirm Exit` → `本地先摘 17 窗 → 16 窗`
+    /// → 0.2s 后 `[处决后顺序]` 它又回来了,来回三次。
+    /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
+    /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
+    var purgedWIDs: Set<CGWindowID> = []
+    /// **本局被我们缩小(Cmd+M)过的窗与 App**(2026-09-22 用户实报)。
+    ///
+    /// 病例:「唤起面板的时候, cmd m 会缩小, 这时候面板上的 app 是没变化的, 松开之后会立马把缩小的窗口
+    ///   又换起来」✗ —— 最小化窗本来就不在列表里(`optimisticRemoval(.minimize)` ✓),但**组还在环里** ✓
+    ///   ⇒ 松开时走 `confirmSelection` 的"无窗应用 ⇒ 激活它"那条路 ✗ ⇒ 刚缩下去的窗又被抬起来 ✓
+    /// 这与当初 `H` 那个 bug **是同一个病**(「松开 ⌥ 又把刚隐藏的 App 唤起来了」✓)⇒ 照它的先例办:
+    ///   **本局不许再唤醒它** ✓;顺带把 App 标记上(用户第 2 条诉求:标记被缩小收纳的 app ✓)
+    /// ⚠️ **跨局常驻**(2026-09-22 用户第 2 条修正:「角标要常驻」✗ 只活一局是错的):
+    /// 一扇窗被收进 Dock 之后,**只要它还在 Dock 里就该有记号** ✓ —— 与"这一局"无关 ✓
+    /// ⇒ 记 `wid → pid`(pid 用来在 App 退出后剪掉 ✓,wid 用来认"还是那一扇窗" ✓)
+    var minimizedWIDs: [CGWindowID: pid_t] = [:]
+    /// 环上要打"已收纳"记号的 App(由上面那张表推出来 ✓ —— 单一源 ✓)
+    var minimizedPIDs: Set<pid_t> { Set(minimizedWIDs.values) }
+    /// 让 `minimizedWIDs` 的变化**一定会**触发重绘(它是普通字典,不会自己 publish ✗)
+    @Published var marksRevision = 0
+    /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓
+    ///
+    /// ⚠️ 它与上面那张**常驻**表是**两种寿命**,别混(2026-09-22 用户两条实报互相约束):
+    ///   · ① 「cmd m 会缩小…松开之后会立马把缩小的窗口又换起来」✗ ⇒ 本局不许唤醒 ✓(否则那次缩小等于白按)
+    ///   · ② 「关闭再唤起之后, 选中 app 拉不起窗口了」✗ ⇒ **另起一局**的确认必须能把它拉回来 ✓
+    /// ⇒ 记号(视觉)常驻 ✓;守卫只活一局 ✓ —— 用户的手离开键盘之后再确认,就是"我要它回来" ✓
+    var sessionMinimizedPIDs: Set<pid_t> = []
+    var didObserveHiding = false
+    /// 环上要打"已隐藏"记号的 App(**现读系统真实状态** ✓ ⇒ 只要还是 hide 就有记号 ✓,
+    /// 自己从 Dock 点回来 ⇒ 记号自动消失 ✓ 不需要谁去清 ✗)
+    @Published var hidingPIDs: Set<pid_t> = []
 
 }
 
