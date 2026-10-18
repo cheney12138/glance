@@ -1249,10 +1249,15 @@ final class PanelController: ObservableObject {
     /// 说话局(只剩芯片)不参与:那是"表三"的另一套尺寸,不跟环互换 ✓
     private func ringWindowWidth() -> CGFloat {
         let w = max(ringContentWidth(launch: false), ringContentWidth(launch: true))
-        // ★ 环溢出:窗宽同步封顶 ✓(与 contentSize 同一个 cap ✓ 两环更宽者封顶后仍为常数 ✓
-        //   「换环不变宽」不变量照常成立 ✓)
         guard PanelLayout.ringOverflow, let screen = contextScreen ?? NSScreen.main else { return w }
-        return min(w, PanelLayout.ringVisibleCap(screenW: screen.frame.width))
+        // ★★ 2026-10-16 改口径(用户的模型 ✓:「固定了宽度之后,滑动里面的内容」✓ 一个容器 ✓):
+        //   窗宽 = **当前活动环**封顶后的宽 ✗ 不再取两环更宽者 ✗✗
+        //   病例(用户截图):主环 6 App(824 ✓)被未启动环(8 项 ✗ 1090 ✗)按"更宽者"撑宽 ✗
+        //   ⇒ 图标靠左 + 右侧一大截空白 ✗✗✗ = 双容器的病 ✗
+        //   ⇒ 装得下就贴合 ✓ 装不下才滑 ✓;代价:溢出模式下换环时窗宽会变 ✗(照实记账 ✓)
+        let active = ringContentWidth(launch: entrySelected)
+        let cap = PanelLayout.ringVisibleCap(screenW: screen.frame.width)
+        return min(active, cap)
     }
 
     /// 🔬 首帧探针(T91「一道白光」排查)——只回答一个问题:**上屏那一刻,我们的内容画上去了没有。**
