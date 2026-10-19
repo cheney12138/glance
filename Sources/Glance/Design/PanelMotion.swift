@@ -197,8 +197,10 @@ enum PanelMotion {
                         slide: .spring(response: 0.16, dampingFraction: 0.55),
                         entrance: .spring(response: 0.10, dampingFraction: 0.50))
         default:         // fast = **现状**(没设置过这个键的人,一个字都不变 ✓)
-            return Gear(select: .spring(response: 0.22, dampingFraction: 0.60),
-                        slide: .spring(response: 0.26, dampingFraction: 0.66),
+            // ⚡ 2026-10-18 用户:「上浮有过充」—— 弹簧阻尼 <1 必回弹一次 ⇒ 收 1.0(临界):
+            //   response 不变 = 速度不变;到位即停不回弹;保留弹簧形态(打断接力不顿 ✓)
+            return Gear(select: .spring(response: 0.22, dampingFraction: 1.0),
+                        slide: .spring(response: 0.26, dampingFraction: 1.0),
                         entrance: .spring(response: 0.16, dampingFraction: 0.62))
         }
     }
