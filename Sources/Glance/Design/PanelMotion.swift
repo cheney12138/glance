@@ -214,6 +214,12 @@ enum PanelMotion {
     /// 缩略图选中(demo .win-thumb 的 .18s ease):demo 无过冲,阻尼给到 .9
     static let thumb = Animation.spring(response: 0.20, dampingFraction: 0.9)
 
+    // ⚠️ 这里**故意没有** "托盘卡片专用动画" 这一条(2026-10-19):
+    //   用户口径是「窗口切换和 app 选中切换对比,速率不匹配」⇒ 正解不是给卡片单独调时长,
+    //   而是**共用环里那条选中弹簧**(`PanelMotion.select`,卡片侧经
+    //   `controller.selectionAnimation(PanelMotion.select)` 传下去)✓
+    //   曾经写过一条 `trayCard = .easeOut(0.18)`:数值对得上,但**源不同** ⇒ 改档位时又会分家 ✗
+
     /// **入场渐入**(2026-10-08 定版):整块(含玻璃那个 NSView,同一合成层)从淡到实 ✓
     ///
     /// 用户口径:「要 fade 吧, 看起来是一个**渐入**的效果。**没有任何的弹动**呢,

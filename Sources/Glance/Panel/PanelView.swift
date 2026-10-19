@@ -505,6 +505,18 @@ private struct IconCell: View {
     /// 不碰位置 ✓
     @State private var dealing = false
 
+    /// 弹一下(选中变化 / 首次出现选中态 —— 两个入口共用)
+    private func popOnce() {
+        pop = true
+        // 胀到位后放开:落回时那段弹簧带一点回弹 = "弹一下" ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { pop = false }
+    }
+
+    /// **选中瞬间弹一下**(2026-10-19 用户:「选中 app 的时候,底部的计数点弹一下」):
+    /// 与"记账点发牌"是两件事 —— 发牌是**窗数变化**时归零重发;
+    /// 这个是**选中变化**时的一次性脉冲:快速胀到 1.35,再带一点回弹落回 1 ✓
+    @State private var pop = false
+
     @ViewBuilder private var windowDots: some View {
         let tally = WindowTally.layout(windows: group.windows.count,
                                        available: PanelMetrics.icon,
@@ -534,7 +546,26 @@ private struct IconCell: View {
                 }
             }
             .opacity(0.8)
+            // 选中脉冲(只动 scale,不动位置;发牌的 scaleEffect 在子层,两者叠加不冲突)
+            .scaleEffect(pop ? 1.35 : 1)
+            .animation(pop
+                       ? MotionPolicy.animation(.spring(response: 0.14, dampingFraction: 0.55))
+                       : MotionPolicy.animation(.spring(response: 0.30, dampingFraction: 0.45)),
+                       value: pop)
             .offset(y: PanelMetrics.dotBottom - (selected ? PanelMetrics.dotLift : 0))
+            .onChange(of: selected) { isSelected in
+                guard isSelected else { return }
+                popOnce()
+            }
+            // ★ 2026-10-19(用户:「⌘Tab 唤起,第一次默认选中的 app 没弹」):
+            //   首帧那个图标是**带着 selected=true 新建**的 ⇒ 根本没有"变化"事件 ⇒ onChange 不触发 ✗
+            //   ⇒ 出现时如果是选中态,也弹一次;延迟 0.10s 让面板入场渐入先起来,不然弹在暗处看不见 ✓
+            .onAppear {
+                guard selected else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                    if selected { popOnce() }
+                }
+            }
             .onChange(of: group.windows.count) { _ in
                 dealing = true
                 // 下一两个 runloop 再放开:让"归零"先落一帧,弹出才看得见(同 demo 的双 rAF ✓)

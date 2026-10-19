@@ -69,7 +69,10 @@ struct PreviewPanelView: View {
         .transaction { t in
             // 换环(↓/↑/Tab 跨段)那一拍 ⇒ 托盘内容**当拍**换(与环的翻牌同步 ✓)
             // 其余(hover 换组 / 键盘换格)⇒ 保留短弹簧 ⇒ 内容**滑**过去而不是闪现 ✓
-            if controller.isRingSwapInFlight { t.animation = nil }
+            // ★ 2026-10-19:不只换环 —— **任何换组**(含指针悬停换组、⌘Tab)都要当拍换。
+            //   漏了这条的后果(用户实报):换组那一拍整行被外层 withAnimation 重排,
+            //   选中环跟着旧布局走一帧 = 「窗口四周一条白线闪一下」✗
+            if controller.isRingSwapInFlight || controller.isContentSwapInFlight { t.animation = nil }
         }
         // ★★ 2026-10-08(用户:「**预览容器没有渐入**, 跟环有点脱节, 稍微一点点」):
         //   环在入场时是整块渐入(`PanelController.entryFade` ⇒ PanelView 的 `.opacity`)✓,
@@ -138,6 +141,10 @@ struct PreviewPanelView: View {
                 })
             }
         }
+        // ⚠️ 这里曾经用 `.id(currentGroup.pid)` 强制"换组 = 换视图身份"来治红绿灯掉下来:
+        //   灯掉下来的真因是 `hovered` 那条动画没守(已补 ✓),而换身份会**先拆旧视图再建新视图**
+        //   ⇒ 中间那一帧旧卡还留在屏上,露出一条边(2026-10-19 用户实报:「切 app 时右边闪一条白线」✗,
+        //   字面复核:那条线不在选中卡上、只有 2px 宽、比环更白)⇒ 换身份这招撤掉 ✓
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
         // 卡片在指针脚下重排 —— tracking area 在"视图于指针底下重排之后就哑了,不补发 hover"
         // (本仓库实咬两次的病)。表现就是用户实报的「键盘选完组、鼠标去接管,慢半拍」。
@@ -189,6 +196,9 @@ struct PreviewPanelView: View {
             face: nil,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
             selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
+            // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
+            motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
+            ringSelectMotion: controller.selectionAnimation(PanelMotion.select),
             traffic: {
                 // 三粒灯的动作 T14 就实现了(WindowFocuser.close/minimize/zoom),
                 // T15 换卡片样式时把 UI 丢了 —— 2026-09-14 用户要求恢复
@@ -201,12 +211,6 @@ struct PreviewPanelView: View {
                     closeDisabled: w.pid == ProcessInfo.processInfo.processIdentifier
                 )
             },
-            // ★★ 2026-09-21 用户裁定「任何场景下都不要这个动效」:
-            //   原来是 `.animation(_:value: selected)` 用的 motion —— 它的语义是
-            //   "**selected 变时,给这棵子树的所有变化**加动画" ✗ ⇒ hover 换 app 时多张卡的 selected
-            //   同时翻转,而同一拍里整行的**重新居中**也在发生 ⇒ 卡片自己的**位置变化**被吃进这行动画
-            //   ⇒ 视觉上"从左右两边各自滑到新位置" ✓。⇒ 传 nil:卡片不再自己播任何动效(位移是"当场"的)。
-            motion: nil
         )
         .onHover { inside in if inside { controller.hoverWindow(i) } }
         // (点击已由**行级手势**接管:cardTapped 把行内空隙也归属最近卡片,见 thumbGrid)
@@ -328,8 +332,31 @@ private struct WindowThumb<Overlay: View>: View {
     @ObservedObject var liveBox: LiveFrameBox
     let selected: Bool
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
+    /// **换组那一拍为 true** ⇒ 卡片自己的选中动画一律不给(见下面 `selMotion` 的病例)
+    let motionSuppressed: Bool
+    /// 环里"选中一颗 App"那条动画(`controller.selectionAnimation(PanelMotion.select)`)——
+    /// 卡片**共用同一个源**,速率自然一致 ✓
+    let ringSelectMotion: Animation?
     @ViewBuilder let traffic: () -> Overlay
-    let motion: Animation?
+    /// demo `.win:hover` —— **只点灯,不动几何**(2026-10-19)
+    @State private var hovered = false
+
+    /// 卡片选中动效的统一开关。
+    ///
+    /// ★★ 2026-10-19 病例(用户稳定复现:「切到 Sublime 第二个窗口,再切到 IDEA,
+    ///   IDEA 的卡从左边浮出来」):
+    ///   行里的 `ForEach` 用的是**索引 id** ⇒ 换组时同一批视图实例被复用 ⇒ `selected`
+    ///   在这一拍翻转 ⇒ `.animation(value: selected)` 生效;而**同一拍整行也在重排**
+    ///   (新组的卡宽度不同 ⇒ 每张卡的 x 变了)⇒ 这些位移被一起动画化
+    ///   ⇒ 视觉上就是"卡片从左边浮出来"✗。
+    ///   托盘层早就有这条守卫(`.transaction { if isRingSwapInFlight { t.animation = nil } }`),
+    ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
+    private var selMotion: Animation? {
+        // 与环里**选中一颗 App** 用的是同一条动画(`PanelMotion.select` 弹簧)——
+        //   用户口径:「窗口切换和 app 选中切换对比,速率不匹配」⇒ 不是各调一个时长,
+        //   而是**共用同一个源** ✓(本仓老规矩:两套东西必须同源)
+        motionSuppressed ? nil : ringSelectMotion
+    }
 
     /// 芯片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时先截文字再截宽度
     private var displayTitle: String {
@@ -379,6 +406,8 @@ private struct WindowThumb<Overlay: View>: View {
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
         .frame(width: box.width,
                height: box.height + (PanelMetrics.thumbH - PanelMetrics.shotH))
+        // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
+        .onHover { hovered = $0 }
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
@@ -412,11 +441,13 @@ private struct WindowThumb<Overlay: View>: View {
                     //   被读成一次闪 ✗ —— 两张差异大的图叠着淡变,混合态反而扎眼 ✓
                     //   (对照实验:撤掉后如果无感 ⇒ 硬切反而是对的 ✓,DockDoor 即是 ✗)
                     // 定尺 = 这张卡自己的 box ⇒ 图与卡面同比例(既不拉伸也不留白 ✓)
-                    .frame(width: box.width, height: box.height)
-                    // 压到 30%,统一底色(`PanelColors.thumbBg`)接管卡面 —— 一排过去不再深浅乱跳;
-                    // 选中/悬停的那张恢复原样。压色量挂在卡片末尾同一条
-                    // `.animation(motion, value: selected)` 上,换选中是"底色涨上来/退下去",不是跳变
-                    .opacity(selected ? 1 : PanelMetrics.thumbWash)
+                    // ★ 2026-10-19:内容**向外多画 1pt**(超扫)——
+                    //   卡片图层边缘有 1–2px 缝:实测换组时那里会露出 2px 纯黑(2,2,2) 或近白,
+                    //   缝里透的是别层(底面/邻层)✗ ⇒ 超扫后被 `clipped()+clipShape` 裁掉,
+                    //   缝里看到的永远是卡片自己的内容 ✓
+                    // 向外多画 3pt(不是 1pt):除了盖图层缝,**还把窗口截图自带的 1px 白边挤到卡片外**
+                    //   (用户:「白边也不要了」—— 那圈 1px 近白 (216,219,222) 量过,正是截图边缘)
+                    .frame(width: box.width + 6, height: box.height + 6)
             } else {
                 // ★ 静默态(2026-09-21 定版):**该窗所属 App 的淡图标**。
                 //   为什么不是深色块:用户实报"像没加载出来/黑窗" ✗;为什么不是"截图中…":那是 loading 文案 ✗。
@@ -434,6 +465,12 @@ private struct WindowThumb<Overlay: View>: View {
             }
         }
         .frame(width: box.width, height: box.height)
+        // ★ demo `.win:not(.sel) .thumb{filter:brightness(.72) saturate(.88)}`(2026-10-19)
+        //   旧口径是"整卡压到 30% 不透明度"—— 未选中的卡几乎塌成一块灰,用户读作
+        //   「缩小的时候先下沉了」✗。demo 的压色**保形保色**,只是暗下去一档 ✓
+        .opacity(selected ? 1 : 0.72)
+        .saturation(selected ? 1 : 0.88)
+        .animation(selMotion, value: selected)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
@@ -443,38 +480,59 @@ private struct WindowThumb<Overlay: View>: View {
         //     · 径向暗斑 → "阴影做的太捞了";· 整条暗渐变 → "要毛玻璃";· 画面自糊(座)→ 后浮 ✗。
         //   形状对齐 demo `.wframe::before`:**单线性** color→clear、只盖过灯胶囊(可读性主力
         //   是灯的胶囊座,这条雾退为兜底 ⇒ 短而淡);单一支线性到 clear ⇒ 没有截断底边 ✓
-        .overlay(alignment: .top) {
-            // 卡太小 ⇒ 灯与檐一起不画(见 `PanelMetrics.thumbLightsMinW`:灯被卡缘裁掉一半的病例 ✗)
-            if box.width >= PanelMetrics.thumbLightsMinW, box.height >= PanelMetrics.thumbLightsMinH {
-                LinearGradient(colors: [PanelColors.thumbHaze, PanelColors.thumbHaze.opacity(0)],
-                               startPoint: .top, endPoint: .bottom)
-                    .frame(height: PanelMetrics.lightsFade)
-                    // 檐随卡面一起压色:未选中的整卡退到背景里,檐不该独自浮出来
-                    .opacity(selected ? 1 : PanelMetrics.thumbWash)
-                    .allowsHitTesting(false)
-            }
-        }
+        // ★ 2026-10-19:**雾檐整条撤掉**(用户:「雾蒙蒙的,不好看。要不就去掉吧」✓)
+        //   当年它的职责是"保证红绿灯在浅色画面上可读";但红绿灯现在有自己的**胶囊座**
+        //   (半透明底 + hairline + 投影,见 `TrafficLights`),可读性由座承担 ⇒ 雾是重复投保 ✗
+        //   而代价是**整条横幅压在画面上** = 为了左上角三粒灯糊掉大半张卡 ✗
+        //   ⇒ 真遇到纯白窗口看不清灯,应当加强**灯座**(局部 60pt 宽),不是给整卡盖雾 ✓
         // 三粒灯压在最上面(落位对齐 demo `.lights`:top 8 / left 9)。
         // 点它们不会关面板:点击落在面板内,不触发"面板外点击 = 放弃"那套判定
         .overlay(alignment: .topLeading) {
             if box.width >= PanelMetrics.thumbLightsMinW, box.height >= PanelMetrics.thumbLightsMinH {
-                traffic().padding(.top, 8).padding(.leading, 9)
+                traffic()
+                    .padding(.top, 8).padding(.leading, 9)
+                    // demo `.lights{opacity:0;translateY(-5px)}` → `.win:hover/.sel .lights{opacity:1;none}`
+                    .opacity(hovered || selected ? 1 : 0)
+                    .offset(y: hovered || selected ? 0 : -5)
+                    // 藏着的时候不吃点击(不然点在卡顶会误触红绿灯)
+                    .allowsHitTesting(hovered || selected)
+                    // ⚡ 两条都要守(2026-10-19 用户:「红绿灯跟蜘蛛一样从上面掉下来」✗):
+                    //   换组那一拍 hovered 也会翻转 ⇒ 漏守 hovered 这条,灯组的上落(offset -5→0)
+                    //   就被动画化 = 从上面掉下来 ✗
+                    .animation(motionSuppressed ? nil
+                               : ringSelectMotion, value: hovered)
+                    .animation(motionSuppressed ? nil
+                               : ringSelectMotion, value: selected)
             }
         }
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
-        .overlay(
+        // 底色再向外 1pt:与上面那条超扫同因(盖住图层边缘的缝)
+        .background(
             RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
-                .strokeBorder(PanelColors.thumbBorder, lineWidth: PanelMetrics.hairline)
+                .fill(PanelColors.thumbBg)
+                .padding(-1)
         )
-        .overlay(
-            // demo .win-thumb.active 的 inset 0 0 0 2px:聚焦光走内圈,不抢玻璃亮边
-            RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
-                .strokeBorder(PanelColors.thumbFocus, lineWidth: selected ? 2 : 0)
-        )
-        .scaleEffect(selected ? 1.045 : 1)
-        .elevation(selected ? .thumbActive : .thumb)
-        .animation(motion, value: selected)
+        .animation(selMotion, value: selected)
+        // ★ 选中 = **阴影强化**(2026-10-19 用户:「不要这个环了,demo 好像是用阴影强化表达的」✓)
+        //   旧病:换成 `thumbActive`(y 8→10 / r 9→11)在芯片背后变浓 ⇒ 读作"芯片被按了一下"✗
+        //   ⇒ 新档 `thumbLift`:**大 blur(34)+ 远 y(18)** ⇒ 影子散开、边界糊 ⇒ 只读"抬起来",
+        //     透出半透明芯片时也是渐变而非硬边 ✓
+        .elevation(selected ? .thumbLift : .thumb)
+        .animation(selMotion, value: selected)
+        // ★ demo `.win:not(.sel) .thumb{scale(.94)}` / `.win.sel .thumb{scale(1.05)}`
+        //   缩放**只作用在卡片上,芯片一动不动**(2026-10-19 用户第三次裁定:
+        //   「不能固定吗?只动窗口」—— 之前把整体一起缩,芯片跟着上下浮 = 打地鼠 ✗)
+        //   hover 不参与(否则指针扫过整排集体伸缩 = 太空漫步机 ✗)
+        //   锚点 = **底边中心**:卡片的下缘钉在芯片上方不动 ⇒ 卡片与芯片的间距恒定,
+        //   芯片永远不会"被落下"(2026-10-19 用户:「芯片又跟着下沉了」✗ —— 中心锚点缩小时
+        //   卡片下缘上移,间距被撑大,读起来就是芯片下沉)
+        // 🔬 2026-10-19 实验结论:缩放置 1.0 时右缘那条线**照样闪** ⇒ 与缩放无关,已恢复
+        .scaleEffect(selected ? 1.05 : 0.94, anchor: .bottom)
+        // ⚡ 不用 demo 那条带过冲的 ease-spring(2026-10-19 用户:「切换的话,有那个弹簧效果」✗):
+        //   连按 Tab 换选中时几次过冲叠在一起 = 弹跳感;鼠标一格一格挪时看不出来
+        //   ⇒ 与环/阴影同一条 easeOut 0.3s ⇒ 键盘与鼠标**完全同一种动效** ✓
+        .animation(selMotion, value: selected)
     }
 
     /// 窗口名**芯片**(2026-09-24 按「预览容器整体设计 Demo」重塑):
@@ -525,6 +583,12 @@ private struct WindowThumb<Overlay: View>: View {
             // 芯片要的"清透"由**底的半透**承担(透过它看到的是已毛玻璃化的画面),不再由受光边承担。
             // 与卡片同宽(demo:胶囊贴着卡片左右缘),高度仍是 chipH —— 尺寸账一个数没变 ✓
             .frame(width: box.width, height: PanelMetrics.chipH)
+            // demo `.win.sel .chip{transition:... .2s}` —— 圆点换色不再硬切
+            // ⚡ 换组那一拍**同样不给动画**(2026-10-19 用户:「芯片从左下角出现」✗):
+            //   新组卡宽不同 ⇒ 芯片的 frame 宽度也在那一拍变 ⇒ 被这条动画一吃,
+            //   芯片就是从旧宽度/旧位置"长"出来的 ✗
+            .animation(motionSuppressed ? nil
+                       : ringSelectMotion, value: selected)
     }
 }
 

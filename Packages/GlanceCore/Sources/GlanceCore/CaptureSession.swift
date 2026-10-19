@@ -113,8 +113,16 @@ public enum CaptureSessionRule {
     /// `screenWideOverlay` 认(取景框铺满屏,聊天窗不铺) —— 这个区分是准的,不需要猜。
     public static func verdict(_ evidence: CaptureSessionEvidence,
                               extraBundleIDs: Set<String> = []) -> Verdict {
-        if evidence.systemCaptureUIRunning {
-            return Verdict(isCapture: true, reason: "系统截图 UI(screencaptureui)在跑")
+        // ⚡ 2026-10-19 病例(用户实报「一录屏,快捷键就失效了」):
+        //   旧口径第一条是「screencaptureui 在跑 = 截图会话」。但**录屏期间它一直常驻**
+        //   —— 菜单栏那颗"停止"按钮就是它,窗口只有几十 pt,根本不铺屏 ✗
+        //   ⇒ 裁决永久为真 ⇒ 面板里整套导航键静默放行(日志:`截图会话里放行 kc=53`),
+        //     表现就是"一开始录屏,快捷键全失效" ✗
+        //   ⇒ "它在跑"降级成**旁证**:必须有取景框(铺满屏的窗,见下面 ①)或前台就是它。
+        //     录屏时两条都不成立 ⇒ 不再误判 ✓
+        if evidence.systemCaptureUIRunning,
+           evidence.frontmostBundleID.map({ systemUIBundleIDs.contains($0) }) == true {
+            return Verdict(isCapture: true, reason: "系统截图 UI 在前台(screencaptureui)")
         }
         if let bundleID = evidence.frontmostBundleID {
             if systemUIBundleIDs.contains(bundleID) {
