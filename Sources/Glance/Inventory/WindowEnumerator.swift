@@ -335,6 +335,25 @@ enum WindowEnumerator {
     ///   面板在场时它可能报的是**我们自己**(面板是 key 窗 ✓),或干脆是 nil ⇒
     ///   "第一格 = 当前 App"这条不变量就会悄悄失效 ✗(用户截图里第一格是别的 App ✗)
     /// 窗口表是我们唯一自己掌握顺序的证据 ✓(排除自己 ✓:面板那扇窗永远在最前 ✗)
+    /// **最近被激活**的那个 App(在这些 pid 里) —— 排序与落点都用它当"当前 App"。
+    ///
+    /// ★★ 2026-10-19 病例(用户实报「之前 app 按使用时间倒序,现在体感不是这样」):
+    ///   旧口径 `frontmostPID` 取的是**窗口堆叠序里第一个普通窗** ⇒ 只要有 App 挂着
+    ///   **常驻浮窗**(飞象那种聊天浮窗压在最上面),它就会被当成"当前 App"顶到第一格 ✗
+    ///   实测日志对得上:
+    ///   ```
+    ///   [4438974] 落点顺序 [飞象 | Ghostty | Chrome | …]   ← 那一段用户一直在 Ghostty
+    ///   [4439037] 已聚焦: Ghostty                        ← 落点 index 1 = Ghostty = 自己 ✗
+    ///   ```
+    ///   ⇒ 一是**排序**被带歪(飞象排到了最近用过的 Ghostty 前面),
+    ///     二是**落点**落到自己身上(按 ⌘Tab 等于没切换)✗
+    ///   现在:先问 `MruEvidence`(它记的是**激活通知**序列 = 真·最近用过的 App ✓),
+    ///   问不到才退回窗口堆叠序(新 App 刚起来、还没激活过的那种)✓
+    static func recentlyActivePID(of pids: Set<pid_t>) -> pid_t? {
+        if let pid = MruEvidence.shared.order.first(where: { pids.contains($0) }) { return pid }
+        return frontmostPID(of: pids)
+    }
+
     static func frontmostPID(of pids: Set<pid_t>) -> pid_t? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                    kCGNullWindowID) as? [[String: Any]] else { return nil }
@@ -358,7 +377,8 @@ enum WindowEnumerator {
         let rest = MruEvidence.shared.ordered(pids: pids.filter { rank($0) == nil })
         var ordered = (local + rest).compactMap { byPID[$0] }
         // 前台 App 必须在第一格(原设计:第一眼与原生一致 ✓,落点规则也认这一条 ✓)
-        if let front = frontmostPID(of: Set(pids)),
+        // ⚠️ 2026-10-19:这里必须用 `recentlyActivePID`(激活序列),不能再用窗口堆叠序(见它的病例)
+        if let front = recentlyActivePID(of: Set(pids)),
            let i = ordered.firstIndex(where: { $0.pid == front }), i != 0 {
             let g = ordered.remove(at: i)
             ordered.insert(g, at: 0)

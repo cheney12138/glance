@@ -137,8 +137,6 @@ enum Keys {
     static let panelScrollSpeed = "panel.scrollSpeed"
     /// `panel.sheen`
     static let panelSheen = "panel.sheen"
-    /// `panel.showLaunchables`
-    static let panelShowLaunchables = "panel.showLaunchables"
     /// `panel.slideFromLastApp`
     static let panelSlideFromLastApp = "panel.slideFromLastApp"
     /// `panel.tabEntersLaunchSection`
@@ -214,8 +212,6 @@ enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true
     static let summonPop = true
-    /// 展示 Dock 常驻应用。**开**:未启动的 App 也能在环尾找到 ✓
-    static let showLaunchables = true
     /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓
     static let tabEntersLaunchSection = true
     /// 面板里滚动/双指滑动换选中。**开**(原判)

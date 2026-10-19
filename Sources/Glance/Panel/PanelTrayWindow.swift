@@ -167,6 +167,9 @@ extension PanelController {
         //   ⚠️ 代价(与旧 ADR-0006 相反,已请用户确认 ✓):换组时会**改一次窗框尺寸**
         //      ⇒ 实测这个动作用 0.1–0.4ms(主线程 ✓),且内容贴底 ⇒ 位置不动、只有玻璃左右收 ✓
         //     —— 即“旧口径:窗框是一局的不变量”改成了“窗框跟着当前组走” ✓
+        // 删窗重排的那 ~0.34 秒:**窗框完全冻结**(返回上一帧的框)。
+        //   卡片这时还画在旧位置上,窗一收就会把它们裁掉;而"按新内容重算"还会连带改位置/比例 ✗
+        if CFAbsoluteTimeGetCurrent() < trayFrameHoldUntil, let held = heldTrayFrame { return held }
         let maxContent = previewContentSize()
         let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
         if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {

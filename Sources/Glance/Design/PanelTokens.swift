@@ -755,7 +755,11 @@ enum PanelElevation {
         /// **大 blur + 更远的 y** ⇒ 影子散得更开、边界更糊 —— 一是"浮起"读得更强,
         /// 二是它从半透明芯片底下透出来时是**渐变**而不是一道硬边(旧 `thumbActive` 小半径
         /// 那次就被读成"芯片被按了一下"✗)
-        case .thumbLift: Layer(y: 18, radius: 34, light: 0.22, dark: 0.50)
+        /// ⚡ 2026-10-19 收成本:`radius 34 → 14`(y 18 → 12)。
+        ///   SwiftUI 的阴影是**离屏模糊整块卡**;实时预览 20fps ⇒ 每来一帧都要重糊一次,
+        ///   430×280 按 r34 约 2~4ms/帧,正好吃在 16.7ms 预算里(日志:长帧 1.0% → 2.6%)。
+        ///   "抬起来"的观感主要由 **y 偏移 + 透明度** 承担,不是 blur 半径 ⇒ 收小几乎无损 ✓
+        case .thumbLift: Layer(y: 12, radius: 14, light: 0.26, dark: 0.52)
         }
     }
 }
@@ -847,8 +851,11 @@ struct TrafficLights: View {
         .opacity(dimmed ? 0.55 : 1)
         // ★ 2026-10-08:原来这两行是**裸动画** ⇒ 系统说什么就是什么,Glance 的动效设置管不着 ✗
         //   (用户口径:「设置应该是全局的,应该应用在所有实现的动画上」✓)
-        .animation(MotionPolicy.animation(.easeOut(duration: 0.18)), value: hoveredDot != nil || !dimmed)
-        .animation(MotionPolicy.animation(.easeOut(duration: 0.18)), value: dimmed)
+        // ★★ 2026-10-19 定版(用户两次实报「灯淡入」「不一致」):红绿灯**一律不做过渡**。
+        //   走过的三段:① 上落位移(offset -5→0)⇒ 换组时读作"从上面掉下来" ✗
+        //   ② 关掉卡片层那条 ⇒ 没用,因为 **组件自己**还有下面这两条(选中翻转时
+        //      `dimmed` 变化 ⇒ 整组 opacity 0.55→1 = 用户看到的淡入)✗
+        //   ③ 现在:所有透明度/饱和度变化都**当拍** ⇒ 与单窗口时"直接亮"完全一致 ✓
     }
 
     private func light(_ color: Color, _ symbol: String, _ hint: String,

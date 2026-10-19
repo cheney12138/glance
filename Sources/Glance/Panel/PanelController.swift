@@ -45,6 +45,23 @@ final class PanelController: ObservableObject {
             }
         }
     }
+    // MARK: - 托盘尺寸暂缓(删窗重排用)
+
+    /// 删掉一扇窗后,卡片要做 FLIP 滑位(见 `PreviewPanelView.handleCardFrames`)——
+    /// 那 0.34s 里卡片仍画在**旧位置**上,而托盘窗已经会按新内容收窄 ⇒ 会被窗缘裁掉 ✗
+    /// ⇒ 这一段暂时把托盘窗留大一点(窗口本身透明,留大不可见 ✓)
+    var trayFrameHoldUntil: CFAbsoluteTime = 0
+    var heldTrayFrame: NSRect?
+
+    /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
+    /// ⚠️ 2026-10-19 第一次实现是"把内容尺寸临时加大 220pt",结果 `TrayGeometry` 会按新的
+    ///    maxContentSize 重算位置/比例 ⇒ 内容整体被推上去 ✗(用户:「删除一个窗口之后,位置上移了」)。
+    ///    冻结帧 = 什么都不算、什么都不改 ⇒ 动画期间托盘的几何是死的,只有卡片在动 ✓
+    func holdTrayFrame(seconds: Double) {
+        if let f = previewPanel?.frame { heldTrayFrame = f }
+        trayFrameHoldUntil = CFAbsoluteTimeGetCurrent() + seconds
+    }
+
     /// 换组后"内容正在互换"的窗口(见 `appIndex.didSet`)
     var contentSwapUntil: CFAbsoluteTime = 0
     static let contentSwapSeconds: CFAbsoluteTime = 0.25
@@ -389,7 +406,11 @@ final class PanelController: ObservableObject {
         entrySelected = false
         launchIndex = nil
         SessionMarks.step("状态三笔")   // 🔬 细账(2026-10-09):@Published 赋值本身要不要钱
-        if UserDefaults.standard.object(forKey: Keys.panelShowLaunchables) as? Bool ?? true {
+        // ★ 2026-10-19:原来这里外面套着 `if Keys.panelShowLaunchables`(设置里那个
+        //   「展示 Dock 常驻应用」开关)。用户实报「这是个废配置,也不起作用」—— 拨了没有可感知变化,
+        //   因为默认一直是开,而关掉的效果(整条未启动环消失)并不是用户会去用的东西 ✗
+        //   ⇒ 开关撤掉,行为**固定成原来的默认值(开)**:未启动环一直在 ✓
+        do {
             // ⚠️ 2026-09-17 病例:除了 bundle id,**把 bundle 的路径也放进"在跑"的集合**。
             // 有些 Dock 常驻项取不到 bundleID(`DockApps.launchables` 里会退化成用 **path** 当 id),
             // 那时"在跑"的集合里只有 id ⇒ 两边**永远对不上** ⇒ 明明在跑的 App 也被列成"未启动"。
@@ -408,8 +429,6 @@ final class PanelController: ObservableObject {
             if isTraceEnabled, !launchables.isEmpty {
                 trace("[T91] 未启动名单: " + launchables.map { "\($0.name)[\($0.id)]" }.joined(separator: " · "))
             }
-        } else {
-            launchables = []
         }
         SessionMarks.step("T91")        // 🔬 细账
         SessionMarks.step("Dock")     // 🔬 细账:启动区名单(自 2026-10-09 起只吃缓存 ⇒ 应该降到亚毫秒 ✓)
@@ -447,7 +466,9 @@ final class PanelController: ObservableObject {
         SessionMarks.step("落点")
         // ★ 落点从"**当前 App 在哪一格**"算(2026-09-22 病例:第一格不一定是当前 App ✗ ⇒
         //   落点落到自己身上,用户按一下什么都没换 ✗)。顺序里的当前 App 用窗口表判 ✓
-        let currentIdx = WindowEnumerator.frontmostPID(of: Set(groups.map(\.pid)))
+        // ⚠️ 2026-10-19:用**最近被激活**的 App(激活序列),不是窗口堆叠序 ——
+        //   后者会被常驻浮窗带歪 ⇒ 落点落到自己身上(按 ⌘Tab 等于没切换)✗(病例见 `recentlyActivePID`)
+        let currentIdx = WindowEnumerator.recentlyActivePID(of: Set(groups.map(\.pid)))
             .flatMap { pid in groups.firstIndex { $0.pid == pid } } ?? 0
         appIndex = advanceOnOpen
             ? LandingRule.landingIndex(count: groups.count, from: currentIdx, reverse: reverse)
@@ -1000,8 +1021,20 @@ final class PanelController: ObservableObject {
     }
     private var lastRowAlignKey: String = ""
 
-    func setFrameIfNeeded(_ panel: NSPanel, _ frame: NSRect?, caller: String = #function) {
-        guard let frame, !panel.frame.nearlyEquals(frame) else { return }
+    func setFrameIfNeeded(_ panel: NSPanel, _ rawFrame: NSRect?, caller: String = #function) {
+        // ★★ 2026-10-19 病例(日志量出来的,不是猜):
+        //   每次唤起都在重设主面板窗框,而两个值只差 0.1~0.6pt:
+        //   ```
+        //   1884.0x375.0  →  1883.9x374.4
+        //   1884.0x375.0  →  1883.9x374.4      ← 每次都"变了",所以每次都真的 setFrame
+        //   ```
+        //   ⇒ `nearlyEquals` 的 eps = 0.5 卡在中间,永远判"不等" ⇒ 每次唤起白付一次
+        //     **同步窗口布局 + 后备存储重分配**(实测 13–60ms,占唤起 34–72ms 的一半)✗
+        //   ⇒ 先把目标帧**取整**再比较/设置:1883.9x374.4 → 1884x374,两次一致 ⇒ 直接跳过 ✓
+        //     (取整也顺带消除亚像素窗口边界,那本来就会让内容画糊)
+        guard let rawFrame else { return }
+        let frame = rawFrame.integral
+        guard !panel.frame.nearlyEquals(frame) else { return }
         // ★★ 2026-09-21(分段计时抓到的最后一段账):`display: true` 会**当场**重绘 ✗
         //   ⇒ 实测 setFrame **9–12ms**(就是注释里那句"同步窗口布局 + 后备存储重分配"),
         //   而这一帧里滑块弹簧/图标上浮正在跑 ⇒ 掉帧。
