@@ -499,29 +499,47 @@ private struct IconCell: View {
     ///
     /// 选中时必须跟着图标一起抬(`dotLift`,理由见 `PanelTokens`)—— 记号挂的是**格子**底边,
     /// 而图标选中后是"上浮 + 放大"两件事一起动,不跟就会掉队到托盘底边上去。
+    /// **记账点发牌**(2026-10-18,glance-ring-motion.html ③):窗数变化的那一拍,
+    /// 记号先**瞬间**归零(无过渡,同 demo 换 outerHTML),再逐个以 36ms 间隔弹出
+    /// (单点 0.18s,demo 同款 cubic-bezier(.3,.9,.35,1.2))—— 只动 scale/opacity,
+    /// 不碰位置 ✓
+    @State private var dealing = false
+
     @ViewBuilder private var windowDots: some View {
         let tally = WindowTally.layout(windows: group.windows.count,
                                        available: PanelMetrics.icon,
                                        metrics: PanelMetrics.tally)
         if !tally.marks.isEmpty {
             HStack(spacing: tally.sizes.gap) {
-                ForEach(Array(tally.marks.enumerated()), id: \.offset) { _, mark in
-                    switch mark {
-                    case .dot:
-                        Circle()
-                            .fill(PanelColors.dot)
-                            .frame(width: tally.sizes.dot, height: tally.sizes.dot)
-                    case .dash:
-                        // 横要"压得住"五个点:与圆点同族、但明显更重(理由与对照图见 PanelMetrics.dashHeight)
-                        Capsule()
-                            .fill(PanelColors.dot)
-                            .frame(width: tally.sizes.dashWidth,
-                                   height: PanelMetrics.dashHeight * tally.sizes.scale)
+                ForEach(Array(tally.marks.enumerated()), id: \.offset) { idx, mark in
+                    Group {
+                        switch mark {
+                        case .dot:
+                            Circle()
+                                .fill(PanelColors.dot)
+                                .frame(width: tally.sizes.dot, height: tally.sizes.dot)
+                        case .dash:
+                            // 横要"压得住"五个点:与圆点同族、但明显更重(理由与对照图见 PanelMetrics.dashHeight)
+                            Capsule()
+                                .fill(PanelColors.dot)
+                                .frame(width: tally.sizes.dashWidth,
+                                       height: PanelMetrics.dashHeight * tally.sizes.scale)
+                        }
                     }
+                    .scaleEffect(dealing ? 0.01 : 1)
+                    .opacity(dealing ? 0 : 1)
+                    // 收拢(dealing=true)必须**当帧**:动画给 nil;弹出时才用发牌曲线 + 逐个延迟 ✓
+                    .animation(dealing ? nil : .timingCurve(0.3, 0.9, 0.35, 1.2, duration: 0.18)
+                        .delay(Double(idx) * 0.036), value: dealing)
                 }
             }
             .opacity(0.8)
             .offset(y: PanelMetrics.dotBottom - (selected ? PanelMetrics.dotLift : 0))
+            .onChange(of: group.windows.count) { _ in
+                dealing = true
+                // 下一两个 runloop 再放开:让"归零"先落一帧,弹出才看得见(同 demo 的双 rAF ✓)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { dealing = false }
+            }
         }
     }
 }
