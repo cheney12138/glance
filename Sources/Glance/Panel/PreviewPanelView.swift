@@ -13,12 +13,63 @@ import GlanceCore
 /// 构型变了:托盘住在长条**头顶**,由「App 名 · N 个窗口」一行题头 + 一排 128px 缩略图组成。
 /// demo 里的 `.win-chrome`(三粒装饰点 + 64px 渐变块)是给没有真截图的 HTML 用的假窗皮——
 /// 原生这边截图本身就是真窗口,所以缩略图 = 截图 + 下方标题条两段,不再叠装饰点。
+/// 每张卡在**托盘坐标系**里的位置 —— 用来做"删窗后重排"的 FLIP(见 `handleCardFrames`)
+private struct CardFrameKey: PreferenceKey {
+    static var defaultValue: [CGWindowID: CGRect] = [:]
+    static func reduce(value: inout [CGWindowID: CGRect], nextValue: () -> [CGWindowID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { a, _ in a })
+    }
+}
+
+/// 被删掉那张卡的**退场影子**:原位置放一张快照,0.12s 缩到 0.92 + 淡出 ✓
+private struct GhostCard: Identifiable {
+    let id = UUID()
+    let wid: CGWindowID
+    let rect: CGRect
+    let image: NSImage?
+    let width: CGFloat
+}
+
+/// 退场影子:原位置的一张快照,0.12s 内缩到 0.92 + 淡出(`handleCardFrames` 的 ①)
+private struct GhostThumb: View {
+    let ghost: GhostCard
+    @State private var gone = false
+
+    var body: some View {
+        Group {
+            if let image = ghost.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.medium)
+            } else {
+                Rectangle().fill(PanelColors.thumbBg)
+            }
+        }
+        .frame(width: ghost.width, height: ghost.rect.height)
+        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
+        .scaleEffect(gone ? 0.92 : 1)
+        .opacity(gone ? 0 : 1)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.12)) { gone = true }
+        }
+    }
+}
+
 struct PreviewPanelView: View {
     @ObservedObject var controller: PanelController
     @ObservedObject var snapshotter: Snapshotter
     // (S2.1)托盘**不再**观察整个池:每张卡各自观察自己那一个帧盒子 ⇒ 只重绘那一张卡 ✓
     /// 光效总闸(与主环 IconCell 同一个 key):启动行的提亮/压暗跟着一起开一起关
     @AppStorage(Keys.panelSheen) private var glow = KeyDefaults.sheen
+
+    // MARK: - 删窗后的重排(FLIP)
+
+    /// 上一帧每张卡的位置(托盘坐标系)
+    @State private var cardFrames: [CGWindowID: CGRect] = [:]
+    /// 这一轮 FLIP 的起始位移:先画回旧位置,再动画化到 0
+    @State private var flipOffset: [CGWindowID: CGSize] = [:]
+    /// 正在退场的影子卡
+    @State private var ghosts: [GhostCard] = []
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
@@ -113,6 +164,50 @@ struct PreviewPanelView: View {
     /// 行数由 `trayLayout` 取"放得下的最少行数",所以各行是**均衡**的(8 扇窗 = 4+4,
     /// 不是 7+1);末行少几张时**左对齐留空**,不拉伸、不居中 —— 居中的话卡片间距会随
     /// 末行张数变,左右扫视时每一行的节凑都不一样。
+    /// **删窗后的重排**(2026-10-19 用户实拍:"删一扇窗,托盘突然少一张,很生硬"):
+    /// 两拍,与 `window-remove-reflow.html` 预览一致:
+    ///   ① 0–0.12s 被删那张**缩小 + 淡出**(用影子画在它原来的位置上,因为模型已经把它摘掉了)
+    ///   ② 0.12–0.34s 剩下的卡**同时**滑到新位置(FLIP:先 offset 回旧位置,再动画化到 0)
+    /// 只在"窗口**变少**"时触发 —— 换组(内容整套换)和新增窗都不掺和(那两条各有各的路径)✓
+    private func handleCardFrames(_ new: [CGWindowID: CGRect]) {
+        let old = cardFrames
+        cardFrames = new
+        guard !old.isEmpty, !new.isEmpty else { return }
+        // 换组 / 换环那一拍:整块换内容,不是"少了一张" ⇒ 不参与(否则整排卡会飞)✗
+        guard !controller.isContentSwapInFlight, !controller.isRingSwapInFlight else { return }
+        let gone = old.filter { new[$0.key] == nil }
+        guard !gone.isEmpty else { return }
+        // 托盘窗先别收:卡片还要在旧位置停 0.12s + 滑 0.22s,窗先收会把它们裁掉 ✗
+        controller.holdTrayFrame(seconds: 0.24)
+        // ① 退场影子
+        for (wid, rect) in gone {
+            ghosts.append(GhostCard(wid: wid, rect: rect,
+                                    image: snapshotter.cache[wid], width: rect.width))
+        }
+        // ② **位置变了的卡**从**右侧滑入**(2026-10-19 第四版):
+        //   用户:「从左下飞出来的效果我不喜欢,改成从右边滑动入场」
+        //   ⇒ 不再用"旧位置 → 新位置"的位移(v1 斜跨 / v2 两段都被否),
+        //     而是**在新位置上先右移 64pt**,再滑回 0 —— 读作"新卡片从右边滑进来" ✓
+        //   (只给真的换了位置的卡;没动的那几张保持不动 ✓)
+        var offs: [CGWindowID: CGSize] = [:]
+        for (wid, now) in new {
+            guard let was = old[wid] else { continue }
+            if abs(was.minX - now.minX) > 0.5 || abs(was.minY - now.minY) > 0.5 {
+                offs[wid] = CGSize(width: 64, height: 0)
+            }
+        }
+        guard !offs.isEmpty else { return }
+        // ★★ 2026-10-19 第三版(用户:「都很怪,不统一,也不优雅」):
+        //   v1 = 斜跨(不像话) · v2 = 先垂直后水平(三段,读起来碎)
+        //   ⇒ 现在:**新位置 + 右侧 64pt 起步 → 滑回**;与影子淡出同时开始、同一时长 0.20s ✓
+        //     托盘窗框在动画期间冻结(不然会裁掉还在旧位置的卡),结束后立刻按新内容收 ✓
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { flipOffset = offs }
+        withAnimation(.easeInOut(duration: 0.20)) { flipOffset = [:] }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { ghosts = [] }
+    }
+
     private var thumbGrid: some View {
         // 卡宽随窗比例(T88):布局按每张卡的实际宽算,不再假定定尺
         // ★ 方案 A:布局一律走槽宽(本局最宽卡)⇒ 与控制器尺寸账/命中同源
@@ -145,6 +240,16 @@ struct PreviewPanelView: View {
         //   灯掉下来的真因是 `hovered` 那条动画没守(已补 ✓),而换身份会**先拆旧视图再建新视图**
         //   ⇒ 中间那一帧旧卡还留在屏上,露出一条边(2026-10-19 用户实报:「切 app 时右边闪一条白线」✗,
         //   字面复核:那条线不在选中卡上、只有 2px 宽、比环更白)⇒ 换身份这招撤掉 ✓
+        .coordinateSpace(name: "glance.tray")
+        .onPreferenceChange(CardFrameKey.self) { handleCardFrames($0) }
+        // 退场影子画在最上层(原位置),0.12s 缩+淡出后自己摘掉 ✓
+        .overlay(alignment: .topLeading) {
+            ForEach(ghosts) { ghost in
+                GhostThumb(ghost: ghost)
+                    .position(x: ghost.rect.midX, y: ghost.rect.midY)
+                    .allowsHitTesting(false)
+            }
+        }
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
         // 卡片在指针脚下重排 —— tracking area 在"视图于指针底下重排之后就哑了,不补发 hover"
         // (本仓库实咬两次的病)。表现就是用户实报的「键盘选完组、鼠标去接管,慢半拍」。
@@ -213,6 +318,14 @@ struct PreviewPanelView: View {
             },
         )
         .onHover { inside in if inside { controller.hoverWindow(i) } }
+        // 量出自己在托盘坐标系里的位置(**放在 offset 之前**:offset 只是绘制位移,
+        // 量到的必须是布局位置,否则下一轮 FLIP 会把自己上一轮的位移再算一遍 ✗)
+        .background(GeometryReader { g in
+            Color.clear.preference(key: CardFrameKey.self,
+                                   value: [w.wid: g.frame(in: .named("glance.tray"))])
+        })
+        // 删窗重排:先补回旧位置(`flipOffset`),再动画化到 0
+        .offset(flipOffset[w.wid] ?? .zero)
         // (点击已由**行级手势**接管:cardTapped 把行内空隙也归属最近卡片,见 thumbGrid)
     }
 
@@ -493,26 +606,31 @@ private struct WindowThumb<Overlay: View>: View {
                     .padding(.top, 8).padding(.leading, 9)
                     // demo `.lights{opacity:0;translateY(-5px)}` → `.win:hover/.sel .lights{opacity:1;none}`
                     .opacity(hovered || selected ? 1 : 0)
-                    .offset(y: hovered || selected ? 0 : -5)
+                    // ⚡ 2026-10-19:**去掉上下位移**(用户:「红绿灯还是掉下来的」):
+                    //   demo 的 `translateY(-5px)→0` 在这个场景里只有副作用 ——
+                    //   换组时卡片视图被复用,新组的灯是"从隐藏态浮现",那条上落动画照样会播 ⇒ 掉下来 ✗
+                    //   灯只做**淡入淡出** ⇒ 无论从哪条路径出现,都不会有竖直位移 ✓
                     // 藏着的时候不吃点击(不然点在卡顶会误触红绿灯)
                     .allowsHitTesting(hovered || selected)
-                    // ⚡ 两条都要守(2026-10-19 用户:「红绿灯跟蜘蛛一样从上面掉下来」✗):
-                    //   换组那一拍 hovered 也会翻转 ⇒ 漏守 hovered 这条,灯组的上落(offset -5→0)
-                    //   就被动画化 = 从上面掉下来 ✗
-                    .animation(motionSuppressed ? nil
-                               : ringSelectMotion, value: hovered)
-                    .animation(motionSuppressed ? nil
-                               : ringSelectMotion, value: selected)
+                    // ★★ 2026-10-19 定版(用户:「正常单窗口是没有淡入淡出的,不一致了」):
+                    //   灯**一律不做过渡** —— 要么在、要么不在,与单窗口时的观感完全一致 ✓
+                    //   走过的弯路都在这里,别再捡回来:
+                    //     · `offset(y:-5→0)` 上落 ⇒ 换组时被读成「红绿灯跟蜘蛛一样从上面掉下来」✗
+                    //     · 只守换组那一拍 ⇒ 灯常在守卫窗口之后才浮现,拦不住 ✗
+                    //     · 改为纯淡入淡出 ⇒ 与单窗口(直接亮)不一致 ✗
+                    //   ⇒ 无过渡 = 唯一与"正常情况"一致的做法 ✓
+                    // ⚠️ 但**光删自己的 `.animation` 没用**:卡片末尾那条
+                    //   `.animation(selMotion, value: selected)` 会给整棵子树加动画(灯的 opacity 也在里面)✗
+                    //   ⇒ 必须在这里**断掉继承的动画事务** ✓
+                    .transaction { $0.animation = nil }
             }
         }
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
-        // 底色再向外 1pt:与上面那条超扫同因(盖住图层边缘的缝)
-        .background(
-            RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
-                .fill(PanelColors.thumbBg)
-                .padding(-1)
-        )
+        // ⚠️ 2026-10-19:这里曾有一层"向外 1pt 的卡片底色"(给图层缝做双保险)——
+        //   它比卡片大一圈、又是深色 ⇒ 在深色模式下等于给卡片**描了一道 1pt 暗边** ✗
+        //   (用户实拍「深色模式下卡片怎么还有边框」;实测边缘正是 2px 的 (33,38,43))
+        //   缝已由截图超扫盖住(见上面 `box.width + 6`)⇒ 这层保险撤掉 ✓
         .animation(selMotion, value: selected)
         // ★ 选中 = **阴影强化**(2026-10-19 用户:「不要这个环了,demo 好像是用阴影强化表达的」✓)
         //   旧病:换成 `thumbActive`(y 8→10 / r 9→11)在芯片背后变浓 ⇒ 读作"芯片被按了一下"✗

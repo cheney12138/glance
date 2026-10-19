@@ -108,8 +108,6 @@ struct SettingsView: View {
     }
     /// 颜色外观:auto / light / dark(默认 auto = 跟随系统)
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
-    /// 启动区(方案 E):Dock 常驻且未启动的 App 在面板环尾展示。默认开(展示层新增,不抢任何按键)
-    @AppStorage(Keys.panelShowLaunchables) private var showLaunchables = KeyDefaults.showLaunchables
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
     @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = KeyDefaults.tabEntersLaunchSection
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
@@ -410,10 +408,9 @@ struct SettingsView: View {
             // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
             // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
             SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
-                SettingsRow(title: "展示 Dock 常驻应用",
-                            desc: "未启动的 Dock 应用排在面板尾部,选中即可启动。") {
-                    BeamSwitch(isOn: $showLaunchables)
-                }
+                // ⚠️ 2026-10-19 撤掉「展示 Dock 常驻应用」这一行(用户:「这是个废配置了,删掉吧,也不起作用」):
+                //   键 `panel.showLaunchables` 全仓**没有任何读取点** —— 只有这一行自己在绑 ⇒ 拨了也不影响行为 ✗
+                //   (留着比删掉更坏:用户会以为自己关掉了未启动区,实际什么都没变 ✓)
                 SettingsRow(title: "Tab 进入未启动区",
                             // 2026-09-22 补：原小字只写了“怎么进”，没写“怎么回” ⇒ 用户关掉开关后以为
                             // “未启动段进不去 / 出不来”（实为 Tab 不再跨段，进出口改由 ↓/↑ 承担）。
