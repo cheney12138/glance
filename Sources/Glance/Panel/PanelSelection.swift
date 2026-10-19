@@ -221,8 +221,11 @@ extension PanelController {
         FrameProbe.lastHoverMark = CACurrentMediaTime()   // 同"键盘换选中":选中一变就打点
         traceCost("窗口选中") {
             winIndex = (winIndex + delta + n) % n
-            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
-            traceCost("  ↳托盘更新") { updatePreview() }
+            // ★★ 2026-10-19(用户实报:「键盘切换时,窗口和芯片变成一个整体在动」):
+            //   这里原本还多做两件事 —— `updatePreview()`(**重摆托盘窗口** setFrame + 重排 + 换流)
+            //   和 `refreshSnapshotForSelection()`(重拍)。鼠标 hover 那条路(`hoverWindow`)
+            //   **只改 winIndex**,什么都不重排 —— 而用户要的正是那条路的观感 ✓
+            //   ⇒ 键盘换窗与指针换窗**收敛到同一条路径**:只改状态,让视图自己动 ✓
         }
         trace("[T6] 窗口选中(键盘 ←→): \(groups[appIndex].windows[winIndex].title)")
     }

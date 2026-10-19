@@ -28,7 +28,27 @@ final class PanelController: ObservableObject {
     /// 所以另存一份副本(只有一份源:由 `finishBegin` / `applyList` 在"名单成为事实"那两处写 ✓)
     var lastSessionGroups: [AppGroup] = []
     private var lastSessionScreenID: CGDirectDisplayID?
-    @Published var appIndex = 0
+    @Published var appIndex = 0 {
+        didSet {
+            // ★★ 2026-10-19:换组(无论走 ↓↑/Tab、⌘Tab、还是**指针悬停换组**)都在这里过账。
+            //   卡片要在这短暂窗口里**完全不做选中动画** —— 否则换组那一拍整行重排会被动画化,
+            //   视觉上就是"新组的卡片从左边浮出来"(用户稳定复现:Sublime 第二窗 → IDEA/DataGrip)✗
+            if appIndex != oldValue {
+                contentSwapUntil = CFAbsoluteTimeGetCurrent() + Self.contentSwapSeconds
+                // ★★ 2026-10-19(用户实拍:「预览窗**最右边一条细白线**闪一下」):
+                //   托盘窗框是**跟着当前组**收放的(2026-10-13 的口径),而 SwiftUI 会在
+                //   "窗框还是旧组的宽度、内容已经是新组"的那一帧先画一次 ⇒ 右侧被窗缘切一刀,
+                //   白线 = 被切断的选中环 ✓
+                //   ⇒ 在**状态落下来之前**先把窗框改成新组的尺寸(didSet 早于 body 求值 ✓),
+                //     渲染那一帧窗宽已经够,不再切 ✓
+                updatePreview()
+            }
+        }
+    }
+    /// 换组后"内容正在互换"的窗口(见 `appIndex.didSet`)
+    var contentSwapUntil: CFAbsoluteTime = 0
+    static let contentSwapSeconds: CFAbsoluteTime = 0.25
+    var isContentSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < contentSwapUntil }
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
     /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)

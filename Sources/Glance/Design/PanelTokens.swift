@@ -663,6 +663,10 @@ enum PanelColors {
     /// (2026-09-24 曾按「预览容器整体设计 Demo」改成系统强调色 outline —— 用户实评
     ///  「选中的时候不要那个蓝色边框,很丑」⇒ 当日退回白环 ✓)
     static let thumbFocus = dynamic(white(0.55), white(0.62))
+    /// 选中光带**外侧那一圈对比暗边**:浅色下白环压在大片白色窗口(访达)上会看不见 ⇒ 需要它立边界;
+    /// 深色下卡片本来就是深的,白环自己就够清楚 ⇒ 暗边收一半(压太重会像描了个黑框)✓
+    static let thumbRingRim = dynamic(NSColor.black.withAlphaComponent(0.38),
+                                      NSColor.black.withAlphaComponent(0.20))
     /// 指针跟随高光:demo 是 soft-light 的白 30%,混不进进程外的玻璃,折成等效普通 alpha。
     /// 换算:soft-light(白)= √b,按 .30 权重大约提亮 0.06~0.08;白 alpha .12/.16 给 0.05~0.09。
     /// 深色 .20 → **.26**:深玻璃的底更暗,同样的 alpha 提亮量感知上更小(暗部 Weber 效应),
@@ -708,7 +712,7 @@ enum PanelElevation {
         }
     }
 
-    case strip, tray, puck, icon, thumb, thumbActive
+    case strip, tray, puck, icon, thumb, thumbActive, thumbLift
 
     var shadow: Layer {
         switch self {
@@ -747,6 +751,11 @@ enum PanelElevation {
         case .icon: Layer(y: 5, radius: 5, light: 0.18, dark: 0.45)
         case .thumb: Layer(y: 8, radius: 9, light: 0.18, dark: 0.42)
         case .thumbActive: Layer(y: 10, radius: 11, light: 0.28, dark: 0.55)
+        /// 选中卡的"抬起来"(2026-10-19,照 demo `.win.sel .thumb{0 26px 64px rgba(0,0,0,.55)}`):
+        /// **大 blur + 更远的 y** ⇒ 影子散得更开、边界更糊 —— 一是"浮起"读得更强,
+        /// 二是它从半透明芯片底下透出来时是**渐变**而不是一道硬边(旧 `thumbActive` 小半径
+        /// 那次就被读成"芯片被按了一下"✗)
+        case .thumbLift: Layer(y: 18, radius: 34, light: 0.22, dark: 0.50)
         }
     }
 }

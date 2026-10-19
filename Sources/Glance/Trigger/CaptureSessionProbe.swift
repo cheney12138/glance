@@ -60,7 +60,11 @@ enum CaptureSessionProbe {
             screenWideOverlays: overlays.map { pid in
                 CaptureSessionEvidence.ScreenWideOverlay(
                     ownerPID: pid,
-                    ownerBundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+                    // ★ 2026-10-19:`screencaptureui` 是后台型进程(activationPolicy == .prohibited),
+                    //   个别系统版本里 `bundleIdentifier` 读出来是 nil ⇒ 取景框归因不上 ⇒
+                    //   裁决退回"无截图会话",回车又会被两边各收一次(T32 复发)。
+                    //   窗口属主名是硬的,读不到 bundleID 时用它补一个规范 id ✓
+                    ownerBundleID: Self.bundleID(pid: pid, windows: windows)
                 )
             }
         )
@@ -69,6 +73,16 @@ enum CaptureSessionProbe {
     private static func onScreenWindows() -> [[String: Any]] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         return CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+    }
+
+    /// 属主 pid → bundle id;读不到时按**窗口属主名**补系统截图 UI 的规范 id。
+    private static func bundleID(pid: pid_t, windows: [[String: Any]]) -> String? {
+        if let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier { return id }
+        let owner = windows.first { ($0[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid }
+            .flatMap { $0[kCGWindowOwnerName as String] as? String }
+        return owner.flatMap { name in
+            (name == "screencaptureui" || name == "screencapture") ? "com.apple.screencaptureui" : nil
+        }
     }
 
     /// 系统截图 UI 在不在。两条路一起看,理由是它们的失效方式不同:
