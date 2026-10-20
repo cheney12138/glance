@@ -1315,12 +1315,47 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// 这扇窗的帧是不是**带透明**(窗口半透明)。每扇窗只判一次(16×16 采样)。
+    private var translucentWIDs: Set<CGWindowID> = []
+    private var translucentLogged: Set<CGWindowID> = []
+    private func isTranslucent(_ img: CGImage, wid: CGWindowID) -> Bool {
+        if translucentWIDs.contains(wid) { return true }
+        let side = 16
+        var buf = [UInt8](repeating: 0, count: side * side * 4)
+        let ok = buf.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(data: raw.baseAddress, width: side, height: side,
+                                      bitsPerComponent: 8, bytesPerRow: side * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard ok else { return false }
+        // 有像素明显半透(alpha < 220)⇒ 判为半透明窗
+        var minAlpha = 255
+        for i in stride(from: 3, to: buf.count, by: 4) { minAlpha = min(minAlpha, Int(buf[i])) }
+        if minAlpha < 220 { translucentWIDs.insert(wid); return true }
+        return false
+    }
+
     fileprivate func ingest(_ sb: CMSampleBuffer, wid: CGWindowID, gen g: Int) {
         guard activeGens.contains(g) else { return }
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         var raw: CGImage?
         VTCreateCGImageFromCVPixelBuffer(pb, options: nil, imageOut: &raw)
         guard let img = raw else { return }
+        // ★★ 2026-10-20:**半透明窗口不接实时帧**(只用静帧)。
+        //   病例(用户:「Sublime … 那一小下还是能看见」):这类窗的实时帧带 alpha(实测 ≈0.886),
+        //   静帧是**已合成**的成品(不透明)⇒ 同一扇窗的两张图本质不同,任何切换都能被看见 ✗
+        //   它们很少见(Sublime 开了窗口透明度这类),静帧完全够用 ⇒ 判定一次,这类窗不起流 ✓
+        if isTranslucent(img, wid: wid) {
+            if !translucentLogged.contains(wid) {
+                translucentLogged.insert(wid)
+                glog("[直播] 半透明窗口 ⇒ 不接实时帧(用静帧) wid=\(wid)")
+            }
+            return
+        }
         // ★ 标签对齐(2026-10-20,与 `CardImageCache` 那条同一个病例):
         //   SCK 的帧**有时带 sRGB 标签、有时不带**(日志里两种都出现过)⇒ 不带的那条会被
         //   合成器按显示器空间直出,与静帧/带标签的帧都不一样 ⇒ 切源时亮度跳。

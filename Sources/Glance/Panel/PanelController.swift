@@ -28,21 +28,6 @@ final class PanelController: ObservableObject {
     /// 所以另存一份副本(只有一份源:由 `finishBegin` / `applyList` 在"名单成为事实"那两处写 ✓)
     var lastSessionGroups: [AppGroup] = []
     private var lastSessionScreenID: CGDirectDisplayID?
-    /// ⌘Q 之后托底的**视觉补位**(纯 `offset`,不碰布局)。
-    ///
-    /// ★★ 2026-10-20 病例(用户:「⌘Q 之后期望滑块丝滑地移动到下一个 App、图标放大,
-    ///   现在却是下一个 App 从右边弹出来」):
-    ///   病根是列表**当拍收紧** —— 图标瞬移、托底瞬跳,唯一有动画的是"选中那格放大"
-    ///   ⇒ 读起来就是"从右边弹出来"✗
-    ///   第一版想给"列表更新 + 选中下标"一起套 `withAnimation`,**崩了**:
-    ///   ```
-    ///   AppKit __NSWindowGetDisplayCycleObserverForLayout_block_invoke
-    ///   The window has been marked as needing another Update Constraints in Window pass…
-    ///   ```
-    ///   (同一拍里还跟着一次 `setFrame` 35ms ⇒ 显示刷新里又要求重排约束 ⇒ abort ✗)
-    ///   ⇒ 只能动**纯绘制**的东西:列表照旧当拍收紧,托底先**画回旧位置**,再滑到新的 ✓
-    @Published var puckRideX: CGFloat = 0
-
     @Published var appIndex = 0 {
         didSet {
             // ★★ 2026-10-19:换组(无论走 ↓↑/Tab、⌘Tab、还是**指针悬停换组**)都在这里过账。
@@ -907,7 +892,6 @@ final class PanelController: ObservableObject {
         //    与"面板要已经在"这条纪律不冲突 —— 用户感知不到那一拍。
         // 面板要上屏了 ⇒ 允许池子起流(散场时 stopAll 会落闸,见 `LivePreviewPool.accepting`)
         LivePreviewPool.shared.setAccepting(true)
-        puckRideX = 0   // 上一局的补位量绝不能带进新一局(否则托底一开局就偏)
 
 
         panel.alphaValue = 0

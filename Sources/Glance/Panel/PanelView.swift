@@ -340,8 +340,6 @@ if sheen {
              visible: !controller.entrySelected,
              animation: controller.selectionAnimation(PanelMotion.slide),
              animationValue: controller.appIndex)
-            // ⌘Q 之后的"滑过去":纯绘制补位,不参与布局(见 `PanelController.puckRideX` 的病例)
-            .offset(x: controller.puckRideX)
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)

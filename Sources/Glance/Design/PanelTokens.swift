@@ -539,8 +539,6 @@ enum PanelColors {
     static let txt1 = dynamic(ink(0.92), white(0.95))
     /// 次文案(窗数、标题)
     static let txt2 = dynamic(ink(0.56), white(0.62))
-    /// 缩略图纸边:与长条同一族(浅色暗发丝 / 深色亮发丝)
-    static let thumbBorder = dynamic(ink(0.12), white(0.30))
     /// 缩略图卡面**统一底色**(方案 D,2026-09-16 用户对照图拍板;实验台 `design/卡面实验台.html`):
     /// 非选中卡的截图压到 `PanelMetrics.thumbWash`(30%),底色接管卡面 —— 一排过去不再深浅乱跳;
     /// 选中的那张截图不透明,底色看不见(恢复原样)。**必须实色**:半透底会透出玻璃背后的壁纸,
@@ -568,8 +566,6 @@ enum PanelColors {
     /// 深夜那轮芯片底再淡一档(见 `chipBg`),字补到 **.92** 兜住对比度。
     static let thumbTitle = dynamic(NSColor(srgbRed: 20 / 255, green: 20 / 255, blue: 25 / 255, alpha: 0.75),
                                     white(0.92))
-    /// 缩略图标题条底色:截图之下的"纸"(与底纸同一档)
-    static let thumbPaper = dynamic(white(0.60), slate(64))
     /// 芯片前的选中圆点:亮 = **系统强调色**(跟 macOS 的选中语言一致,且跟随用户在系统设置里挑的颜色);
     /// 暗 = 极淡的灰点**占位**(圆点出现/消失会让芯片文字左右跳)
     static let chipDotOn = Color.accentColor
@@ -668,10 +664,7 @@ enum PanelColors {
     /// (2026-09-24 曾按「预览容器整体设计 Demo」改成系统强调色 outline —— 用户实评
     ///  「选中的时候不要那个蓝色边框,很丑」⇒ 当日退回白环 ✓)
     static let thumbFocus = dynamic(white(0.55), white(0.62))
-    /// 选中光带**外侧那一圈对比暗边**:浅色下白环压在大片白色窗口(访达)上会看不见 ⇒ 需要它立边界;
-    /// 深色下卡片本来就是深的,白环自己就够清楚 ⇒ 暗边收一半(压太重会像描了个黑框)✓
-    static let thumbRingRim = dynamic(NSColor.black.withAlphaComponent(0.38),
-                                      NSColor.black.withAlphaComponent(0.20))
+    // 〔史·2026-10-20 删除〕`thumbRingRim`:选中环撤掉后已无引用(环整族随 demo 一起退役)✓
     /// 指针跟随高光:demo 是 soft-light 的白 30%,混不进进程外的玻璃,折成等效普通 alpha。
     /// 换算:soft-light(白)= √b,按 .30 权重大约提亮 0.06~0.08;白 alpha .12/.16 给 0.05~0.09。
     /// 深色 .20 → **.26**:深玻璃的底更暗,同样的 alpha 提亮量感知上更小(暗部 Weber 效应),
@@ -717,7 +710,7 @@ enum PanelElevation {
         }
     }
 
-    case strip, tray, puck, icon, thumb, thumbActive, thumbLift
+    case strip, tray, puck, icon, thumb, thumbLift
 
     var shadow: Layer {
         switch self {
@@ -756,7 +749,6 @@ enum PanelElevation {
         case .icon: Layer(y: 5, radius: 5, light: 0.18, dark: 0.45)
         // 2026-10-20:卡片要"厚度" ⇒ 影子做实一档(浅色跟着提,不然两套观感又分家)
         case .thumb: Layer(y: 9, radius: 10, light: 0.22, dark: 0.52)
-        case .thumbActive: Layer(y: 10, radius: 11, light: 0.28, dark: 0.55)
         /// 选中卡的"抬起来"(2026-10-19,照 demo `.win.sel .thumb{0 26px 64px rgba(0,0,0,.55)}`):
         /// **大 blur + 更远的 y** ⇒ 影子散得更开、边界更糊 —— 一是"浮起"读得更强,
         /// 二是它从半透明芯片底下透出来时是**渐变**而不是一道硬边(旧 `thumbActive` 小半径
