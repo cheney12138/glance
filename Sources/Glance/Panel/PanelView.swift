@@ -130,6 +130,9 @@ if sheen {
             }
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
+        // ★ 环变短要**平滑收窄**(用户 2026-10-20:「环的长度缩短没有动画,是直接生硬地缩短」)。
+        //   只动 SwiftUI 的 frame(窗框在 fillHole 时故意不动)⇒ 碰不到 AppKit 的窗口 resize ✓
+        .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.groups.count)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
         // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
         // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
@@ -464,6 +467,12 @@ private struct IconCell: View {
             // 真实弹簧:response 越小越"脆",dampingFraction 越小回弹越明显。
             // 不用 .32s 的过冲 bezier —— 它在 SwiftUI 里不可靠,且每次打断从零速重起
             .animation(motion, value: selected)
+            // ★ 2026-10-20「固定环这种单调形式,就在动画上增加精致感」:
+            //   这两条都是**纯绘制**的属性(饱和度/亮度/不透明度),不碰布局 ⇒ 没有崩溃风险 ✓
+            //   · 记号(⌘M 收纳 ⇒ 整枚变灰):硬切读起来像"图没画出来",给 0.18s 才读成"状态变了"
+            //   · hover 点灯:亮起 0.16s、灭掉同一条曲线(与芯片/托底同一族的时长量级)
+            .animation(MotionPolicy.animation(.easeOut(duration: 0.18)), value: mark)
+            .animation(MotionPolicy.animation(.easeOut(duration: 0.16)), value: glow)
     }
 
         /// **状态记号**(右下角一枚)
@@ -486,6 +495,8 @@ private struct IconCell: View {
                 .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
                 .offset(x: -1, y: -1)
                 .allowsHitTesting(false)
+                // ⌘H 的角标:出现/消失都淡一下(硬切会像"画面抖了一下")
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
         }
     }
 
