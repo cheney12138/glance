@@ -32,7 +32,7 @@ extension PanelController {
     /// 所以:发完动作**立刻**按我们已知的结果改本地列表(面板当帧就对上,选中当场被钳走),
     /// 真数据 0.18s 后再来核对。**只摘确定的**:zoom/fullscreen 不摘 ——
     /// 全屏是进出 Space(进入会离开本列表,退出又会回来),猜错方向反而会把窗摘没了。
-    private func optimisticRemoval(_ op: DestructiveOp, in g: AppGroup) {
+    private func optimisticRemoval(_ op: DestructiveOp, in g: AppGroup, resizeWindow: Bool = true) {
         // 注意 H **不走这里**(见 .hide:它只清窗、不摘组)
         var next: [AppGroup] = []
         for group in groups {
@@ -65,7 +65,7 @@ extension PanelController {
         guard next.count != groups.count || after != before else { return } // zoom/fullscreen:没摘,不必走这一趟
         trace("[T12] 本地先摘: \(groups.count) 个 App / \(before) 窗 → "
               + "\(next.count) 个 App / \(after) 窗")
-        applyRefreshed(next, keepPID: nil, keepWin: winIndex)
+        applyRefreshed(next, keepPID: nil, keepWin: winIndex, resizeWindow: resizeWindow)
     }
 
     private func trafficOp(_ wid: CGWindowID, _ op: DestructiveOp) {
@@ -99,7 +99,12 @@ extension PanelController {
             glog("[T12] 退出应用: \(g.appName)")
             quitPIDs.insert(g.pid) // 先记后杀:0.18s 后那次重枚举不许把它捞回来(见 quitPIDs 的病例)
             WindowFocuser.quitApp(pid: g.pid)
-            optimisticRemoval(op, in: g)
+            // ★ 立即摘组(不再"留空位再补"):留位那版实测读起来是
+            //   「App 已经没了 → 等一下 → 环才变形」,中间那段空档用户直接点了出来
+            //   (「到环缩短动效有个间隔,间隔有点长了,杀掉 app 消失同步去变形」)。
+            //   ⇒ 退出与变形**同一拍**:摘组 + `resizeWindow: false`(窗框不动 ⇒ 玻璃靠
+            //     SwiftUI 的宽度动画平滑收窄,图标跟着缓缓左移 ✓ 不碰 AppKit 的窗口 resize ✓)
+            optimisticRemoval(op, in: g, resizeWindow: false)
             refreshAfterAction()
             verifyQuit(pid: g.pid, name: g.appName, group: g, restoreAt: appIndex) // 0.9s 后问进程:真死了没?
         case .close:
@@ -371,9 +376,11 @@ extension PanelController {
 
     /// - Parameter forceReshoot: true = 显示组强制重拍(处决等真变化);
     ///   false = 只补缺图 —— 「陈旧名单 → 新鲜枚举」那一趟用它,免得在入场那几帧里重拍已有的图
-    func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int, forceReshoot: Bool = true) {
+    func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int,
+                        forceReshoot: Bool = true, resizeWindow: Bool = true) {
         reconcileMinimizedMarks(raw)
-        applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin, forceReshoot: forceReshoot)
+        applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin,
+                  forceReshoot: forceReshoot, resizeWindow: resizeWindow)
     }
 
     /// 一局之内**顺序冻结**:本局的 App 顺序在开局那一刻定下(开局那次才走 MRU 排序),
@@ -431,7 +438,8 @@ extension PanelController {
     }
 
     /// 列表落地(内容 → 屏幕):钳选中、剪缓存、重拍、重排长条与托盘。
-    private func applyList(_ fresh: [AppGroup], keepPID: pid_t?, keepWin: Int, forceReshoot: Bool = true) {
+    private func applyList(_ fresh: [AppGroup], keepPID: pid_t?, keepWin: Int,
+                           forceReshoot: Bool = true, resizeWindow: Bool = true) {
         guard !fresh.isEmpty else {
             dismiss(reason: "处决后无窗可切")
             return
@@ -444,6 +452,12 @@ extension PanelController {
         }
         let windowCount = fresh[appIndex].windows.count
         winIndex = min(keepWin, max(windowCount - 1, 0))
+        // ⚠️ 2026-10-20 崩过一次,别再这么写:把这几笔包进 `withAnimation` 会让
+        //   "列表变化 + 选中变化 + 同一拍里的 setFrame(35ms)"一起进显示刷新 ⇒ AppKit 在
+        //   `__NSWindowGetDisplayCycleObserverForLayout` 里 abort:
+        //   "The window has been marked as needing another Update Constraints in Window pass…"
+        //   ⇒ 想给 ⌘Q 做"滑块滑过去"的动效,只能动**纯绘制**的东西(puck 的 offset),
+        //     不许动列表/窗口尺寸 ✗
         // 列表变了 → 截图重拍。同样**剪枝不清场**:别的窗的图还有效,只有被处决那扇会被剪掉
         // (T87 v3 起交给 `reapAlive()`:后台全量保活,被处决的窗在系统清单里消失即被 reap)
         Snapshotter.shared.reapAlive()
@@ -471,7 +485,10 @@ extension PanelController {
         // ★ 托盘那把尺子同上:**只收紧、不放松**(卡片不当着用户的面变大 ✓)
         if PanelMetrics.trayCap >= savedTrayCap { PanelMetrics.trayCap = savedTrayCap }
         // App 数可能变了 → 长条尺寸变、托盘内容也换;两窗各自就位(banner 不滑)
-        if let panel, let target = centerFrame(for: paddedSize()) {
+        // ★ 环变短这一拍**可以不动窗框**(2026-10-20 用户:「环的长度缩短没有动画,是直接生硬地缩短」):
+        //   窗框保持不变 ⇒ 玻璃在窗里居中、按 SwiftUI 动画**平滑收窄** ⇒ 有动画、又碰不到
+        //   AppKit 的窗口 resize(那一族正是 Update Constraints 崩溃的来源 ✗)。下一局开局再按新尺寸就位 ✓
+        if resizeWindow, let panel, let target = centerFrame(for: paddedSize()) {
             setFrameIfNeeded(panel, target)
         }
         updatePreview()

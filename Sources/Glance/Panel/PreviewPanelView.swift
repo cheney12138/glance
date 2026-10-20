@@ -847,11 +847,48 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     ///   `thumb(at:)` 的 `box` **同一份账**)—— A 修(2026-09-24):出流像素规格的输入也从这里走,
     ///   不许池再从 `SCWindow.frame`(SCK 口径)自己重算一遍 ✗(B5 的另一半:20b3253 只把**公式**
     ///   对齐了,输入还各算各的 ⇒ 同一扇窗两个源仍差 ~1% ⇒ 换源轻微重排)。
+    /// 面板在台上吗 —— **关掉之后拒绝再起流**。
+    /// ★★ 2026-10-19 病例(用户:「我又没换窗口,一直在共享是为什么呢」):
+    ///   关面板那一拍先 `stopAll`,但**同一拍排队的 `sync()`**(来自 `updatePreview`)随后又起了一条流 ✗
+    ///   日志铁证:
+    ///   ```
+    ///   [1050386] 全部停流(面板关闭) 共 1 条
+    ///   [1050389] 起流池 += wid=173329 @20fps 池内=0     ← 停完 3ms 又开
+    ///   [1164117] 全部停流(环里没有窗口)                  ← 107 秒后才停住
+    ///   ```
+    ///   ⇒ 那 107 秒里系统一直显示"屏幕共享中"(SCStream 活着)✗
+    ///   ⇒ 闸门放在**池子门口**(而不是每个调用方):只要不在台上,谁都起不来 ✓
+    /// ⚠️ 闸门**必须同步落**,不许 `queue.async`(2026-10-20 第二次漏:
+    ///   日志里 `停流` 之后 136ms 又起了一条,跑满 40.8 秒:
+    ///   ```
+    ///   [1337745] 全部停流(面板关闭) 共 0 条
+    ///   [1337881] 起流池 += wid=18397 @20fps      ← 闸门还没落到,它已经排到门口了
+    ///   [1378740] 全部停流(面板关闭)
+    ///   ```
+    ///   原因:`sync()` 在**关面板之前**就排进队了,而我把 `accepting = false` 也排成一队,
+    ///   于是"先排队的那条 sync"先跑、读到还是 true ⇒ 闸门形同虚设 ✗
+    ///   ⇒ 用锁,**当场**落闸;`sync` 的执行体里在**运行时**读 ✓
+    private let gateLock = NSLock()
+    private var acceptingFlag = false
+    private func withLock<T>(_ body: () -> T) -> T {
+        gateLock.lock(); defer { gateLock.unlock() }; return body()
+    }
+
+    private var isAccepting: Bool {
+        get { gateLock.lock(); defer { gateLock.unlock() }; return acceptingFlag }
+        set { gateLock.lock(); acceptingFlag = newValue; gateLock.unlock() }
+    }
+
+    /// 面板上屏 / 散场时由 `PanelController` 调用(同步生效,见上面那条病例)
+    func setAccepting(_ on: Bool) { isAccepting = on }
+
     func sync(_ items: [(wid: CGWindowID, aspect: CGFloat, box: CGSize)], selected: CGWindowID?) {
         guard Self.enabled else { return }
         let wids = items.map { $0.wid }
         queue.async { [weak self] in
             guard let self else { return }
+            // 面板不在台上 ⇒ **一条都不许起**(见 `isAccepting` 的病例)
+            guard self.isAccepting else { return }
             // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
             // ★ 但**窗口变形**算变化(2026-09-25 用户实报「调整窗口尺寸后再唤起,卡片有黑边」):
             //   出流规格首启冻结(I3)⇒ 窗被拉高/压扁后,流仍按旧规格要帧,SCK 把变小了的窗口
@@ -946,7 +983,20 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// 散场代数:`stopAll` 一次 +1。
+    /// ★★ 2026-10-20 第三次漏(日志实证):
+    ///   ```
+    ///   [57135] 全部停流(面板关闭) 共 2 条     ← 池子清空
+    ///   [57186] 起流池 += wid=134602          ← 一条 51ms 前就出发的起流,此刻才走完
+    ///   ```
+    ///   `stopAll` 只停**当前 handles 里**的流;而这条起流还在 `await window(wid)` 里,
+    ///   回来时池子已经清空 ⇒ 它把 handle 注册进空池 ⇒ 成了孤儿,一直采到下次关面板 ✗
+    ///   ⇒ 起流带着"出发时的代数",回来发现代数变了 ⇒ 自己停掉/不注册 ✓
+    private var epoch = 0
+
     func stopAll(reason: String) {
+        isAccepting = false        // ★ 当场落闸:**在**任何排队工作之前(见 isAccepting 的病例)
+        gateLock.lock(); epoch += 1; gateLock.unlock()   // ★ 代数 +1:路上那些起流一律作废
         startDebounce?.cancel(); startDebounce = nil
         queue.async { [weak self] in
             guard let self else { return }
@@ -1071,6 +1121,11 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     }
 
     private func start(_ wid: CGWindowID, box cardBox: CGSize?, fps: Int) {
+        // ★ 最后一道:**起流那一刻**再验一次闸门。
+        //   `sync` 的执行体可能已经在路上(过闸、正在 reconcile),这中间面板被关掉 ⇒
+        //   不验就会"关完照样起一条"✗(2026-10-20 第二次漏的同一族)
+        guard isAccepting else { return }
+        let myEpoch = withLock { epoch }
         gen += 1
         let g = gen
         activeGens.insert(g)
@@ -1144,6 +1199,8 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 guard let cg else { return }
                 self.queue.async { self.deliver(cg, wid: wid) }   // 与直播帧同一条上屏路 ✓
             }
+            // 出发时的代数变了(散场过)⇒ 这条不许起
+            guard self.withLock({ self.epoch }) == myEpoch else { return }
             let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
             let out = LiveOutput(wid: wid) { [weak self] sb in self?.ingest(sb, wid: wid, gen: g) }
             do {
@@ -1153,6 +1210,14 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                     self.startedAt[wid] = CFAbsoluteTimeGetCurrent()
                 }
                 try await s.startCapture()
+                // ★ 起完之后再验一次:**已经开始采**的流,如果这期间散场了,必须立刻自杀,
+                //   否则它不在 handles 里 ⇒ 没人停得掉 ✗(上面那条 51ms 的孤儿就是它)
+                if self.withLock({ self.epoch }) != myEpoch {
+                    try? await s.stopCapture()
+                    self.queue.async { self.handles.removeValue(forKey: wid) }
+                    glog("[直播] 起流途中散场 ⇒ 当场停掉 wid=\(wid)")
+                    return
+                }
                 // ⚠️ 读 `handles` 也要在池队列上(与上面那条同一个病例 ✓ 2026-10-09)
                 let poolCount = self.queue.sync { self.handles.count }
                 glog(String(format: "[直播] 起流池 += wid=%u %dx%d @%dfps 池内=%d",

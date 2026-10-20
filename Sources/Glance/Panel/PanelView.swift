@@ -130,6 +130,9 @@ if sheen {
             }
         }
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
+        // ★ 环变短要**平滑收窄**(用户 2026-10-20:「环的长度缩短没有动画,是直接生硬地缩短」)。
+        //   只动 SwiftUI 的 frame(窗框在 fillHole 时故意不动)⇒ 碰不到 AppKit 的窗口 resize ✓
+        .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.groups.count)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
         // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
         // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
@@ -337,6 +340,8 @@ if sheen {
              visible: !controller.entrySelected,
              animation: controller.selectionAnimation(PanelMotion.slide),
              animationValue: controller.appIndex)
+            // ⌘Q 之后的"滑过去":纯绘制补位,不参与布局(见 `PanelController.puckRideX` 的病例)
+            .offset(x: controller.puckRideX)
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)

@@ -21,9 +21,15 @@ enum IconProvider {
     private static var cache: [pid_t: Entry] = [:]
 
     static func art(for pid: pid_t) -> Art {
-        if let e = cache[pid],
-           NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == e.bundleID {
-            return e.art
+        // ★★ 2026-10-20 病例(用户:「退出了之后,所有 app 短暂变成空白文件 logo 了」):
+        //   命中缓存的条件原来是"**进程还在、bundle 还相符**"⇒ 退出一个 App 之后的那几拍,
+        //   `NSRunningApplication(processIdentifier:)` 偶发全军拿不到(系统在回收进程/刷登记),
+        //   于是**每个格子**都落到兜底的通用 app 图标 = 一片"空白文件 logo"✗
+        //   图标**不会变**:缓存过就永远用缓存,除非进程还在、且 bundle 明明白白对不上
+        //   (那才是 pid 被复用,见文件头第 ② 条)✓
+        if let e = cache[pid] {
+            guard let app = NSRunningApplication(processIdentifier: pid) else { return e.art }
+            if app.bundleIdentifier == nil || app.bundleIdentifier == e.bundleID { return e.art }
         }
         guard let app = NSRunningApplication(processIdentifier: pid), let img = app.icon else {
             return Art(image: NSWorkspace.shared.icon(for: .application), fill: 1)
