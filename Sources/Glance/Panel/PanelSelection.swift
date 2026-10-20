@@ -99,8 +99,8 @@ extension PanelController {
                 setSegment(true, travel: .backward, launchIndex: launchables.count - 1)
                 trace("[T91] 段切换(⇧Tab): 主环 → 未启动(选中 [\(launchables.count)/\(launchables.count)] \(launchables[launchables.count - 1].name))")
             } else {
+                winIndex = 0   // 先落:appIndex 的 didSet 会同步重建托盘(见那里的病例)
                 appIndex = (appIndex + delta + groups.count) % groups.count
-                winIndex = 0
                 // 不动窗框:面板尺寸只跟 App 数量有关,选中移动不改尺寸(旧病见 setFrameIfNeeded)
                 trace("[T6] 选中(键盘 Tab): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
                 traceCost("  ↳拍图") { refreshSnapshotForSelection() }
@@ -355,7 +355,9 @@ extension PanelController {
             // 拆账(2026-09-15):`指针换选中` 中位 12ms × 123 次,是现在最大的主线程开销 ✗。
             // 第一轮只拆了"拍图 / 托盘更新",结果**两笔都没超过 2ms** —— 说明钱不在这两处 ✗,
             // 于是把仅剩的候选(两个 @Published 写入,会同步惊动整棵观察者)也单独记一笔。
-            traceCost("  ↳写状态") { entrySelected = false; launchIndex = nil; appIndex = i; winIndex = 0 }
+            // ⚠️ 顺序要紧:`winIndex` 必须**先**落 —— `appIndex` 的 didSet 会同步重建托盘,
+            //   那一刻若 winIndex 还是旧组的,整块卡会按"未选中"画一帧(闪一下)✗
+            traceCost("  ↳写状态") { entrySelected = false; launchIndex = nil; winIndex = 0; appIndex = i }
             traceCost("  ↳拍图") { refreshSnapshotForSelection() }
             traceCost("  ↳托盘更新") { updatePreview() }
         }

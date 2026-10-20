@@ -50,6 +50,16 @@ final class PanelController: ObservableObject {
             //   视觉上就是"新组的卡片从左边浮出来"(用户稳定复现:Sublime 第二窗 → IDEA/DataGrip)✗
             if appIndex != oldValue {
                 contentSwapUntil = CFAbsoluteTimeGetCurrent() + Self.contentSwapSeconds
+                // ★★ 2026-10-20 病例(用户:「直接跳过去就闪,一个一个切就正常」):
+                //   自拍量到整块托盘**掉暗一帧**:187.16 → 133.83 → 187.16,
+                //   而 0.72 × 187 = 134.6 ⇒ 那一帧所有卡片都被判成"**未选中**"✗
+                //   病根:调用方写的是 `appIndex = i; winIndex = 0` —— `appIndex` 的 didSet
+                //   **同步**重建托盘,那一刻 `winIndex` 还是**上一组的旧值**(比如 1,新组只有 1 窗)
+                //   ⇒ 新组的卡片一张都不匹配 ⇒ 整块按 0.72 画一帧 ⇒ 闪 ✗
+                //   ⇒ didSet 里先**夹住** winIndex 再重建(调用方的顺序也就无所谓了)✓
+                if let g = currentGroup, !g.windows.isEmpty, winIndex >= g.windows.count {
+                    winIndex = max(0, g.windows.count - 1)
+                }
                 // ★★ 2026-10-19(用户实拍:「预览窗**最右边一条细白线**闪一下」):
                 //   托盘窗框是**跟着当前组**收放的(2026-10-13 的口径),而 SwiftUI 会在
                 //   "窗框还是旧组的宽度、内容已经是新组"的那一帧先画一次 ⇒ 右侧被窗缘切一刀,
@@ -898,6 +908,7 @@ final class PanelController: ObservableObject {
         // 面板要上屏了 ⇒ 允许池子起流(散场时 stopAll 会落闸,见 `LivePreviewPool.accepting`)
         LivePreviewPool.shared.setAccepting(true)
         puckRideX = 0   // 上一局的补位量绝不能带进新一局(否则托底一开局就偏)
+
 
         panel.alphaValue = 0
         setFrameIfNeeded(panel, target)

@@ -263,6 +263,12 @@ struct PreviewPanelView: View {
         //   删掉之后 hover 行为一个字不变(定时器照旧每 16ms 做同一件事),少一层视图刷新 ✓
     }
 
+    /// 当前"应该被选中"的窗下标 —— **永远合法**(见 `selected:` 那条的病例)
+    private var selIndex: Int {
+        guard !windows.isEmpty else { return 0 }
+        return min(max(controller.winIndex, 0), windows.count - 1)
+    }
+
     private func thumb(at i: Int) -> some View {
         let w = windows[i]
         // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
@@ -296,11 +302,35 @@ struct PreviewPanelView: View {
             //   是空操作,比例与真窗一致 ✓(真有透明衬边的自绘窗:换源那一下轻微移动,量尺
             //   CardRulerLog 会报,先接受 —— 比 App 图标好一个量级 ✓)。
             //   显示顺序不变:liveFrame 优先,快照只在 live 还没到的 ~30–100ms 里顶上 ✓。
+            //
+            // 〔史·同日已撤〕曾试过"开实时预览时不垫快照"(为了让源切换消失)⇒ 冷启动露 App 图标 ✗
+            //   抽帧量到"快照 → live"那一拍亮度掉 8%(192.8 → 177.8),`[源比]` 查到只有
+            //   **半透明窗口**有这个差,而且三个通道**同比例**:
+            //     ```
+            //     Sublime   live 47.5/73.2/92.7 · 快照 53.6/83.0/103.7  → 0.886/0.882/0.894
+            //     Chrome    live 237.7/238.2/238.5 · 快照 237.2/237.8/238.2 → 相等
+            //     ```
+            //   同比例 = **alpha**,不是 gamma/色彩空间:Sublime 的窗是半透明的 ⇒
+            //   快照是"合成完的桌面"(不透明、亮),live 帧是"带 alpha 的原窗"(叠在卡片深色底上 ⇒ 暗)✗
+            //   ⇒ 这两张图**本质上不可能一样**(一个是合成结果、一个是带通道的原料),
+            //     所有"让它俩看起来一样"的路都走不通(色彩空间已对齐、逐帧对比确认)。
+            //   ⇒ 干脆**不垫快照**:有缓存帧就直接出图(跨会话保留 ⇒ 绝大多数卡开面板即有图),
+            //     没有就先显示静默图标,首帧到了直接出 —— 只发生一次"从无到有",不再有两次切换 ✓
+            //   (关掉实时预览时快照仍是主力,那条路不变 ✓)
+            // ⚠️ 2026-10-20 撤:上一版为了绕开"半透明窗的 alpha 差"把垫图关了,结果冷启动时
+            //   卡片只能先显示 App 图标(用户:「第一次开始出现 app 图标了…别越改越坏了」)✗
+            //   ⇒ 垫图留在原位。半透明窗(`[源比]` 里那个 0.886 的 alpha)那一下还没治好,
+            //     但**宁可一次小闪,也不要一张空卡** ✓
             image: snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
             face: nil,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
-            selected: i == controller.winIndex, // 换窗即接力:弹簧打断保速
+            // ★★ 2026-10-20 病例(用户:「切换到 app 之后卡片出现,闪烁就跟着来了」):
+            //   换组那一拍 `winIndex` 可能还停在旧组的值上(比如旧组有 2 窗、选的是第 2 窗,
+            //   而新组只有 1 窗)⇒ `i == winIndex` 一张都不成立 ⇒ **整块卡按"未选中"(0.72)
+            //   画了一帧**,下一刻又补上选中 ⇒ 一次亮度突变 = 闪 ✗
+            //   ⇒ **结构上**掐死这一类:`selIndex` 永远夹在窗口数之内 ⇒ 任何一帧都恰好有一张是选中的 ✓
+            selected: i == selIndex, // 换窗即接力:弹簧打断保速
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
             ringSelectMotion: controller.selectionAnimation(PanelMotion.select),
@@ -464,10 +494,11 @@ private struct WindowThumb<Overlay: View>: View {
     ///   ⇒ 视觉上就是"卡片从左边浮出来"✗。
     ///   托盘层早就有这条守卫(`.transaction { if isRingSwapInFlight { t.animation = nil } }`),
     ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
+    /// 卡片的"明暗"过渡:**永远有**(不受换组抑制) —— 见 `opacity` 那条的病例。
+    private var fadeMotion: Animation? { MotionPolicy.animation(.easeOut(duration: 0.16)) }
+
     private var selMotion: Animation? {
-        // 与环里**选中一颗 App** 用的是同一条动画(`PanelMotion.select` 弹簧)——
-        //   用户口径:「窗口切换和 app 选中切换对比,速率不匹配」⇒ 不是各调一个时长,
-        //   而是**共用同一个源** ✓(本仓老规矩:两套东西必须同源)
+        // 🧪 2026-10-20 A/B 结论:把这条动画关掉后**照样闪** ⇒ 与动画无关,已恢复。
         motionSuppressed ? nil : ringSelectMotion
     }
 
@@ -537,22 +568,37 @@ private struct WindowThumb<Overlay: View>: View {
                 //   病灶:`Image(nsImage:)` 每次重建都要 decode + 把 720px 缩到卡片尺寸 ✗
                 //   ⇒ 实机:托盘更新平时 0.1–0.3ms,一换 app 就 10–27ms(滑块那一帧掉帧)。
                 //   没缩好时先用原图,下一次渲染就走缓存 ✓
-                Group {
-                    if let liveFrame {
-                        // ★ S2:实时帧优先。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
-                        //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
-                        Image(decorative: liveFrame, scale: 1).resizable()
-                    } else if let image,
-                              let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
-                                                                        target: imageBox) {
+                // ★★★ 2026-10-20 定版(第五次,这次是"结构"而不是"调参"):
+                //   **静帧永远垫在最底下,实时帧叠在它上面** —— 不是"二选一"。
+                //   为什么这才对(病历):半透明窗口(用户的 Sublime,alpha≈0.886)那两张图
+                //   **本质不同**:
+                //     · 静帧 `SCScreenshotManager` = 已合成的**成品**(桌面透出来的样子,不透明)
+                //     · 实时帧 `SCStream` = 带 alpha 的**原料**(叠在卡片深色底上 ⇒ 暗 12%)
+                //   "二选一"式的切换 ⇒ 无论怎么调都一样跳 ✗(色彩空间/缩放/初帧都排查过,均不是)
+                //   ⇒ 改成**叠放**:不透明窗口被实时帧 100% 盖住(切换零感知 ✓);
+                //     半透明区域实时帧与静帧混合 ⇒ 样子与静帧一致 ⇒ 切换也看不见 ✓✓
+                ZStack {
+                    if let image,
+                       let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
+                                                                 target: imageBox) {
                         Image(decorative: prepared.cg, scale: prepared.scale).resizable()
                     } else if let image {
                         Image(nsImage: image).resizable()
                     }
+                    if let liveFrame {
+                        // ★ S2:实时帧优先。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
+                        //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
+                        Image(decorative: liveFrame, scale: 1).resizable()
+                    }
                 }
-                    // ⚠️ 交接溶解已撤(2026-10-14 用户实测:「还是有」✗):溶解过程本身
-                    //   被读成一次闪 ✗ —— 两张差异大的图叠着淡变,混合态反而扎眼 ✓
-                    //   (对照实验:撤掉后如果无感 ⇒ 硬切反而是对的 ✓,DockDoor 即是 ✗)
+                    // ⚠️⚠️ 交接**不做溶解**(2026-10-20 第二次实测定案,别再试 ✗):
+                    //   70ms 短溶解也被读成闪,抽帧量出原因 —— 两端亮度**完全一致**、
+                    //   只有中间那 1–2 帧更亮 5%:
+                    //     224-226 RGB 45.1(快照) → 228-230 RGB 47.4(混合) → 232+ RGB 45.1(实时)
+                    //   两张图来自**同一条管线**(SCScreenshotManager + 同一个 filter/cfg ⇒ 几何、
+                    //   色彩都对得上),差的是**时刻**:光标、字符抗锯齿、终端输出都在变 ⇒
+                    //   叠起来是"两个时刻的鬼影",不是亮度差 ⇒ 任何 dissolve 都会闪 ✓
+                    //   ⇒ **硬切**。要让它真的看不出来,只能让两帧是同一个时刻 —— 做不到 ✓
                     // 定尺 = 这张卡自己的 box ⇒ 图与卡面同比例(既不拉伸也不留白 ✓)
                     // ★ 2026-10-19:内容**向外多画 1pt**(超扫)——
                     //   卡片图层边缘有 1–2px 缝:实测换组时那里会露出 2px 纯黑(2,2,2) 或近白,
@@ -583,7 +629,12 @@ private struct WindowThumb<Overlay: View>: View {
         //   「缩小的时候先下沉了」✗。demo 的压色**保形保色**,只是暗下去一档 ✓
         .opacity(selected ? 1 : 0.72)
         .saturation(selected ? 1 : 0.88)
-        .animation(selMotion, value: selected)
+        // ★★★ 2026-10-20 定案(闪的最后一层):
+        //   `selMotion` 在**换组那一拍**是 nil(为了不让整行重排被动画化 ⇒ 卡片从左边浮出来 ✗),
+        //   但那条规矩误伤了**透明度**:旧卡 1.0 一帧掉到 0.72、新卡一帧亮起来 = 一次亮度突变 ✗
+        //   ⇒ 把"明暗"单独放出来,**永远**带一条短过渡(与几何无关)——
+        //     几何(缩放/上浮/阴影)继续听 `selMotion`,换组时照样当拍 ✓
+        .animation(fadeMotion, value: selected)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
@@ -627,6 +678,20 @@ private struct WindowThumb<Overlay: View>: View {
         }
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
+        // ★★ 2026-10-20(用户:「卡片有点太单薄了,加点阴影,显得有厚度」):两层影子,挂在**一块
+        //   不变的形状**上,而不是挂在内容上 ——
+        //   ⚠️ 中途试过"深色受光边"(顶亮→底隐的 1pt 渐变):实机读成**一圈亮描边**(还带蓝),
+        //      用户评「有点丑,而且没什么感知强化的作用」⇒ 撤掉。深色下的厚度只能靠影子本身,
+        //      亮线一画就是"框"(那个旋钮此路不通,别再试 ✗)
+        //   ① 内容 = 20fps 的实时预览,影子若包着它,每来一帧都要把整卡重新离屏糊一次(贵);
+        //      单独一块等尺寸的圆角矩形是静态的,系统的光栅化结果能复用 ✓
+        //   ② 影子**只留一层**:试过加"贴身接触影"做厚度,实机评「意义不大」⇒ 撤 ✓
+        //      卡片想要"厚",在深色下不是靠影子层数(用户已连否三条:亮描边/接触影/加重散影)
+        .background {
+            RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous)
+                .fill(PanelColors.thumbBg)
+                .elevation(selected ? .thumbLift : .thumb)
+        }
         // ⚠️ 2026-10-19:这里曾有一层"向外 1pt 的卡片底色"(给图层缝做双保险)——
         //   它比卡片大一圈、又是深色 ⇒ 在深色模式下等于给卡片**描了一道 1pt 暗边** ✗
         //   (用户实拍「深色模式下卡片怎么还有边框」;实测边缘正是 2px 的 (33,38,43))
@@ -636,7 +701,6 @@ private struct WindowThumb<Overlay: View>: View {
         //   旧病:换成 `thumbActive`(y 8→10 / r 9→11)在芯片背后变浓 ⇒ 读作"芯片被按了一下"✗
         //   ⇒ 新档 `thumbLift`:**大 blur(34)+ 远 y(18)** ⇒ 影子散开、边界糊 ⇒ 只读"抬起来",
         //     透出半透明芯片时也是渐变而非硬边 ✓
-        .elevation(selected ? .thumbLift : .thumb)
         .animation(selMotion, value: selected)
         // ★ demo `.win:not(.sel) .thumb{scale(.94)}` / `.win.sel .thumb{scale(1.05)}`
         //   缩放**只作用在卡片上,芯片一动不动**(2026-10-19 用户第三次裁定:
@@ -868,6 +932,18 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     ///   原因:`sync()` 在**关面板之前**就排进队了,而我把 `accepting = false` 也排成一队,
     ///   于是"先排队的那条 sync"先跑、读到还是 true ⇒ 闸门形同虚设 ✗
     ///   ⇒ 用锁,**当场**落闸;`sync` 的执行体里在**运行时**读 ✓
+    /// 线程安全的"最新一帧"缓存(主线程可读) —— 用于**上屏前垫图**。
+    /// ★ 2026-10-20(用户实测:「一个一个切过去到 Sublime 正常,直接跳过去就闪」):
+    ///   直跳时新组的卡片没有实时帧 ⇒ 先画静帧、首帧到了再切 ⇒ 半透明窗那 12% 的 alpha 差就现形 ✗
+    ///   ⇒ 上屏前先用**同一个池子里上次的实时帧**顶上(同一条管线 ⇒ 换源看不出来)✓
+    private var cachedFrames: [CGWindowID: CGImage] = [:]
+
+    func cachedFrame(for wid: CGWindowID) -> CGImage? {
+        let v: CGImage?
+        gateLock.lock(); v = cachedFrames[wid]; gateLock.unlock()
+        return v
+    }
+
     private let gateLock = NSLock()
     private var acceptingFlag = false
     private func withLock<T>(_ body: () -> T) -> T {
@@ -1197,7 +1273,18 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                                                                      configuration: cfg)
                 }
                 guard let cg else { return }
-                self.queue.async { self.deliver(cg, wid: wid) }   // 与直播帧同一条上屏路 ✓
+                // ★★ 2026-10-20 定案(日志实测,别再猜):
+                //   ```
+                //   [源比] wid=49934 live 47.5/73.2/92.7 **kCGColorSpaceSRGB**
+                //                    快照 53.6/83.0/103.7 **nil**
+                //   [源比] wid=120   live 42.2/45.4/51.6 **nil**   快照 42.2/45.4/51.6 **nil**
+                //   ```
+                //   ⇒ 两张图**像素本身一致**;差的只有**色彩空间标签**:SCK 的实时帧带 sRGB 标签,
+                //     而 SCScreenshotManager 给的静帧**没有标签**(= 未管理 ⇒ 合成器按显示器空间直出)
+                //     ⇒ 同一块像素被两条路解释了两次 ⇒ 切的那一下亮度跳 ~10%(用户读作"高亮闪一下")✗
+                //   ⇒ 把静帧**真正转换**到 sRGB 再进管线(只做一次/窗口,不在每帧路径上 ✓)
+                let converted = ColorNormalize.toSRGB(cg) ?? cg
+                self.queue.async { self.deliver(converted, wid: wid) }   // 与直播帧同一条上屏路 ✓
             }
             // 出发时的代数变了(散场过)⇒ 这条不许起
             guard self.withLock({ self.epoch }) == myEpoch else { return }
@@ -1234,13 +1321,20 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         var raw: CGImage?
         VTCreateCGImageFromCVPixelBuffer(pb, options: nil, imageOut: &raw)
         guard let img = raw else { return }
+        // ★ 标签对齐(2026-10-20,与 `CardImageCache` 那条同一个病例):
+        //   SCK 的帧**有时带 sRGB 标签、有时不带**(日志里两种都出现过)⇒ 不带的那条会被
+        //   合成器按显示器空间直出,与静帧/带标签的帧都不一样 ⇒ 切源时亮度跳。
+        //   这里给**没标签的**补上 sRGB(只改标签、不动像素;SCK 的缓冲本来就是 sRGB ✓)
+        let tagged: CGImage = img.colorSpace == nil
+            ? (CGColorSpace(name: CGColorSpace.sRGB).flatMap { img.copy(colorSpace: $0) } ?? img)
+            : img
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
             firstFrameLogged.insert(wid)
             glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
-        deliver(img, wid: wid)
+        deliver(tagged, wid: wid)
     }
 
     /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
@@ -1248,9 +1342,13 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     fileprivate func deliver(_ img: CGImage, wid: CGWindowID) {
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
+        gateLock.lock(); cachedFrames[wid] = img; gateLock.unlock()
         while latestOrder.count > 10 {
             let old = latestOrder.removeFirst()
-            if !wanted.contains(old) { latest[old] = nil }
+            if !wanted.contains(old) {
+                latest[old] = nil
+                gateLock.lock(); if cachedFrames[old] != nil { cachedFrames[old] = nil }; gateLock.unlock()
+            }
         }
         // ★ 只把"**当前显示组**"的帧交给主线程(2026-09-21,归因量出来的账)。
         //   池的 keepAlive=5s ⇒ 换组之后旧的那几条流**还在跑**(为了换回来是热的 ✓),
@@ -1363,6 +1461,26 @@ enum PanelScreen {
 ///   · 快照:走 `Snapshotter.transparentTrimRect` **裁掉透明衬边** ⇒ 内容填满整幅 ✓
 ///   · live:SCStream 按**窗口框**抓 ⇒ 不裁 ✗
 /// 导出两份原始图 ⇒ 直接肉眼对比"内容在画幅里的位置/大小" ✓
+/// 把静帧真实转换到 sRGB(与 SCK 实时帧的标签一致)。
+///
+/// 为什么不是 `copy(colorSpace:)`:那只是**改标签**、不动像素 ⇒ 颜色会被解释错。
+/// 这里走一次 CGContext 重绘 ⇒ 真正做一次色彩转换(每扇窗一次,不在每帧路径上)✓
+enum ColorNormalize {
+    static func toSRGB(_ img: CGImage) -> CGImage? {
+        guard img.colorSpace?.name != CGColorSpace.sRGB else { return img }   // 已是 sRGB:原样
+        let w = img.width, h = img.height
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return nil
+        }
+        ctx.interpolationQuality = .none
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+}
+
 enum SourceDump {
     static var dumped: Set<String> = []
     static func dump(key: String, _ img: CGImage?, _ dir: URL) {
@@ -1434,8 +1552,15 @@ final class CardImageCache {
         let pxW = key.pixelWidth, pxH = key.pixelHeight
         return cache.image(for: key) {
             var out: CGImage?
-            if let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
-                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            // ★★ 2026-10-20 定案(日志实证):
+            //   `SCScreenshotManager` 回来的静帧**没有色彩空间标签**(nil),而 SCK 实时帧带 sRGB
+            //   ⇒ 同一扇窗的两张图被合成器解释两次 ⇒ 切源那一下亮度跳 ~10%(用户:「从第一张
+            //   往后依次闪」—— 每张卡切源时刻不同,所以是**接力**闪)✗
+            //   ⇒ 这里重绘时**直接画进 sRGB**(顺带就是一次真实的色彩转换,不是只改标签),
+            //     于是卡片上的静帧与实时帧标签一致 ⇒ 切源看不出来 ✓
+            if let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+               let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
+                                   bytesPerRow: 0, space: srgb,
                                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
                 ctx.interpolationQuality = .high
                 // **按 .fill 的中心裁剪**(不能直接铺满:那会拉伸变形 ✗)

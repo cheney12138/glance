@@ -181,6 +181,14 @@ extension PanelController {
 
 
     func updatePreview() {
+        // ★ 上屏前**先用池子里的上一帧垫上**(同一条管线 ⇒ 之后切到新的实时帧看不出变化)。
+        //   病例(2026-10-20 用户实测):「一个一个切过去到 Sublime 正常,**直接跳过去**就闪」——
+        //   直跳时新组的卡没有任何实时帧 ⇒ 只能先画静帧,首帧到了再切 ⇒ 半透明窗 alpha 差现形 ✗
+        for w in (currentGroup?.windows ?? []) where LivePreviewPool.shared.box(for: w.wid).image == nil {
+            if let cached = LivePreviewPool.shared.cachedFrame(for: w.wid) {
+                LivePreviewPool.shared.box(for: w.wid).image = cached
+            }
+        }
         // 🔬 分段计时(2026-09-21):"指针换选中 13–30ms"到底花在哪一段 —— 只在总量 >3ms 时打一行。
         //   病例:托盘更新平时 0.30ms ✓,但 176 个样本里 13 个 ≥10ms ✗;两个图像缓存都没干掉它 ⇒ 拆段量。
         let __t0 = CFAbsoluteTimeGetCurrent()

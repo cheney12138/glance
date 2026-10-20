@@ -240,7 +240,16 @@ final class Snapshotter: ObservableObject {
                         continue
                     }
                     captured += 1
-                    let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                    // ★★ 2026-10-20:静帧**当场转成 sRGB**再进缓存。
+                    //   病例(日志实证):`SCScreenshotManager` 回来的 CGImage **没有色彩空间标签**,
+                    //   而 SCK 实时帧带 sRGB ⇒ 同一扇窗的两张图被合成器解释两次 ⇒ 切源那一下
+                    //   亮度跳 ~10~12%(用户:「多张卡片时从第一张往后依次闪」——每张卡的切片时刻不同)✗
+                    //   ⚠️ 只在 `CardImageCache` 那一层转是不够的:缓存**没算好之前**卡片会先拿
+                    //   `Image(nsImage:)` 兜底,而那份是未管理的 ⇒ 还是会闪一下 ✗
+                    //   ⇒ 在**源头**统一:缓存里的每一张静帧都已经是 sRGB ✓
+                    let sourced = SnapshotColorSpace.toSRGB(image) ?? image
+                    let nsImage = NSImage(cgImage: sourced,
+                                          size: NSSize(width: sourced.width, height: sourced.height))
                     await self.publish(wid: w.wid, image: nsImage, batch: current, first: captured == 1, batchSize: batch.count)
                 }
             } catch {
@@ -456,4 +465,22 @@ private actor FailureLog {
     }
 
     func reset() { seen.removeAll() }
+}
+
+
+/// 静帧色彩空间归一(与 `CardImageCache` 同一条纪律:卡片上的每一路图都必须是 sRGB)
+enum SnapshotColorSpace {
+    static func toSRGB(_ img: CGImage) -> CGImage? {
+        if img.colorSpace?.name == CGColorSpace.sRGB { return img }
+        let w = img.width, h = img.height
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return nil
+        }
+        ctx.interpolationQuality = .none
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
 }

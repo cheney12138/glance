@@ -558,6 +558,11 @@ enum PanelColors {
     /// 深色 alpha 对齐「预览容器整体设计 Demo」的 `.wframe::before`(black .28 → 0)——
     /// 可读性的主力已挪给红绿灯自己的胶囊座,这条雾退为兜底,所以淡 ✓
     static let thumbHaze = dynamic(white(0.32), NSColor.black.withAlphaComponent(0.28))
+
+    // 〔史·2026-10-20 同日删除〕`thumbRim`(深色受光边):实机是一圈亮描边 ⇒ 用户「有点丑,
+    //   而且没什么感知强化的作用」✗。结论:**深色不能用亮线给卡片定形**,灯/图标那种小元素可以,
+    //   整块卡片一画就是边框。
+
     /// 标题条墨色(demo .win-title color):深色必须是**亮字** ——
     /// 它坐在深色芯片上,旧版 白 .75 已经偏灰,提到 .88;
     /// 深夜那轮芯片底再淡一档(见 `chipBg`),字补到 **.92** 兜住对比度。
@@ -749,7 +754,8 @@ enum PanelElevation {
         // icon:浅色 .18(实评"底下的阴影在白底下看着像缺了一块")。
         // 深色 .30 → **.45**:图标坐在 L=138 的亮托底上,影子不够就飘着
         case .icon: Layer(y: 5, radius: 5, light: 0.18, dark: 0.45)
-        case .thumb: Layer(y: 8, radius: 9, light: 0.18, dark: 0.42)
+        // 2026-10-20:卡片要"厚度" ⇒ 影子做实一档(浅色跟着提,不然两套观感又分家)
+        case .thumb: Layer(y: 9, radius: 10, light: 0.22, dark: 0.52)
         case .thumbActive: Layer(y: 10, radius: 11, light: 0.28, dark: 0.55)
         /// 选中卡的"抬起来"(2026-10-19,照 demo `.win.sel .thumb{0 26px 64px rgba(0,0,0,.55)}`):
         /// **大 blur + 更远的 y** ⇒ 影子散得更开、边界更糊 —— 一是"浮起"读得更强,
@@ -759,7 +765,9 @@ enum PanelElevation {
         ///   SwiftUI 的阴影是**离屏模糊整块卡**;实时预览 20fps ⇒ 每来一帧都要重糊一次,
         ///   430×280 按 r34 约 2~4ms/帧,正好吃在 16.7ms 预算里(日志:长帧 1.0% → 2.6%)。
         ///   "抬起来"的观感主要由 **y 偏移 + 透明度** 承担,不是 blur 半径 ⇒ 收小几乎无损 ✓
-        case .thumbLift: Layer(y: 12, radius: 14, light: 0.26, dark: 0.52)
+        case .thumbLift: Layer(y: 16, radius: 18, light: 0.30, dark: 0.66)
+        // 〔史·2026-10-20 同日删除〕`thumbContact` / `thumbContactIdle`(贴身接触影):
+        //   用户实机评「意义不大」⇒ 撤。卡片影子**只留一层** ✓
         }
     }
 }
