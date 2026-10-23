@@ -944,7 +944,14 @@ final class PanelController: ObservableObject {
 
         DispatchQueue.main.async { [weak self, weak panel] in
             guard let panel else { return }
-            panel.alphaValue = 1
+            // ★ 入场渐入 = **窗口 alpha**(不是内容 opacity,见 PanelView 那条病例)
+            //   ⚠️ 不要用 `NSAnimationContext + animator()`:对这扇无边框窗口**根本不跑**
+            //      (实测:加完就"闪现"出来,没有任何渐入 ✗)⇒ 自己按 ~8ms 一步推过去 ✓
+            if self?.summonFadeEnabled == true {
+                self?.fadeInWindow(panel)
+            } else {
+                panel.alphaValue = 1
+            }
             self?.bumpIdle()          // 表一 ④:从"看得见"那一刻开始计时
             // 🔬 连拍放在这里:拍的是"第一次被看见的那几帧",不是 alpha 0 的那几帧
             // ⚠️ 2026-09-21:重型探针**单独门禁**(原来只挂 `isTraceEnabled`)。
@@ -1328,6 +1335,27 @@ final class PanelController: ObservableObject {
                 glog("[上屏探针] #\(i) " + Self.bandStats(img))
             }
         }
+    }
+
+    /// 窗口**自己**的渐入(0 → 1,130ms,easeOut)。
+    ///
+    /// 为什么不用 `NSAnimationContext`/`animator()`:实测在那扇无边框面板上不生效
+    /// (用户实报「没有淡入的效果了,像是闪现出来的」✗)⇒ 按帧推,8ms 一步 ✓
+    /// 为什么不用内容 `.opacity`:内容一透明,图标背后的托底就透出来(见 PanelView 那条病例)✗
+    private func fadeInWindow(_ w: NSPanel, duration: Double = 0.13) {
+        w.alphaValue = 0
+        let t0 = CACurrentMediaTime()
+        func step() {
+            guard isVisible, w.isVisible else { w.alphaValue = 1; return }
+            let t = min(1, (CACurrentMediaTime() - t0) / duration)
+            w.alphaValue = CGFloat(1 - pow(1 - t, 3))     // easeOut
+            if t < 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: step)
+            } else {
+                w.alphaValue = 1
+            }
+        }
+        step()
     }
 
     /// 取图片**顶部 15% 条带**的 mean/max(0…1)。白光就闪在图标那一排的上沿。

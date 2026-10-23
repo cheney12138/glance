@@ -207,6 +207,8 @@ final class ThreeFingerTap {
     static let attachWedgeMaxRetries = 3
     /// 上一次重挂**走到头**(register+start 都成功)的时刻 —— 用来判"成功了却没有帧" ✓
     private var attachSucceededAt: CFAbsoluteTime = 0
+    /// 最近一次"睡醒 / 屏参数变化"的时刻 —— 判"投递已死"时先让驱动缓一缓(见 `reviveIfFramesDead`)
+    private var lastWakeAt: CFAbsoluteTime = 0
     /// **MT 投递整体已死**(2026-10-11 病例,见 `reviveIfFramesDead` 里的那段)
     private var mtDeliveryDead = false
     /// ★★ 2026-10-14:「MT 投递整体已死」时**自动重启自己** ✓
@@ -291,7 +293,11 @@ final class ThreeFingerTap {
         //     (不再投递重挂 —— 免得攒线程与刷屏 ✓;真恢复了(又有帧)会自动把旗标放下 ✓)
         //   ⚠️ 防误伤(本仓老病例:外接鼠标 / 盒盖机型"本来就没帧" ✗):必须**曾经有过帧**才判死 ✓
         //      —— 从没见过的机器(内建板根本没在用)不会走到这里 ✓
-        if lastFrameAt > 0, attachSucceededAt > 0, silence > 3.0 {
+        // ★★ 2026-10-20(用户:「怎么有时候莫名其妙地自己重启」):判"投递已死"加两道刹车。
+        //   ① **睡醒/换屏后的宽限 15s**:驱动醒来要缓几拍才吐帧,原来 3s 就宣判 ⇒ 一开盖就重启 ✗
+        //   ② 静默阈值 3s → **8s**:鼠标也在吐帧,真死的时候不会差这几秒 ✓
+        let wakeGrace = CFAbsoluteTimeGetCurrent() - lastWakeAt
+        if lastFrameAt > 0, attachSucceededAt > 0, silence > 8.0, wakeGrace > 15 {
             if !mtDeliveryDead {
                 mtDeliveryDead = true
                 glog("[指点按] ⚠️ 重挂已成功(register+start ✓)但 3s 内仍无任何触点帧"
@@ -540,23 +546,36 @@ final class ThreeFingerTap {
                 sym.stop?(p)
             }
         }
-        attachedDevices.removeAll()
+        if !light { attachedDevices.removeAll() }
         guard let devices = sym.list() else { return }
         let count = CFArrayGetCount(devices)
+        var added = 0
         for i in 0..<count {
             guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
             let p = UnsafeMutableRawPointer(mutating: raw)
+            // ★★ 2026-10-20 病例(用户:「三指失效了」):轻重挂**只补新面孔**。
+            //   日志铁证:睡前 `挂载 2 个设备`,睡醒 `挂载 1 个设备(轻量路)` ⇒ 触控板没在列表里
+            //   (醒来那一刻设备还没重新登记)⇒ 之后每帧都是 `0 指` ⇒ 三指全废,
+            //   而"投递已死"那套自愈**认不出**它(帧是有的,只是没有手指 ✗)。
+            //   轻量路原来每次都把整张列表重新 register 一遍 ⇒ 已挂的会被**重复注册**
+            //   (旧注释里那句"手指数翻倍"就是这个 ✗)⇒ 加一道"已在表里就跳过" ✓
+            //   这样**反复轻量重挂是幂等的**:睡醒后多试几次,谁先出现就挂谁 ✓
+            if light, attachedDevices.contains(where: { $0 == p }) { continue }
             sym.register(p, Self.contactFrame)
             sym.start(p, 0)
             attachedDevices.append(p)
+            added += 1
         }
+        let attached = attachedDevices.count
         lastAttachAt = CFAbsoluteTimeGetCurrent()
         attachSucceededAt = lastAttachAt        // 给"成功了却没有帧"那条判据用 ✓
         // 这一趟真的走到头了 ⇒ 清掉"楔住"预算(下一次死投递可以从头试 ✓)
         attachStateLock.lock(); attachWedgeRetries = 0; attachStateLock.unlock()
-        glog("[指点按] 挂载 \(count) 个设备(\(reason)\(light ? " · 轻量路(不拆旧 ✓)" : ""),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
+        glog("[指点按] 挂载 \(attached) 个设备(列表 \(count) · 本次新增 \(added))(\(reason)\(light ? " · 轻量路(不拆旧 ✓)" : ""),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
              + " · 四指=\(enabledFour ? "开" : "关")")
     }
+
+    func noteWake() { lastWakeAt = CFAbsoluteTimeGetCurrent() }
 
     /// 睡醒 / 屏参数变化 ⇒ 重挂(这两件正是"设备回调会死"的时刻 ✓)
     private func observeWakeAndScreenChanges() {
@@ -564,10 +583,18 @@ final class ThreeFingerTap {
         observing = true
         let c = NSWorkspace.shared.notificationCenter
         c.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            ThreeFingerTap.shared.attachDevices(reason: "睡醒")
+            ThreeFingerTap.shared.noteWake()
+            // ★ 醒来那一刻设备列表常常还没登记全(实测:睡前 2 个 ⇒ 醒来只挂到 1 个)⇒ 补挂几次。
+            //   轻量重挂现在是幂等的(只补新面孔)⇒ 多试没有副作用 ✓
+            for delay in [0.0, 1.5, 4.0, 9.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    ThreeFingerTap.shared.attachDevices(reason: delay == 0 ? "睡醒" : "睡醒补挂 \(Int(delay))s")
+                }
+            }
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                               object: nil, queue: .main) { _ in
+            ThreeFingerTap.shared.noteWake()
             ThreeFingerTap.shared.attachDevices(reason: "屏参数变化")
         }
     }

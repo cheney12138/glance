@@ -222,17 +222,23 @@ enum DebugFlags {
         p.minDuration = Double(tapMinDurationMs) / 1000   // 时长下限(默认 30ms)
         p.minContactSize = tapMinContactSize              // 重量门:太小 = 搭着/掠着(默认 0.6)
         p.maxMove = tapMaxMoveNorm                        // 位移上限(默认 0.05)
-        p.maxMajor = tapMaxMajor                          // 主轴上限:太大 = 掌心/掌缘(默认 14)
+        p.maxMajor = tapMaxMajor                          // 主轴上限:太大 = 掌心/掌缘(默认 11.5,见 TapRound 的实测)
         return p
     }
 
-    /// **触点"主轴"上限**(默认取领域层 = 14)。
+    /// **触点"主轴"上限**(App 层默认 11.5,见下面的实测)。
     /// 2026-09-24 用户实报:笔记本打字时**掌心**压到触摸板 ⇒ 误触三指 ✓
     /// 实测掌心主轴 17–29 ✗、手指 8–10 ✓ ⇒ 14 在中间;掌心误触还多就调小
     ///     defaults write com.cheney12138.macswitcher debug.tapMaxMajor -float 12
     static var tapMaxMajor: Float {
+        // ★★ 2026-10-20:App 层的默认值单独收到 **11.5**(领域层 `Policy.standard` 仍是 14,语料不动)。
+        //   依据 = 今天在用户机器上采到的十次真实三指点按 + 一次误触(日志实证):
+        //     真实:major = 6.8 / 7.4 / 7.7 / 7.7 / 7.8 / 8.9 / 9.3 / 9.8 / 10.6
+        //     误触:major = **12.2**(掌缘搭上,Duration 178ms,其余判据全都合格 ⇒ 只有它挡得住)✗
+        //   ⇒ 11.5 落在"最大真实值 10.6"与"误触 12.2"之间,两边都留余量 ✓
+        //   (领域层那条 14 是"掌心整只压上来"(17–29)的口径,更松;这里要的是"掌缘"这一档 ✓)
         (UserDefaults.standard.object(forKey: Keys.debugTapMaxMajor) as? NSNumber)?.floatValue
-            ?? TapRound.Policy.standard.maxMajor
+            ?? 11.5
     }
 
     static var tapUndoPolicy: TapUndoPolicy {

@@ -495,7 +495,12 @@ private struct WindowThumb<Overlay: View>: View {
     ///   托盘层早就有这条守卫(`.transaction { if isRingSwapInFlight { t.animation = nil } }`),
     ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
     /// 卡片的"明暗"过渡:**永远有**(不受换组抑制) —— 见 `opacity` 那条的病例。
-    private var fadeMotion: Animation? { MotionPolicy.animation(.easeOut(duration: 0.16)) }
+    private var fadeMotion: Animation { .easeOut(duration: 0.16) }
+    /// 卡片的明暗(0.72 = 未选中)。**必须单独一个标量**:直接拿 `.animation(_:value:)` 挂
+    /// opacity 会把同一拍的布局变化一起动画化 ⇒ 卡片从左边滑进来 ✗(见 `opacity` 那条)
+    @State private var dim: Double = 1
+    private var dimTarget: Double { selected ? 1 : 0.72 }
+    private var dimTargetIsOn: Bool { selected }
 
     private var selMotion: Animation? {
         // 🧪 2026-10-20 A/B 结论:把这条动画关掉后**照样闪** ⇒ 与动画无关,已恢复。
@@ -552,6 +557,25 @@ private struct WindowThumb<Overlay: View>: View {
                height: box.height + (PanelMetrics.thumbH - PanelMetrics.shotH))
         // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
         .onHover { hovered = $0 }
+        // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
+        .onAppear { dim = dimTarget }
+        .onChange(of: selected) { _, _ in
+            // ★ 换组那一拍:当拍落(与几何一致)。
+            //   其余时候**推迟一拍**再改 `dim` —— 让"明暗"落在**另一个事务**里。
+            //   踩过的两次:① `.animation(v, value: selected)` 把同一拍的布局一起动画化 ⇒ 左滑入场 ✗
+            //            ② `withAnimation { dim = … }` 和布局更新挤在同一拍 ⇒ 同样左滑 ✗
+            if motionSuppressed {
+                dim = dimTarget
+            } else {
+                DispatchQueue.main.async {
+                    // 这一拍里选中又变了(连按 Tab)⇒ 以最新的为准,别把旧值写回去
+                    guard selected == dimTargetIsOn else { return }
+                    dim = dimTarget
+                }
+            }
+        }
+        // 同一个格子里换了另一扇窗(ForEach 是索引 id ⇒ 视图实例会被复用)⇒ 明暗必须跟着重置
+        .onChange(of: record.wid) { _, _ in dim = dimTarget }
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
@@ -627,14 +651,17 @@ private struct WindowThumb<Overlay: View>: View {
         // ★ demo `.win:not(.sel) .thumb{filter:brightness(.72) saturate(.88)}`(2026-10-19)
         //   旧口径是"整卡压到 30% 不透明度"—— 未选中的卡几乎塌成一块灰,用户读作
         //   「缩小的时候先下沉了」✗。demo 的压色**保形保色**,只是暗下去一档 ✓
-        .opacity(selected ? 1 : 0.72)
-        .saturation(selected ? 1 : 0.88)
-        // ★★★ 2026-10-20 定案(闪的最后一层):
-        //   `selMotion` 在**换组那一拍**是 nil(为了不让整行重排被动画化 ⇒ 卡片从左边浮出来 ✗),
-        //   但那条规矩误伤了**透明度**:旧卡 1.0 一帧掉到 0.72、新卡一帧亮起来 = 一次亮度突变 ✗
-        //   ⇒ 把"明暗"单独放出来,**永远**带一条短过渡(与几何无关)——
+        // ★★★ 2026-10-20 定版(踩过两次的坑):
+        //   ① 闪的最后一层 = 换组那一拍 `selMotion` 为 nil,把**明暗**也一起关掉了
+        //      ⇒ 旧卡一帧掉到 0.72、新卡一帧亮起来 = 亮度突变 ✗
+        //   ② 第一次修:`.animation(fadeMotion, value: selected)` —— **左滑入场又回来了** ✗
+        //      因为 `.animation(_:value:)` 的事务会**往上带走布局**:换组那一拍整行重排
+        //      (新组的卡位置不同)被一起动画化 ⇒ 卡片从左边滑进来 ✗
+        //   ⇒ 现在:只动一个**标量** `dim`(布局完全不依赖它),用 `withAnimation` 单独改它 ✓
         //     几何(缩放/上浮/阴影)继续听 `selMotion`,换组时照样当拍 ✓
-        .animation(fadeMotion, value: selected)
+        .opacity(dim)
+        .animation(fadeMotion, value: dim)   // ★ 只认 `dim`(布局完全不依赖它)⇒ 不会带走布局 ✓
+        .saturation(selected ? 1 : 0.88)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
@@ -1332,10 +1359,14 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             return true
         }
         guard ok else { return false }
-        // 有像素明显半透(alpha < 220)⇒ 判为半透明窗
-        var minAlpha = 255
-        for i in stride(from: 3, to: buf.count, by: 4) { minAlpha = min(minAlpha, Int(buf[i])) }
-        if minAlpha < 220 { translucentWIDs.insert(wid); return true }
+        // ★★ 2026-10-20 修正(用户实报「访达预览卡片出现了 app 图标」):
+        //   上一版用 `min(alpha) < 220` 判半透明 —— **每个窗口的圆角都是透明的** ⇒ alpha 到处是 0
+        //   ⇒ **所有窗口都被判成半透明** ⇒ 一条实时帧都不接 ⇒ 没有静帧的窗口(访达)直接露出 App 图标 ✗
+        //   ⇒ 改成看**占比**:半透明窗是"大面积的 0.886",圆角只占 1~2% ✓
+        var translucent = 0
+        for i in stride(from: 3, to: buf.count, by: 4) where Int(buf[i]) < 240 { translucent += 1 }
+        let ratio = Double(translucent) / Double(side * side)
+        if ratio > 0.20 { translucentWIDs.insert(wid); return true }
         return false
     }
 
