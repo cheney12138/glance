@@ -24,6 +24,10 @@ final class HotkeyTapCenter {
     /// ⌘` 接管:参数 = 是否向前(⇧ = 反向 ✓)。**由 App 层装配**(Trigger 不许反向依赖 App 层 ✗,
     /// 见 `Sources/Glance/App/SameAppScreenCycler.swift` 的头注 ✓)
     var onSameAppScreenCycle: ((Bool) -> Void)?
+    /// ⌘` **单独**触发 ⇒ 把预览面板提上来(2026-10-23 用户:「强化一下 ⌘` 的功能,
+    /// 单独触发的时候把预览窗口提上来,语义还是当前屏幕下的」)。
+    /// 与 `onSameAppScreenCycle` 同一套装配纪律:Trigger 不反向依赖 App 层 ⇒ 走闭包钩子 ✓
+    var onRaisePreview: (() -> Void)?
 
 
     enum State { case idle, armed, navigating }
@@ -477,7 +481,14 @@ final class HotkeyTapCenter {
                 let forward = !event.flags.contains(.maskShift)
                 // ★ 不直接调 App 层的循环器(Trigger 不许反向依赖 ✗ 架构脚本会报 ✓)
                 //   ⇒ 走**闭包钩子**,由 GlanceApp 装配 ✓(输入管线的既有约定:onFire / onScroll 同一套 ✓)
-                onSameAppScreenCycle?(forward)
+                // ★★ 2026-10-23 用户裁定:「单独触发的时候,把预览窗口提上来,语义还是当前屏幕下的」
+                //   ⇒ ⌘`(**不带 ⇧**)= 唤起面板(钉住那一局,与三指点按同一个入口 ✓);
+                //     ⌘⇧` 仍走"反向循环窗口"—— 它是另一个动作,不在这次改动里 ✓
+                if mods == [.maskCommand] {
+                    onRaisePreview?()
+                } else {
+                    onSameAppScreenCycle?(forward)
+                }
                 return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
             }
             return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓

@@ -224,17 +224,25 @@ final class ThreeFingerTap {
     /// 做法:用一个**游离的 shell** 先睡 1 秒再拉起新实例,然后本进程干净退出 ✓
     ///   (不能先 open 再退出:本仓有单实例闸 ⇒ 新实例会被老实例挤掉 ✗;
     ///    也不能用强杀:会跳过"归还原生热键"✓)
-    /// 防打转:同一台机器 10 分钟内最多自动重启一次(写进 UserDefaults ✓,
-    ///   否则"本来就永远没帧"的机器会陷入重启循环 ✗)
+    /// 防打转:滚动窗口内最多自动重启 3 次。
+    ///
+    /// ★★ 2026-10-23(用户第三次报「三指又失灵了」):原来是"10 分钟最多一次" ——
+    ///   实测**一次重启就能救回**(日志:重启后 6s 就又有触点帧了 ✓),
+    ///   但那次机会如果已经被上一条命用完,本次就**沉默地放弃**,用户只觉得"又失灵了"✗
+    ///   ⇒ 改成滚动窗口内最多 3 次;真的连续 3 次都救不回(驱动彻底卡死)才停手,
+    ///     并且**明确写出**怎么人工恢复 ✓
     static func autoRelaunchIfNeeded(reason: String) {
-        let key = "tap.lastAutoRelaunch"
+        let key = "tap.autoRelaunchLog"
         let now = Date().timeIntervalSince1970
-        let last = UserDefaults.standard.double(forKey: key)
-        if last > 0, now - last < 600 {
-            glog("[指点按] 距上次自动重启不足 10 分钟 ⇒ 不再自动重启(避免打转 ✗)")
+        var log = (UserDefaults.standard.array(forKey: key) as? [Double] ?? [])
+            .filter { now - $0 < 600 }          // 只留 10 分钟内的
+        if log.count >= 3 {
+            glog("[指点按] ⚠️ 10 分钟内已自动重启 3 次仍救不回 ⇒ **三指暂时不可用**"
+                 + "(多触点驱动卡死,系统侧问题)。恢复办法:重启 Glance,仍不行就合盖再开 / 重启系统 ✓")
             return
         }
-        UserDefaults.standard.set(now, forKey: key)
+        log.append(now)
+        UserDefaults.standard.set(log, forKey: key)
         let path = Bundle.main.bundlePath
         glog("[指点按] ⇒ 自动重启 Glance(\(reason)):1 秒后拉起新实例、本进程退出 ✓")
         let t = Process()

@@ -496,6 +496,44 @@ private struct WindowThumb<Overlay: View>: View {
     ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
     /// 卡片的"明暗"过渡:**永远有**(不受换组抑制) —— 见 `opacity` 那条的病例。
     private var fadeMotion: Animation { .easeOut(duration: 0.16) }
+    /// "落位"的缩放(平时恒为 1)。见 `settleIn` 的病例。
+    @State private var entrySettle: CGFloat = 1
+    /// 落位动画的令牌(新的一次开始 ⇒ 上一次的步进自己退出 ✓)
+    @State private var settleToken = 0
+
+    /// 一张卡**从无到有出现**时落位一次(2026-10-23 用户口径:
+    /// 「app 切换也算入场 —— 只要卡片窗口是从 0 出现在这个屏幕上」)。
+    /// 触发点只有两个:① 视图首次出现 ② 这个格子里换成了**另一扇窗**(`record.wid` 变了)。
+    /// 同一组内只换选中(winIndex 变)⇒ 不动 —— 那才叫"效率" ✓
+    private func settleIn() {
+        // ★★ 2026-10-23 用户裁定:「只针对默认选中的窗口,再加强幅度」+「时有时没有」。
+        //   "时有时没有" = **时序问题**(靠 `async`/16ms 猜帧,猜中才动,没猜中就被合并成一帧)✗
+        //   ⇒ 改成**自己按帧推**(与窗口淡入 `fadeInWindow` 同一套):每 8ms 一步,
+        //     首帧画起始值、后续每步都是一次真实提交 ⇒ 稳定可见 ✓
+        guard selected else { entrySettle = 1; return }
+        let start = (UserDefaults.standard.object(forKey: Keys.debugCardSettleScale) as? NSNumber)?
+            .doubleValue ?? 0.90
+        entrySettle = CGFloat(start)
+        settleToken += 1
+        let token = settleToken
+        let t0 = CACurrentMediaTime()
+        let dur = 0.20
+        if isTraceEnabled { glog("[落位] wid=\(record.wid) start=\(start)") }
+        func step() {
+            guard token == settleToken else { return }
+            let t = min(1, (CACurrentMediaTime() - t0) / dur)
+            let e = 1 - pow(1 - t, 3)                       // easeOut
+            let bump = 0.012 * sin(Double.pi * t)           // 一点回弹(峰值 +1.2%;0.02 被评"有点重"✗)
+            entrySettle = CGFloat(start + (1 - start) * e + (1 - start) * bump)
+            if t < 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: step)
+            } else {
+                entrySettle = 1
+            }
+        }
+        step()
+    }
+
     /// 卡片的明暗(0.72 = 未选中)。**必须单独一个标量**:直接拿 `.animation(_:value:)` 挂
     /// opacity 会把同一拍的布局变化一起动画化 ⇒ 卡片从左边滑进来 ✗(见 `opacity` 那条)
     @State private var dim: Double = 1
@@ -558,7 +596,10 @@ private struct WindowThumb<Overlay: View>: View {
         // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
         .onHover { hovered = $0 }
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
-        .onAppear { dim = dimTarget }
+        .onAppear {
+            dim = dimTarget
+            settleIn()
+        }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
             //   其余时候**推迟一拍**再改 `dim` —— 让"明暗"落在**另一个事务**里。
@@ -574,8 +615,12 @@ private struct WindowThumb<Overlay: View>: View {
                 }
             }
         }
-        // 同一个格子里换了另一扇窗(ForEach 是索引 id ⇒ 视图实例会被复用)⇒ 明暗必须跟着重置
-        .onChange(of: record.wid) { _, _ in dim = dimTarget }
+        // 同一个格子里换了另一扇窗(ForEach 是索引 id ⇒ 视图实例会被复用)⇒
+        // 明暗重置,并且**这一张是新出现的** ⇒ 落位一次 ✓
+        .onChange(of: record.wid) { _, _ in
+            dim = dimTarget
+            settleIn()
+        }
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
@@ -737,7 +782,11 @@ private struct WindowThumb<Overlay: View>: View {
         //   芯片永远不会"被落下"(2026-10-19 用户:「芯片又跟着下沉了」✗ —— 中心锚点缩小时
         //   卡片下缘上移,间距被撑大,读起来就是芯片下沉)
         // 🔬 2026-10-19 实验结论:缩放置 1.0 时右缘那条线**照样闪** ⇒ 与缩放无关,已恢复
-        .scaleEffect(selected ? 1.05 : 0.94, anchor: .bottom)
+        // ★★★ 2026-10-23(用户选的 A 方案,口径:「只在入场的时候做, 别的场景都不需要」):
+        //   入场时卡片**落位**:0.985 → 1(120ms easeOut),选中那张带一点回弹(180ms)。
+        //   · 只动 `scaleEffect`(纯绘制,不碰布局)⇒ 不会重演"卡片从左边滑进来"✗
+        //   · 触发点 = 这张卡**从无到有**(首次出现 / 格里换成另一扇窗);只换选中不动 ✓
+        .scaleEffect((selected ? 1.05 : 0.94) * entrySettle, anchor: .bottom)
         // ⚡ 不用 demo 那条带过冲的 ease-spring(2026-10-19 用户:「切换的话,有那个弹簧效果」✗):
         //   连按 Tab 换选中时几次过冲叠在一起 = 弹跳感;鼠标一格一格挪时看不出来
         //   ⇒ 与环/阴影同一条 easeOut 0.3s ⇒ 键盘与鼠标**完全同一种动效** ✓
