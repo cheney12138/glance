@@ -31,6 +31,8 @@ enum Keys {
     static let debugEntranceMotion = "debug.entranceMotion"
     /// `debug.dumpSources`
     static let debugDumpSources = "debug.dumpSources"
+    /// `debug.cardSettleScale` —— 卡片"落位"的起始缩放(默认 0.94 = 6% 幅度)
+    static let debugCardSettleScale = "debug.cardSettleScale"
     /// `debug.hideTray`
     static let debugHideTray = "debug.hideTray"
     /// `debug.hzProbe`
