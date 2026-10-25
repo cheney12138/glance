@@ -33,6 +33,17 @@ extension PanelController {
     /// T88:卡宽随窗比例,尺寸按每张卡的实际宽算(不再有 count × 定尺的省事)
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
+        // ★ 轨道版式(ADR-0017)有自己的尺寸账 —— 此前只有行算术 ⇒ 玻璃只包住卡,
+        //   轨道悬在玻璃外;且窗框追内容连跳数帧 = 「小→大」阶梯(用户录屏逐帧实锤)✗
+        if WindowLayout.current == .rail, group.windows.count > 1 {
+            let sizes = Self.cardSizes(group.windows)
+            let slotW = (sizes.map(\.width).max() ?? 0)
+            let cardH = (sizes.map(\.height).max() ?? 0)
+            return NSSize(
+                width: slotW + PanelMetrics.thumbGap + PanelMetrics.chipRailWidth + PanelMetrics.trayPadX * 2,
+                height: PanelMetrics.trayPadTop + cardH + PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath
+            )
+        }
         let sizes = Self.cardSizes(group.windows)
         // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
         let widths = sizes.map(\.width)
