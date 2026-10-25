@@ -238,15 +238,11 @@ struct PreviewPanelView: View {
                           card: AnyView(thumb(at: selIndex, showsChip: false)
                               // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
                               .frame(width: slotW, alignment: .center)
-                              // ★ 形变 = 换窗(vid 变)那一拍,尺寸按 .42s 过渡(实验台 v4 的 CSS transition
-                              //   对应物);图内容**直接换**,无 dissolve ✓
-                              // ⚠️ 必须接 motionSuppressed 闸(本文件 686 行那两条病例同族):
-                              //   换组(isContentSwapInFlight)那一拍 wid 必变 ⇒ 不闸的话动画在
-                              //   换组事务里跑,卡会从角落"飞"进来(2026-10-25 用户实报,不稳定复现)✗
-                              .animation((controller.isRingSwapInFlight || controller.isContentSwapInFlight)
-                                         ? nil
-                                         : (PanelMotion.select == nil ? nil : .easeOut(duration: 0.42)),
-                                         value: windows[selIndex].wid)
+                              // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
+                              //   它包住**整张卡**,内容三层降级(图标→静帧→live)的换源也被裹进
+                              //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
+                              //   ⇒ 摘掉:换窗 = 内容一帧直换、无任何动画;尺寸形变等"只对几何
+                              //      生效的窄动画"(face 驱动)验证后再上,不再让动效沾内容 ✓
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
                           railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
