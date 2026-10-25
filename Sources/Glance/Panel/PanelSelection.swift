@@ -98,18 +98,6 @@ extension PanelController {
             } else if backward, appIndex == 0, launchSectionEnabled, tabEntersLaunchSection {
                 setSegment(true, travel: .backward, launchIndex: launchables.count - 1)
                 trace("[T91] 段切换(⇧Tab): 主环 → 未启动(选中 [\(launchables.count)/\(launchables.count)] \(launchables[launchables.count - 1].name))")
-            } else if WindowLayout.current == .rail, appIndex < groups.count,
-                      groups[appIndex].windows.count > 1,
-                      (0..<groups[appIndex].windows.count).contains(winIndex) {
-                // ★★ 2026-10-25(用户口径):**轨道样式下 Tab 先在本组窗口内走,尾↔头绕回**,
-                //   不跨组。病例:用户按 Tab 以为在切 IDEA 的窗口,实际代码走的是 appIndex±1
-                //   ⇒ 整块面板(卡+轨道+窗框)换成另一个 App = 他看到的"每次切窗都有明显动效" ✗
-                //   (日志:选中(键盘 Tab) [3/10] QuickTime → [4/9] IntelliJ IDEA)
-                //   与既有裁定「撤莫比乌斯环改硬首尾:Tab 越界 = 选中跳变(尾↔头)」一致 ✓
-                let n = groups[appIndex].windows.count
-                winIndex = (winIndex + delta + n) % n
-                trace("[T6] 选中(键盘 Tab 组内): [\(winIndex + 1)/\(n)] \(groups[appIndex].appName) — \(groups[appIndex].windows[winIndex].title)")
-                traceCost("  ↳托盘更新") { updatePreview() }
             } else {
                 winIndex = 0   // 先落:appIndex 的 didSet 会同步重建托盘(见那里的病例)
                 appIndex = (appIndex + delta + groups.count) % groups.count
