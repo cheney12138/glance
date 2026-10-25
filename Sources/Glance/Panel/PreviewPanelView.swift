@@ -2077,10 +2077,12 @@ struct ChipRailGroup: View {
         .padding(.leading, 5)
         .padding(.trailing, 8)
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(isOn ? PanelColors.chipRailOnBg : .clear)
-        )
+        // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
+        //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
+        .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
+        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+        .overlay(Capsule(style: .continuous)
+            .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
         .contentShape(Rectangle())
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }

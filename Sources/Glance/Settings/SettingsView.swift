@@ -330,6 +330,11 @@ struct SettingsView: View {
                 //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
                 //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
                 //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
+                // 组内窗口的呈现方式(ADR-0017)—— 与"看不看实时画面"同一件事的两个面,并在这组里
+                SettingsRow(title: "用「芯片轨道」显示同一 App 的窗口",
+                            desc: "开启后:只有当前选中的窗口显示预览,其余窗口显示成一列标题;窗口多时整列滚动。关闭则沿用现在的多张预览卡。") {
+                    BeamSwitch(isOn: useChipRail)
+                }
                 SettingsRow(title: "实时预览",
                             desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
                     HStack(spacing: 8) {
@@ -413,15 +418,7 @@ struct SettingsView: View {
 
             // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
             // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
-            SettingsGroup(label: "窗口呈现", anchor: Page.general.anchor("窗口呈现")) {
-                SettingsRow(title: "用「芯片轨道」显示同一 App 的窗口",
-                            // 面向用户:把"能看到什么"写清楚,不写内部结构名
-                            desc: "开启后:只有当前选中的窗口显示预览,其余窗口显示成一列标题;窗口多时整列滚动。关闭则沿用现在的多张预览卡。",
-                            hairline: false) {
-                    BeamSwitch(isOn: useChipRail)
-                }
-            }
-
+            
             SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
                 // ⚠️ 2026-10-19 撤掉「展示 Dock 常驻应用」这一行(用户:「这是个废配置了,删掉吧,也不起作用」):
                 //   键 `panel.showLaunchables` 全仓**没有任何读取点** —— 只有这一行自己在绑 ⇒ 拨了也不影响行为 ✗
