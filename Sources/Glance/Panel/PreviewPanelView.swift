@@ -2009,7 +2009,9 @@ struct ChipRailGroup: View {
     private var slotCount: Int {
         max(1, Int((railHeight + PanelMetrics.chipRailGap) / PanelMetrics.chipRailStep))
     }
-    private var copies: Int { CGFloat(windows.count) * PanelMetrics.chipRailStep <= railHeight ? 1 : 3 }
+    /// 首尾**断开**(用户实测:莫比乌斯环会"一直滚下去,有点搞笑"✗)——
+    /// Tab 越界时由选中跳变(尾→头/头→尾),视口老老实实夹在 [0, count-slot] ✓
+    private var copies: Int { 1 }
 
     /// 连续坐标:选中在第几枚(可正可负 ⇒ 首尾靠它环绕)
     @State private var selPos: Int = 0
@@ -2022,12 +2024,7 @@ struct ChipRailGroup: View {
             rail
         }
         .onAppear { selPos = selected; viewPos = selected }
-        .onChange(of: selected) { _, new in
-            // "离当前连续坐标最近的那一份" —— 不然首尾环绕会算错方向
-            let n = windows.count
-            let cands = [new - n, new, new + n]
-            selPos = cands.min { abs($0 - selPos) < abs($1 - selPos) } ?? new
-        }
+        .onChange(of: selected) { _, new in selPos = new }
     }
 
     /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
@@ -2043,12 +2040,11 @@ struct ChipRailGroup: View {
         // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)
         let oneSet = CGFloat(windows.count) * step      // 每枚占一个 step ⇒ 与上面的 frame 同一把尺子 ✓
         let fits = self.fits
-        let visual = wrapped(viewPos)
         let offsetY: CGFloat = fits
             ? (height - oneSet) / 2
-            : -(oneSet + CGFloat(visual) * step) + (height - CGFloat(slotCount) * step) / 2
-        let showTop = !fits && (visual > 0 || viewPos < 0)
-        let showBottom = !fits
+            : -CGFloat(viewPos) * step
+        let showTop = !fits && viewPos > 0
+        let showBottom = !fits && viewPos + slotCount < windows.count
 
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -2138,10 +2134,4 @@ struct ChipRailGroup: View {
         if selPos - viewPos > slotCount - 1 { viewPos = selPos - slotCount + 1 }
     }
 
-    /// 把连续坐标折回 [0, windows.count)
-    private func wrapped(_ v: Int) -> Int {
-        let n = max(1, windows.count)
-        let m = v % n
-        return m < 0 ? m + n : m
-    }
 }
