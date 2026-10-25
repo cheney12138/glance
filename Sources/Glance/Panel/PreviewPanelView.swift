@@ -224,8 +224,11 @@ struct PreviewPanelView: View {
             }
     }
 
+    /// 本组是否用「芯片轨道」版式(单一判据 —— 两个分支不许各写一份 ✗)
+    private var useRail: Bool { WindowLayout.current == .rail && windows.count > 1 }
+
     @ViewBuilder private var contentGrid: some View {
-        if WindowLayout.current == .rail, windows.count > 1 {
+        if useRail {
             // ★ 卡宽随真窗变,但**轨道的位置不许跟着动**(用户口径)⇒
             //   卡放进一个**固定宽度的槽**(= 本组最宽卡),槽内居中;轨道永远贴着槽的右缘 ⇒ 一个像素都不动 ✓
             let slotW = windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0
@@ -262,7 +265,9 @@ struct PreviewPanelView: View {
                 HStack(spacing: PanelMetrics.thumbGap) {
                     ForEach(r * colsSafe..<min(r * colsSafe + colsSafe, windows.count), id: \.self) { i in
                         // 单窗口放宽一档(见 `PanelMetrics.soloWiden`)
-                        thumb(at: i, face: windows.count == 1
+                        // ★ 放宽**只属于芯片轨道样式**(用户口径:「普通窗口还是原来的尺寸」)——
+                        //   两套版式的度量必须完全隔离,row 一个像素都不许跟着变 ✓
+                        thumb(at: i, face: (useRail && windows.count == 1)
                               ? PanelMetrics.thumbSize(real: windows[i].bounds.size,
                                                        aspect: windows[i].aspect,
                                                        widen: PanelMetrics.soloWiden)
