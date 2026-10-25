@@ -2030,6 +2030,11 @@ struct ChipRailGroup: View {
         }
     }
 
+    /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
+    private var fits: Bool {
+        CGFloat(windows.count) * PanelMetrics.chipRailStep <= railHeight
+    }
+
     private var rail: some View {
         let lane = PanelMetrics.chipRailWidth
         let height = railHeight
@@ -2037,7 +2042,7 @@ struct ChipRailGroup: View {
 
         // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)
         let oneSet = CGFloat(windows.count) * step      // 每枚占一个 step ⇒ 与上面的 frame 同一把尺子 ✓
-        let fits = oneSet <= height
+        let fits = self.fits
         let visual = wrapped(viewPos)
         let offsetY: CGFloat = fits
             ? (height - oneSet) / 2
@@ -2065,6 +2070,8 @@ struct ChipRailGroup: View {
                 .init(color: showBottom ? .clear : .black, location: 1),
             ], startPoint: .top, endPoint: .bottom)
         )
+        .overlay(alignment: .top) { edgeBand(up: false) }
+        .overlay(alignment: .bottom) { edgeBand(up: true) }
         .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: viewPos)
         .onChange(of: selPos) { _, _ in clampViewport() }
         .onAppear { clampViewport() }
@@ -2103,8 +2110,24 @@ struct ChipRailGroup: View {
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
         .contentShape(Rectangle())
-        .onHover { inside in if inside { onSelect(logical) } }
+        // hover 只留命中、不切选中 —— 换选中只走 Tab / 点击 ✓
         .onTapGesture { onSelect(logical); onTap(logical) }
+    }
+
+    /// 边缘感应带:鼠标进顶/底 12pt ⇒ 轨道滚**一枚**;
+    /// **只滚视口,不动选中**(用户口径:「我只是想让轨道滚动起来,而不是代替移动」)✓
+    @ViewBuilder private func edgeBand(up: Bool) -> some View {
+        if !fits && windows.count > slotCount {
+            Color.clear
+                .frame(height: 12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    guard inside else { return }
+                    let hi = windows.count - slotCount
+                    viewPos = min(max(viewPos + (up ? 1 : -1), 0), hi)
+                }
+        }
     }
 
     /// 视口只为"选中出视口"服务 —— **一次一枚**,不按像素算最小距离 ✓
