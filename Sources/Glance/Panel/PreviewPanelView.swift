@@ -226,10 +226,14 @@ struct PreviewPanelView: View {
 
     @ViewBuilder private var contentGrid: some View {
         if WindowLayout.current == .rail, windows.count > 1 {
+            // ★ 卡宽随真窗变,但**轨道的位置不许跟着动**(用户口径)⇒
+            //   卡放进一个**固定宽度的槽**(= 本组最宽卡),槽内居中;轨道永远贴着槽的右缘 ⇒ 一个像素都不动 ✓
+            let slotW = windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0
             ChipRailGroup(windows: windows,
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
                           card: AnyView(thumb(at: selIndex, showsChip: false)
+                              .frame(width: slotW, alignment: .center)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           onSelect: { controller.hoverWindow($0) },
                           onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) })
