@@ -236,8 +236,8 @@ struct PreviewPanelView: View {
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
                           card: AnyView(thumb(at: selIndex, showsChip: false)
-                              // 贴左(实验台 v4 定稿):红绿灯与面板左缘同一条线,窄卡留白靠轨道侧
-                              .frame(width: slotW, alignment: .leading)
+                              // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
+                              .frame(width: slotW, alignment: .center)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
                           railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
