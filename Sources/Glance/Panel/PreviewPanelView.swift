@@ -251,10 +251,17 @@ struct PreviewPanelView: View {
             // ★ 卡宽随真窗变,但**轨道的位置不许跟着动**(用户口径)⇒
             //   卡放进一个**固定宽度的槽**(= 本组最宽卡),槽内居中;轨道永远贴着槽的右缘 ⇒ 一个像素都不动 ✓
             let slotW = windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0
+            // ★ 卡盒恒定 = 本组最大卡(2026-10-25 日志铁证):IDEA 的"4 窗同尺寸"实为
+            //   1728x1084 / 920x492 / 1204x1084 / 1728x1050(有一扇是弹窗)⇒ 卡跟选中走 =
+            //   每次组内换选中卡都变尺寸 = 用户说的"落位"✗ ⇒ 卡盒 = 组内最大卡,恒定;
+            //   换选中只剩内容直换;小窗内容在盒内 aspect-fit ✓
+            let slotH = windows.map { PanelMetrics.thumbSize(real: $0.bounds.size,
+                                                            aspect: $0.aspect).height }.max() ?? 0
             ChipRailGroup(windows: windows,
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
-                          card: AnyView(thumb(at: selIndex, showsChip: false)
+                          card: AnyView(thumb(at: selIndex, showsChip: false,
+                                              face: CGSize(width: slotW, height: slotH))
                               // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
                               .frame(width: slotW, alignment: .center)
                               // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
@@ -263,9 +270,8 @@ struct PreviewPanelView: View {
                               //   ⇒ 摘掉:换窗 = 内容一帧直换、无任何动画;尺寸形变等"只对几何
                               //      生效的窄动画"(face 驱动)验证后再上,不再让动效沾内容 ✓
                               .onTapGesture { controller.cardTapped(localX: 0) }),
-                          // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
-                          railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
-                                                            aspect: windows[selIndex].aspect).height,
+                          // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
+                          railHeight: slotH,
                           onSelect: { controller.hoverWindow($0) },
                           onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) })
         } else {
