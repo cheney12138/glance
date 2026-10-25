@@ -73,10 +73,6 @@ struct PreviewPanelView: View {
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
-    /// 换组落位(仅轨道样式):见 body 内 onChange 的注释
-    @State private var panelSettle: CGFloat = 1
-    @State private var lastGroupKey: String?
-
     var body: some View {
         // **没有题头行**(2026-09-14 用户口径:"你把额头去掉我看看效果"):
         // App 名已由长条里选中的那个图标承担、窗口数由卡片张数承担 —— 那行只是把两件已知的事各写一遍,
@@ -89,21 +85,8 @@ struct PreviewPanelView: View {
             // 芯片由面板那一扇窗承担,见 PanelView / PanelController.contentSize。
             if controller.entrySelected { launchGrid } else { thumbGrid }
         }
-        // ★ 换组落位(**仅轨道样式**;row 照旧用卡片落位,一个像素不动):
-        //   换组那一拍整块面板(卡+轨道)被原样替换 —— 录屏逐帧实锤是硬切 ✗
-        //   ⇒ 新的一局进场时整块面板 .95→1 落定一次;换窗路径依旧零动效 ✓
-        .scaleEffect(WindowLayout.current == .rail ? panelSettle : 1, anchor: .bottom)
-        .onChange(of: controller.currentGroup.map { "\($0.bundleID)-\($0.windows.count)" }) { _, new in
-            guard WindowLayout.current == .rail, let new else { return }
-            guard new != lastGroupKey else { return }
-            if lastGroupKey != nil {   // 首次出现不算换组(唤起本就有面板级入场)
-                panelSettle = 0.95
-                DispatchQueue.main.async {
-                    withAnimation(.easeOut(duration: 0.2)) { panelSettle = 1 }
-                }
-            }
-            lastGroupKey = new
-        }
+        // ★〔2026-10-25 撤〕换组落位(面板 .95→1):用户终审「把窗口上的动效全部去掉」✗
+        //   无动效版本先在实机上认可,再按需往回加。
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
@@ -571,7 +554,9 @@ private struct WindowThumb<Overlay: View>: View {
     ///   托盘层早就有这条守卫(`.transaction { if isRingSwapInFlight { t.animation = nil } }`),
     ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
     /// 卡片的"明暗"过渡:**永远有**(不受换组抑制) —— 见 `opacity` 那条的病例。
-    private var fadeMotion: Animation { .easeOut(duration: 0.16) }
+    private var fadeMotion: Animation? {
+        WindowLayout.current == .rail ? nil : .easeOut(duration: 0.16)
+    }
     /// "落位"的缩放(平时恒为 1)。见 `settleIn` 的病例。
     @State private var entrySettle: CGFloat = 1
     /// 落位动画的令牌(新的一次开始 ⇒ 上一次的步进自己退出 ✓)
@@ -667,8 +652,12 @@ private struct WindowThumb<Overlay: View>: View {
     private var dimTargetIsOn: Bool { selected }
 
     private var selMotion: Animation? {
+        // ★ 2026-10-25 用户口径:「针对这个样式,把现在窗口上的动效全部先去掉」
+        //   ⇒ 轨道样式**一律无动画**(选中缩放/上浮/阴影/明暗全部当拍落)。
+        //   等"无动效版本"先在实机上认可,再逐个往回加。
+        if WindowLayout.current == .rail { return nil }
         // 🧪 2026-10-20 A/B 结论:把这条动画关掉后**照样闪** ⇒ 与动画无关,已恢复。
-        motionSuppressed ? nil : ringSelectMotion
+        return motionSuppressed ? nil : ringSelectMotion
     }
 
     /// 芯片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时先截文字再截宽度
@@ -2123,8 +2112,9 @@ struct ChipRailGroup: View {
         )
         .overlay(alignment: .top) { edgeBand(up: false) }
         .overlay(alignment: .bottom) { edgeBand(up: true) }
-        .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: viewPos)
-        .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: railHeight)
+        // ★ 2026-10-25:轨道式**无动效**(用户口径)—— 步进/卡高当拍落
+        .animation(nil, value: viewPos)
+        .animation(nil, value: railHeight)
         .onChange(of: selPos) { _, _ in clampViewport() }
         .onAppear { clampViewport() }
     }
