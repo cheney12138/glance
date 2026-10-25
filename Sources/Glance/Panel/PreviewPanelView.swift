@@ -2018,7 +2018,7 @@ struct ChipRailGroup: View {
         let step = PanelMetrics.chipRailStep
 
         // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)
-        let oneSet = CGFloat(windows.count) * step
+        let oneSet = CGFloat(windows.count) * step      // 每枚占一个 step ⇒ 与上面的 frame 同一把尺子 ✓
         let fits = oneSet <= height
         let visual = wrapped(viewPos)
         let offsetY: CGFloat = fits
@@ -2028,9 +2028,10 @@ struct ChipRailGroup: View {
         let showBottom = !fits
 
         return ZStack(alignment: .topLeading) {
-            VStack(spacing: PanelMetrics.chipRailGap) {
+            VStack(spacing: 0) {
                 ForEach(0..<(windows.count * copies), id: \.self) { idx in
                     chip(logical: idx % windows.count)
+                        .frame(height: PanelMetrics.chipRailStep, alignment: .center)
                 }
             }
             .frame(width: lane, alignment: .topLeading)
@@ -2076,7 +2077,7 @@ struct ChipRailGroup: View {
         }
         .padding(.leading, 5)
         .padding(.trailing, 8)
-        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH)
+        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH, alignment: .center)
         // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
         //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
         .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
