@@ -2110,7 +2110,9 @@ struct ChipRailGroup: View {
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
         .contentShape(Rectangle())
-        // hover 只留命中、不切选中 —— 换选中只走 Tab / 点击 ✓
+        // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
+        // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
+        .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
 
