@@ -1336,7 +1336,12 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             let coldOpen = items.allSatisfy {
                 self.handles[$0.wid] == nil && !self.pending.contains($0.wid)
             }
-            self.queue.asyncAfter(deadline: .now() + (coldOpen ? 0.01 : 0.15), execute: work)
+            // ★ 轨道版式:整池只有 1 条流(选中那张)⇒ 换选中**立即起流**,
+            //   不付 150ms 推迟的代价 —— 那 150ms 里卡在图标兜底,
+            //   live 首帧(134-177ms 实测)一到就"小图标→满卡"跳一下 = 用户说的落位形变 ✗
+            //   row 版式维持 150ms(2026-09-21 hover 丢帧病例没变)✓
+            let startDelay = (coldOpen || WindowLayout.current == .rail) ? 0.01 : 0.15
+            self.queue.asyncAfter(deadline: .now() + startDelay, execute: work)
         }
     }
 
