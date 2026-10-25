@@ -174,6 +174,13 @@ struct PreviewPanelView: View {
     private func handleCardFrames(_ new: [CGWindowID: CGRect]) {
         let old = cardFrames
         cardFrames = new
+        // ★★ 2026-10-25(用户实报「按 ` 切组内窗口,面板缩小了一下,像退到台后」):
+        //   轨迹逐帧 + `[框变]` 探针双向确认 —— **窗框恒定**,缩的是内容层:
+        //   这套重排里有两段纯表演给"删窗"看的动效 ——
+        //     ① `GhostCard` = 被摘掉那张 `scaleEffect(0.92)` + 淡出 = 用户看到的"内缩"✗
+        //     ② 换位卡从右 +64pt 滑入 = "退到台后再展示下一个窗口"✗
+        //   轨道样式里一次选中切换根本不该有它们(卡的几何是恒定的)⇒ 整段跳过 ✓
+        guard WindowLayout.current != .rail else { return }
         guard !old.isEmpty, !new.isEmpty else { return }
         // 换组 / 换环那一拍:整块换内容,不是"少了一张" ⇒ 不参与(否则整排卡会飞)✗
         guard !controller.isContentSwapInFlight, !controller.isRingSwapInFlight else { return }
