@@ -1141,6 +1141,15 @@ final class PanelController: ObservableObject {
         isVisible = false
         sessionBaseline = nil
         LivePreviewPool.shared.stopAll(reason: "面板关闭")
+        // ★★ 2026-10-25(用户实报「按 ` 切窗口,面板看着缩小了一下」):
+        //   散场这一拍,托盘还要被重算/重排一次(换组那一瞬的名单/尺寸),而 orderOut
+        //   要等到后面 teardown 才发生 ⇒ 用户看到面板**先缩小、再消失** ✗
+        //   ⇒ 轨道样式下散场就**当拍收窗**(硬切):冻结帧 + 立刻 orderOut,
+        //     中间的重新布局一帧都不许上屏 ✓
+        if WindowLayout.current == .rail {
+            holdTrayFrame(seconds: 0.5)
+            previewPanel?.orderOut(nil)
+        }
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
         panel?.ignoresMouseEvents = true
         previewPanel?.ignoresMouseEvents = true
