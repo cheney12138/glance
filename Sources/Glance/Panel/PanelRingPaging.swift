@@ -250,6 +250,12 @@ extension PanelController {
         FrameProbe.lastHoverMark = CACurrentMediaTime()   // ★ 悬停打点(量"含悬停那几拍")
         winIndex = i
         Haptics.fire(.hoverPreviewThumb)     // ★ 悬停触感:指针换到托盘里另一扇窗 ✓
+        // ★ 2026-10-25:选中一变**立刻给这扇窗补一拍** —— 只拍缓存里没有的(onlyMissing)。
+        //   账:live 首帧要 90-140ms,这期间卡上没有快照就只能挂图标兜底 ⇒
+        //   「小图标 → 满卡」那一下 = 用户报的组内换窗跳变 ✗。补拍 ~20-40ms 就能填上。
+        if WindowLayout.current == .rail, let g = currentGroup, g.windows.indices.contains(i) {
+            Snapshotter.shared.precapture([g.windows[i]], maxAge: .infinity, onlyMissing: true)
+        }
         if let g = currentGroup, g.windows.indices.contains(i) {
             trace("[T6] 窗口选中(指针): [\(i + 1)/\(g.windows.count)] \(g.appName) — \(g.windows[i].title)")
         }
