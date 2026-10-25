@@ -236,7 +236,8 @@ struct PreviewPanelView: View {
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
                           card: AnyView(thumb(at: selIndex, showsChip: false)
-                              .frame(width: slotW, alignment: .center)
+                              // 贴左(实验台 v4 定稿):红绿灯与面板左缘同一条线,窄卡留白靠轨道侧
+                              .frame(width: slotW, alignment: .leading)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
                           railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
@@ -2069,6 +2070,7 @@ struct ChipRailGroup: View {
         .overlay(alignment: .top) { edgeBand(up: false) }
         .overlay(alignment: .bottom) { edgeBand(up: true) }
         .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: viewPos)
+        .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: railHeight)
         .onChange(of: selPos) { _, _ in clampViewport() }
         .onAppear { clampViewport() }
     }
