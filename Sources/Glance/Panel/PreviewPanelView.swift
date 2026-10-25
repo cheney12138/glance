@@ -240,7 +240,12 @@ struct PreviewPanelView: View {
                               .frame(width: slotW, alignment: .center)
                               // ★ 形变 = 换窗(vid 变)那一拍,尺寸按 .42s 过渡(实验台 v4 的 CSS transition
                               //   对应物);图内容**直接换**,无 dissolve ✓
-                              .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42),
+                              // ⚠️ 必须接 motionSuppressed 闸(本文件 686 行那两条病例同族):
+                              //   换组(isContentSwapInFlight)那一拍 wid 必变 ⇒ 不闸的话动画在
+                              //   换组事务里跑,卡会从角落"飞"进来(2026-10-25 用户实报,不稳定复现)✗
+                              .animation((controller.isRingSwapInFlight || controller.isContentSwapInFlight)
+                                         ? nil
+                                         : (PanelMotion.select == nil ? nil : .easeOut(duration: 0.42)),
                                          value: windows[selIndex].wid)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
