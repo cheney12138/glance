@@ -235,6 +235,9 @@ struct PreviewPanelView: View {
                           card: AnyView(thumb(at: selIndex, showsChip: false)
                               .frame(width: slotW, alignment: .center)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
+                          // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
+                          railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
+                                                            aspect: windows[selIndex].aspect).height,
                           onSelect: { controller.hoverWindow($0) },
                           onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) })
         } else {
@@ -258,7 +261,12 @@ struct PreviewPanelView: View {
             ForEach(0..<rowsSafe, id: \.self) { r in
                 HStack(spacing: PanelMetrics.thumbGap) {
                     ForEach(r * colsSafe..<min(r * colsSafe + colsSafe, windows.count), id: \.self) { i in
-                        thumb(at: i)   // 紧排(卡宽随真窗 ⇒ 用户要的形状 ✓)
+                        // 单窗口放宽一档(见 `PanelMetrics.soloWiden`)
+                        thumb(at: i, face: windows.count == 1
+                              ? PanelMetrics.thumbSize(real: windows[i].bounds.size,
+                                                       aspect: windows[i].aspect,
+                                                       widen: PanelMetrics.soloWiden)
+                              : nil)
                     }
                 }
                 // ★ **行级点击**(2026-09-19,用户实报「第二张卡要点两遍」):卡片之间的
@@ -289,7 +297,7 @@ struct PreviewPanelView: View {
         return min(max(controller.winIndex, 0), windows.count - 1)
     }
 
-    private func thumb(at i: Int, showsChip: Bool = true) -> some View {
+    private func thumb(at i: Int, showsChip: Bool = true, face: CGSize? = nil) -> some View {
         let w = windows[i]
         // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
         let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
@@ -343,7 +351,8 @@ struct PreviewPanelView: View {
             //     但**宁可一次小闪,也不要一张空卡** ✓
             image: snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
-            face: nil,
+            // 单窗口时由调用方给一张"放宽过的脸"(见 `PanelMetrics.soloWiden`)✓
+            face: face,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
             // ★★ 2026-10-20 病例(用户:「切换到 app 之后卡片出现,闪烁就跟着来了」):
             //   换组那一拍 `winIndex` 可能还停在旧组的值上(比如旧组有 2 窗、选的是第 2 窗,
@@ -629,8 +638,9 @@ private struct WindowThumb<Overlay: View>: View {
     }
 
     private var imageBox: CGSize {
-        // 卡片尺寸 = min(真窗, 上限)(见 PanelMetrics.thumbSize 的用户口径)
-        PanelMetrics.thumbSize(real: record.bounds.size, aspect: record.aspect)
+        // 卡片尺寸 = min(真窗, 上限)(见 PanelMetrics.thumbSize 的用户口径);
+        // 给了 `face`(单窗口放宽 / 统一卡面)时以它为准 —— 否则图会按旧上限缩、卡里留边 ✗
+        face ?? PanelMetrics.thumbSize(real: record.bounds.size, aspect: record.aspect)
     }
 
     private var cardW: CGFloat {
@@ -1982,6 +1992,9 @@ struct ChipRailGroup: View {
     let selected: Int
     let bundleID: String?
     let card: AnyView
+    /// 轨道高度 = **这张卡的实际高度**(不是上限 shotH)——
+    /// 宽窗的卡比 shotH 矮,若按 shotH 排芯片就会顶出卡的上下边(用户实报「芯片位置怎么能比窗口高」)✗
+    let railHeight: CGFloat
     /// 选中变化(hover 芯片)
     let onSelect: (Int) -> Void
     /// 点芯片 = 选中并确认
@@ -1989,9 +2002,9 @@ struct ChipRailGroup: View {
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
-        max(1, Int((PanelMetrics.shotH + PanelMetrics.chipRailGap) / PanelMetrics.chipRailStep))
+        max(1, Int((railHeight + PanelMetrics.chipRailGap) / PanelMetrics.chipRailStep))
     }
-    private var copies: Int { CGFloat(windows.count) * PanelMetrics.chipRailStep <= PanelMetrics.shotH ? 1 : 3 }
+    private var copies: Int { CGFloat(windows.count) * PanelMetrics.chipRailStep <= railHeight ? 1 : 3 }
 
     /// 连续坐标:选中在第几枚(可正可负 ⇒ 首尾靠它环绕)
     @State private var selPos: Int = 0
@@ -1999,7 +2012,7 @@ struct ChipRailGroup: View {
     @State private var viewPos: Int = 0
 
     var body: some View {
-        HStack(alignment: .top, spacing: PanelMetrics.thumbGap) {
+        HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
             card
             rail
         }
@@ -2014,7 +2027,7 @@ struct ChipRailGroup: View {
 
     private var rail: some View {
         let lane = PanelMetrics.chipRailWidth
-        let height = PanelMetrics.shotH
+        let height = railHeight
         let step = PanelMetrics.chipRailStep
 
         // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)

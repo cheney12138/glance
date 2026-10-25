@@ -174,11 +174,16 @@ enum PanelMetrics {
     ///   · **反之(大)就不行** ⇒ 上限永远管着 ✓。
     /// 推论:一行里的卡片可以**大小不一**(用户接受"参差不齐" ⇒ 换来"所见即真窗大小");
     ///       因此托盘的行高、内容高度、命中判定都必须按**每张卡的实际高度**算,不能再当常量 ✗。
-    static func thumbSize(real: CGSize, aspect: CGFloat) -> CGSize {
+    /// 单窗口时把卡宽上限放宽一档(2026-10-25 用户:「现在只有单个窗口了,可以把预览卡片的尺寸
+    /// 再稍微放宽一点」)—— 组里只有一张卡时,不必为"并排多张"留余量 ✓
+    static let soloWiden: CGFloat = 1.35
+    static func thumbSize(real: CGSize, aspect: CGFloat, widen: CGFloat = 1) -> CGSize {
         // 算式在 `GlanceCore.CardSizing`(可单测);这里只负责**喂参数**:
         // 两个帽都是"已经缩过"的(见 CardSizing.size 的注释:帽必须在外面乘 k,
         // 否则会和原来的"先夹限后缩放"差一个 k)
-        CardSizing.size(real: real, capWidth: thumbWidth(aspect: aspect), capHeight: shotH)
+        CardSizing.size(real: real,
+                        capWidth: thumbWidth(aspect: aspect) * widen,
+                        capHeight: shotH)
     }
 
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
