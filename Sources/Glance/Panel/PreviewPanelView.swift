@@ -366,6 +366,9 @@ struct PreviewPanelView: View {
             //   画了一帧**,下一刻又补上选中 ⇒ 一次亮度突变 = 闪 ✗
             //   ⇒ **结构上**掐死这一类:`selIndex` 永远夹在窗口数之内 ⇒ 任何一帧都恰好有一张是选中的 ✓
             selected: i == selIndex, // 换窗即接力:弹簧打断保速
+            // 轨道卡(showsChip:false)换窗**不落位**(实验台 v4 定稿:换窗只有形变);
+            // row 卡照旧落位 ✓
+            settlesOnSwap: showsChip,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -510,6 +513,9 @@ private struct WindowThumb<Overlay: View>: View {
     /// 这一扇窗的**帧盒子**(只观察它自己 ⇒ 别的窗口来帧不会重绘本卡 ✓)
     @ObservedObject var liveBox: LiveFrameBox
     let selected: Bool
+    /// 同一格子换成另一扇窗时,要不要"落位"一次(实验台 v4 定稿:轨道版式**不落位** ——
+    /// 换窗唯一的动作 = 卡形变;落位只属于唤起那一刻的默认窗)。row 版式保持 true ✓
+    var settlesOnSwap: Bool = true
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -720,7 +726,7 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: record.wid) { _, _ in
             dim = dimTarget
             blurFade = blurFadeTarget
-            settleIn()
+            if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
         }
     }
 
