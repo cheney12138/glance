@@ -73,6 +73,10 @@ struct PreviewPanelView: View {
 
     private var windows: [WindowRecord] { controller.currentGroup?.windows ?? [] }
 
+    /// 换组落位(仅轨道样式):见 body 内 onChange 的注释
+    @State private var panelSettle: CGFloat = 1
+    @State private var lastGroupKey: String?
+
     var body: some View {
         // **没有题头行**(2026-09-14 用户口径:"你把额头去掉我看看效果"):
         // App 名已由长条里选中的那个图标承担、窗口数由卡片张数承担 —— 那行只是把两件已知的事各写一遍,
@@ -84,6 +88,21 @@ struct PreviewPanelView: View {
             // T91 表三:文案**不走托盘**(那是第二枚芯片 + 尺寸账不同源 ⇒ 崩溃)。
             // 芯片由面板那一扇窗承担,见 PanelView / PanelController.contentSize。
             if controller.entrySelected { launchGrid } else { thumbGrid }
+        }
+        // ★ 换组落位(**仅轨道样式**;row 照旧用卡片落位,一个像素不动):
+        //   换组那一拍整块面板(卡+轨道)被原样替换 —— 录屏逐帧实锤是硬切 ✗
+        //   ⇒ 新的一局进场时整块面板 .95→1 落定一次;换窗路径依旧零动效 ✓
+        .scaleEffect(WindowLayout.current == .rail ? panelSettle : 1, anchor: .bottom)
+        .onChange(of: controller.currentGroup.map { "\($0.bundleID)-\($0.windows.count)" }) { _, new in
+            guard WindowLayout.current == .rail, let new else { return }
+            guard new != lastGroupKey else { return }
+            if lastGroupKey != nil {   // 首次出现不算换组(唤起本就有面板级入场)
+                panelSettle = 0.95
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { panelSettle = 1 }
+                }
+            }
+            lastGroupKey = new
         }
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
