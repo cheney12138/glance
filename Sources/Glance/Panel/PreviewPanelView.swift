@@ -375,9 +375,11 @@ struct PreviewPanelView: View {
             //   画了一帧**,下一刻又补上选中 ⇒ 一次亮度突变 = 闪 ✗
             //   ⇒ **结构上**掐死这一类:`selIndex` 永远夹在窗口数之内 ⇒ 任何一帧都恰好有一张是选中的 ✓
             selected: i == selIndex, // 换窗即接力:弹簧打断保速
-            // 轨道卡(showsChip:false)换窗**不落位**(实验台 v4 定稿:换窗只有形变);
-            // row 卡照旧落位 ✓
-            settlesOnSwap: showsChip,
+            // 落位 = **row 版式专属**(按版式判,不按卡判):
+            // 轨道模式下连单窗特例(卡+底芯片,走 row 网格)也不落位 ——
+            // 用户实报(2026-10-25):「IDEA 窗口一样大也有先缩后放的动效」✗
+            // 病根:单窗组走 row 网格,onAppear 每次换组都落位 ✗
+            settlesOnSwap: WindowLayout.current == .row,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
