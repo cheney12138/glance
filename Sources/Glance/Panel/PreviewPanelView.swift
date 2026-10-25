@@ -238,6 +238,10 @@ struct PreviewPanelView: View {
                           card: AnyView(thumb(at: selIndex, showsChip: false)
                               // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
                               .frame(width: slotW, alignment: .center)
+                              // ★ 形变 = 换窗(vid 变)那一拍,尺寸按 .42s 过渡(实验台 v4 的 CSS transition
+                              //   对应物);图内容**直接换**,无 dissolve ✓
+                              .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42),
+                                         value: windows[selIndex].wid)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 选中窗的卡高(轨道照它来,芯片就不会比卡高)✓
                           railHeight: PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
@@ -690,7 +694,9 @@ private struct WindowThumb<Overlay: View>: View {
         .onAppear {
             dim = dimTarget
             blurFade = blurFadeTarget
-            settleIn()
+            // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
+            //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
+            if settlesOnSwap { settleIn() } else { entrySettle = 1 }
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
