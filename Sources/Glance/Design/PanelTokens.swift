@@ -236,6 +236,11 @@ enum PanelMetrics {
     static var chipDot: CGFloat { kT(6) }
     /// 卡片与芯片之间的缝:两者解耦的分界(芯片不在卡片的环/影/浮起里)
     static var chipGap: CGFloat { kT(6) }
+    /// **芯片轨道**(ADR-0017)的三个数(2026-10-25 实验台定稿,直接对照 Swift):
+    /// 轨道宽 164 · 一枚芯片的步长 = chipH + railGap = 24 + 6 = 30 · 轨道与卡片的间距 = 14
+    static var chipRailWidth: CGFloat { kT(164) }
+    static var chipRailGap: CGFloat { kT(6) }
+    static var chipRailStep: CGFloat { chipH + chipRailGap }
     static var thumbH: CGFloat { shotH + chipGap + chipH }
     static var thumbGap: CGFloat { kT(14) }
     /// 卡片**换行**后的行间距(与卡间距不同档:行与行之间要能读成两排,不能糊成一片)
@@ -571,6 +576,11 @@ enum PanelColors {
     static let chipDotOn = Color.accentColor
     /// 深色 .26 → **.32**:芯片底变透(浅底上从 L45 抬到 L113)之后,同一颗灰点的可见度掉了一档,补回来
     static let chipDotOff = dynamic(ink(0.18), white(0.32))
+    /// 轨道里的芯片文字:选中 = 常色,未选中 = 灰调(ADR-0017:选中原色 / 未选中包一层灰)
+    static let chipFgOn = dynamic(ink(0.86), white(0.94))
+    static let chipFgOff = dynamic(ink(0.52), white(0.60))
+    /// 轨道里选中那枚的胶囊底(极淡,无边框 —— 用户:「芯片不要给我框起来」)
+    static let chipRailOnBg = dynamic(white(0.92), white(0.16))
     /// 窗口名芯片的底。
     /// 2026-09-14 用户实评"显示效果上感觉有点重了,芯片可以再轻盈一些" —— 浅色那一格往下压过:
     /// 从"近白实底"改成**半透**(和玻璃同呼吸,而不是贴在上面的一张标签),边从 .10 压到 .06。

@@ -208,7 +208,37 @@ struct PreviewPanelView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { ghosts = [] }
     }
 
+    /// 组内窗口的**呈现方式**(ADR-0017):`row` = 卡片行(现行)、`rail` = 芯片轨道(新)。
+    /// ★ 两条路径**完全隔离**:rail 只复用"卡片本身"(`thumb(at:showsChip:)`),排布/芯片/滚动全在新文件里 ✓
+    /// ★ 开关默认 `row` ⇒ 关掉时走的还是原来的 `cardRowGrid`,一个字都不变 ✓
     private var thumbGrid: some View {
+        contentGrid
+            .coordinateSpace(name: "glance.tray")
+            .onPreferenceChange(CardFrameKey.self) { handleCardFrames($0) }
+            .overlay(alignment: .topLeading) {
+                ForEach(ghosts) { ghost in
+                    GhostThumb(ghost: ghost)
+                        .position(x: ghost.rect.midX, y: ghost.rect.midY)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+
+    @ViewBuilder private var contentGrid: some View {
+        if WindowLayout.current == .rail, windows.count > 1 {
+            ChipRailGroup(windows: windows,
+                          selected: selIndex,
+                          bundleID: controller.currentGroup?.bundleID,
+                          card: AnyView(thumb(at: selIndex, showsChip: false)
+                              .onTapGesture { controller.cardTapped(localX: 0) }),
+                          onSelect: { controller.hoverWindow($0) },
+                          onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) })
+        } else {
+            cardRowGrid
+        }
+    }
+
+    private var cardRowGrid: some View {
         // 卡宽随窗比例(T88):布局按每张卡的实际宽算,不再假定定尺
         // ★ 方案 A:布局一律走槽宽(本局最宽卡)⇒ 与控制器尺寸账/命中同源
         // ★★ 2026-09-21 最终裁定(用户):**保留卡片形状,接受换组时的位移**。
@@ -236,20 +266,6 @@ struct PreviewPanelView: View {
                 })
             }
         }
-        // ⚠️ 这里曾经用 `.id(currentGroup.pid)` 强制"换组 = 换视图身份"来治红绿灯掉下来:
-        //   灯掉下来的真因是 `hovered` 那条动画没守(已补 ✓),而换身份会**先拆旧视图再建新视图**
-        //   ⇒ 中间那一帧旧卡还留在屏上,露出一条边(2026-10-19 用户实报:「切 app 时右边闪一条白线」✗,
-        //   字面复核:那条线不在选中卡上、只有 2px 宽、比环更白)⇒ 换身份这招撤掉 ✓
-        .coordinateSpace(name: "glance.tray")
-        .onPreferenceChange(CardFrameKey.self) { handleCardFrames($0) }
-        // 退场影子画在最上层(原位置),0.12s 缩+淡出后自己摘掉 ✓
-        .overlay(alignment: .topLeading) {
-            ForEach(ghosts) { ghost in
-                GhostThumb(ghost: ghost)
-                    .position(x: ghost.rect.midX, y: ghost.rect.midY)
-                    .allowsHitTesting(false)
-            }
-        }
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
         // 卡片在指针脚下重排 —— tracking area 在"视图于指针底下重排之后就哑了,不补发 hover"
         // (本仓库实咬两次的病)。表现就是用户实报的「键盘选完组、鼠标去接管,慢半拍」。
@@ -269,7 +285,7 @@ struct PreviewPanelView: View {
         return min(max(controller.winIndex, 0), windows.count - 1)
     }
 
-    private func thumb(at i: Int) -> some View {
+    private func thumb(at i: Int, showsChip: Bool = true) -> some View {
         let w = windows[i]
         // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
         let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
@@ -331,6 +347,7 @@ struct PreviewPanelView: View {
             //   画了一帧**,下一刻又补上选中 ⇒ 一次亮度突变 = 闪 ✗
             //   ⇒ **结构上**掐死这一类:`selIndex` 永远夹在窗口数之内 ⇒ 任何一帧都恰好有一张是选中的 ✓
             selected: i == selIndex, // 换窗即接力:弹簧打断保速
+            showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
             ringSelectMotion: controller.selectionAnimation(PanelMotion.select),
@@ -474,6 +491,8 @@ private struct WindowThumb<Overlay: View>: View {
     /// 这一扇窗的**帧盒子**(只观察它自己 ⇒ 别的窗口来帧不会重绘本卡 ✓)
     @ObservedObject var liveBox: LiveFrameBox
     let selected: Bool
+    /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
+    var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
     /// **换组那一拍为 true** ⇒ 卡片自己的选中动画一律不给(见下面 `selMotion` 的病例)
     let motionSuppressed: Bool
@@ -634,7 +653,7 @@ private struct WindowThumb<Overlay: View>: View {
         // (用户口径:"不跟预览窗耦合" —— 所以选中态的各种形变不会拖着芯片一起动)
         VStack(spacing: PanelMetrics.chipGap) {
             card
-            chip
+            if showsChip { chip }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
         .frame(width: box.width,
@@ -1932,4 +1951,147 @@ final class CardImageCache {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
 
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 芯片轨道(ADR-0017)—— 与上面的「卡片行」完全隔离的一支
+// ═══════════════════════════════════════════════════════════════════
+
+/// **芯片轨道**(ADR-0017)—— 与现行「卡片行」完全隔离的第二套组内呈现。
+///
+/// 什么时候用:设置里 `panel.windowLayout == .rail`,且这一组**多于 1 扇窗**
+/// (单窗口仍走老路,那是特例,用户明确"以后再优化")。
+///
+/// 版式(参数全部来自实验台定稿,见 ADR-0017):
+/// ```
+/// [ 预览卡(只有选中那扇) ]  14pt  [ 轨道:全部窗口的芯片,一列 ]
+///                                      宽 164 · 高 = 卡高 · 无底无框
+/// ```
+/// 规则:
+///   · 选中那枚芯片是**原色**(彩色 App 图标 + 淡胶囊 + 强调色圆点),其余**灰调**(去饱和、无底)
+///   · 滚动只为"选中出视口"服务:一次一枚,0.42s easeOut;**选中本身永不滚动**
+///   · **无极**:芯片渲染三份、视口停在中间那份 ⇒ 走到最后继续走就是接着滚第一枚,
+///     不会反向跳(用户:「第 6 个再滚一次就回到第 1 个」)
+///   · 遮罩**有方向**:上面还有内容才渐隐顶部,下面还有内容才渐隐底部;装得下 ⇒ 两侧都不糊
+struct ChipRailGroup: View {
+    let windows: [WindowRecord]
+    let selected: Int
+    let bundleID: String?
+    let card: AnyView
+    /// 选中变化(hover 芯片)
+    let onSelect: (Int) -> Void
+    /// 点芯片 = 选中并确认
+    let onTap: (Int) -> Void
+
+    /// 一屏放几枚(按卡高算,见 `slotCount`)
+    private var slotCount: Int {
+        max(1, Int((PanelMetrics.shotH + PanelMetrics.chipRailGap) / PanelMetrics.chipRailStep))
+    }
+    private var copies: Int { CGFloat(windows.count) * PanelMetrics.chipRailStep <= PanelMetrics.shotH ? 1 : 3 }
+
+    /// 连续坐标:选中在第几枚(可正可负 ⇒ 首尾靠它环绕)
+    @State private var selPos: Int = 0
+    /// 视口顶端的连续坐标
+    @State private var viewPos: Int = 0
+
+    var body: some View {
+        HStack(alignment: .top, spacing: PanelMetrics.thumbGap) {
+            card
+            rail
+        }
+        .onAppear { selPos = selected; viewPos = selected }
+        .onChange(of: selected) { _, new in
+            // "离当前连续坐标最近的那一份" —— 不然首尾环绕会算错方向
+            let n = windows.count
+            let cands = [new - n, new, new + n]
+            selPos = cands.min { abs($0 - selPos) < abs($1 - selPos) } ?? new
+        }
+    }
+
+    private var rail: some View {
+        let lane = PanelMetrics.chipRailWidth
+        let height = PanelMetrics.shotH
+        let step = PanelMetrics.chipRailStep
+
+        // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)
+        let oneSet = CGFloat(windows.count) * step
+        let fits = oneSet <= height
+        let visual = wrapped(viewPos)
+        let offsetY: CGFloat = fits
+            ? (height - oneSet) / 2
+            : -(oneSet + CGFloat(visual) * step) + (height - CGFloat(slotCount) * step) / 2
+        let showTop = !fits && (visual > 0 || viewPos < 0)
+        let showBottom = !fits
+
+        return ZStack(alignment: .topLeading) {
+            VStack(spacing: PanelMetrics.chipRailGap) {
+                ForEach(0..<(windows.count * copies), id: \.self) { idx in
+                    chip(logical: idx % windows.count)
+                }
+            }
+            .frame(width: lane, alignment: .topLeading)
+            .offset(y: offsetY)
+        }
+        .frame(width: lane, height: height, alignment: .topLeading)
+        .clipped()
+        .mask(
+            LinearGradient(stops: [
+                .init(color: showTop ? .clear : .black, location: 0),
+                .init(color: .black, location: showTop ? 0.13 : 0),
+                .init(color: .black, location: showBottom ? 0.87 : 1),
+                .init(color: showBottom ? .clear : .black, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        )
+        .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42), value: viewPos)
+        .onChange(of: selPos) { _, _ in clampViewport() }
+        .onAppear { clampViewport() }
+    }
+
+    private func chip(logical: Int) -> some View {
+        let w = windows[logical]
+        let isOn = logical == selected
+        return HStack(spacing: 6) {
+            if let icon = AppIconCache.icon(pid: w.pid) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
+                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
+                                                style: .continuous))
+                    .saturation(isOn ? 1 : 0.28)
+                    .opacity(isOn ? 1 : 0.75)
+            }
+            Text(PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID)))
+                .font(.system(size: PanelMetrics.titleSize, weight: .regular))
+                .foregroundStyle(isOn ? PanelColors.chipFgOn : PanelColors.chipFgOff)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Circle()
+                .fill(isOn ? Color.accentColor : PanelColors.chipDotOff)
+                .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 8)
+        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isOn ? PanelColors.chipRailOnBg : .clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { inside in if inside { onSelect(logical) } }
+        .onTapGesture { onSelect(logical); onTap(logical) }
+    }
+
+    /// 视口只为"选中出视口"服务 —— **一次一枚**,不按像素算最小距离 ✓
+    private func clampViewport() {
+        if selPos - viewPos < 0 { viewPos = selPos }
+        if selPos - viewPos > slotCount - 1 { viewPos = selPos - slotCount + 1 }
+    }
+
+    /// 把连续坐标折回 [0, windows.count)
+    private func wrapped(_ v: Int) -> Int {
+        let n = max(1, windows.count)
+        let m = v % n
+        return m < 0 ? m + n : m
+    }
 }
