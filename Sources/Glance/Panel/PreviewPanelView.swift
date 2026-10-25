@@ -558,6 +558,18 @@ private struct WindowThumb<Overlay: View>: View {
     /// 「app 切换也算入场 —— 只要卡片窗口是从 0 出现在这个屏幕上」)。
     /// 触发点只有两个:① 视图首次出现 ② 这个格子里换成了**另一扇窗**(`record.wid` 变了)。
     /// 同一组内只换选中(winIndex 变)⇒ 不动 —— 那才叫"效率" ✓
+    /// 明暗/糊化**当拍落**,且走禁动画事务 —— 祖先任何 `.animation(value: wid)`
+    /// 都带不动它(2026-10-25 用户实报「换窗还有闪动」:dim 修正被形变动画播成
+    /// 0.16s 渐变 = 闪 ✗)。明暗是"状态落定",不是动效 ✓
+    private func landDim() {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            dim = dimTarget
+            blurFade = blurFadeTarget
+        }
+    }
+
     private func settleIn() {
         // ★★ 2026-10-23 用户裁定:「只针对默认选中的窗口,再加强幅度」+「时有时没有」。
         //   "时有时没有" = **时序问题**(靠 `async`/16ms 猜帧,猜中才动,没猜中就被合并成一帧)✗
@@ -697,8 +709,7 @@ private struct WindowThumb<Overlay: View>: View {
         .onHover { hovered = $0 }
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
         .onAppear {
-            dim = dimTarget
-            blurFade = blurFadeTarget
+            landDim()
             // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
             if settlesOnSwap { settleIn() } else { entrySettle = 1 }
@@ -709,8 +720,7 @@ private struct WindowThumb<Overlay: View>: View {
             //   踩过的两次:① `.animation(v, value: selected)` 把同一拍的布局一起动画化 ⇒ 左滑入场 ✗
             //            ② `withAnimation { dim = … }` 和布局更新挤在同一拍 ⇒ 同样左滑 ✗
             if motionSuppressed {
-                dim = dimTarget
-                blurFade = blurFadeTarget
+                landDim()
             } else {
                 DispatchQueue.main.async {
                     // 这一拍里选中又变了(连按 Tab)⇒ 以最新的为准,别把旧值写回去
@@ -735,8 +745,7 @@ private struct WindowThumb<Overlay: View>: View {
             if !nowSel { lastBlurAt = 0; refreshBlurredLive() }
         }
         .onChange(of: record.wid) { _, _ in
-            dim = dimTarget
-            blurFade = blurFadeTarget
+            landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
         }
     }
