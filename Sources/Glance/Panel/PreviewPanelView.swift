@@ -537,7 +537,45 @@ private struct WindowThumb<Overlay: View>: View {
     /// 卡片的明暗(0.72 = 未选中)。**必须单独一个标量**:直接拿 `.animation(_:value:)` 挂
     /// opacity 会把同一拍的布局变化一起动画化 ⇒ 卡片从左边滑进来 ✗(见 `opacity` 那条)
     @State private var dim: Double = 1
-    private var dimTarget: Double { selected ? 1 : 0.72 }
+    /// 磨砂层的透明度(1 = 全糊,0 = 清晰)。切换选中时与 `dim` 同一套时机推进 ⇒ 两条过渡永远同拍 ✓
+    @State private var blurFade: Double = 0
+    private var blurFadeTarget: Double { selected ? 0 : 1 }
+    /// **最新那一帧的磨砂版**(非选中卡用它;选中期间在后台按 ≤5fps 重算)
+    @State private var blurredLive: CGImage?
+    @State private var blurBusy = false
+    @State private var lastBlurAt: CFAbsoluteTime = 0
+
+
+    /// 在**后台**把一帧糊掉(主线程只贴图)。
+    /// ★ 为什么不预烘焙:实时帧一直在变 ⇒ 只能"跟到最近一帧";代价是每张卡最多 5 次/秒的小图卷积,
+    ///   在后台队列上(不在渲染路径)⇒ 看不出来 ✓
+    private func refreshBlurredLive() {
+        guard !blurBusy, let frame = liveBox.image else { return }
+        blurBusy = true
+        let radius = PanelColors.cardBlur
+        CardBlur.queue.async {
+            let rect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
+            let out: CGImage? = {
+                let ci = CIImage(cgImage: frame).clampedToExtent()
+                guard let f = CIFilter(name: "CIGaussianBlur",
+                                       parameters: [kCIInputImageKey: ci, kCIInputRadiusKey: radius * 2]),
+                      let img = f.outputImage?.cropped(to: rect) else { return nil }
+                return CardBlur.context.createCGImage(img, from: rect)
+            }()
+            DispatchQueue.main.async {
+                if let out { self.blurredLive = out }
+                self.blurBusy = false
+            }
+        }
+    }
+    /// ★★★ 2026-10-25 第三次改(用户实录:非选中卡的"模糊玻璃像是追加上去的,有一种动效后渲染的感觉"):
+    ///   真凶不是模糊,而是**模糊 + 整卡 0.72 不透明度**叠出来的奶白感 ——
+    ///   72% 的卡压在面板底色上,再糊一层,读起来就是"贴了张半透明的纸" ✗
+    ///   `0.72` 是"未选中卡还是清晰图"时代的口径(那时靠压暗表达非选中);
+    ///   现在**磨砂已经把内容弱化掉了** ⇒ 再压暗是双份,而且压暗本身让"底下有东西"这件事变假 ✗
+    ///   ⇒ 非选中**不再压透明度**(1.0),深浅只由磨砂负责 ✓
+    ///   (要更强区分的话:动 `PanelColors.cardBlur`(模糊半径),不要回到透明度 ✗)
+    private var dimTarget: Double { 1 }
     private var dimTargetIsOn: Bool { selected }
 
     private var selMotion: Animation? {
@@ -581,7 +619,15 @@ private struct WindowThumb<Overlay: View>: View {
 
     /// 卡面的优先源:live 开 ⇒ live 帧(**关掉后 boxes 里还留着旧帧** —— 显示层也要跟着关门,
     /// 不然关了还显示冻结帧 ✗);live 关 ⇒ nil,快照照常当主力。
-    private var liveFrame: CGImage? { LivePreviewPool.enabled ? liveBox.image : nil }
+    /// ★★★ 2026-10-25 第二次修(用户实录:「我切到 VPN 的开启窗口之后,蒙层下面的画面明显还是
+    ///   上一次的快照,没有更新」):
+    ///   第一版把非选中的实时帧直接关掉 ⇒ 非选中卡显示的是**旧快照**,选中卡显示的是**最后一帧流**
+    ///   ⇒ 一切换就"内容跳一下"✗。用户的预期很朴素:
+    ///   「整个操作过程中我根本没有切换窗口 ⇒ 选中卡片时,它应该只是蒙层的玻璃变化,内容确实是在的」
+    ///   ⇒ 底图**永远是最后那一帧流**(不分选中),非选中只是把**这一帧**糊掉 ⇒ 内容连续 ✓
+    private var liveFrame: CGImage? {
+        LivePreviewPool.enabled ? liveBox.image : nil
+    }
 
     var body: some View {
         // 卡片与芯片**分离**:环、浮起、阴影都只长在卡片上,芯片是卡片之外的一枚胶囊
@@ -598,6 +644,7 @@ private struct WindowThumb<Overlay: View>: View {
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
         .onAppear {
             dim = dimTarget
+            blurFade = blurFadeTarget
             settleIn()
         }
         .onChange(of: selected) { _, _ in
@@ -607,18 +654,33 @@ private struct WindowThumb<Overlay: View>: View {
             //            ② `withAnimation { dim = … }` 和布局更新挤在同一拍 ⇒ 同样左滑 ✗
             if motionSuppressed {
                 dim = dimTarget
+                blurFade = blurFadeTarget
             } else {
                 DispatchQueue.main.async {
                     // 这一拍里选中又变了(连按 Tab)⇒ 以最新的为准,别把旧值写回去
                     guard selected == dimTargetIsOn else { return }
                     dim = dimTarget
+                    blurFade = blurFadeTarget
                 }
             }
         }
         // 同一个格子里换了另一扇窗(ForEach 是索引 id ⇒ 视图实例会被复用)⇒
         // 明暗重置,并且**这一张是新出现的** ⇒ 落位一次 ✓
+        // 每来一帧(过渡期也来)⇒ 最多 5 次/秒重算磨砂(§见 `refreshBlurredLive`)
+        .onChange(of: liveBox.image.map { ObjectIdentifier($0) }) { _, _ in
+            guard !selected else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastBlurAt < 0.2 { return }
+            lastBlurAt = now
+            refreshBlurredLive()
+        }
+        .onChange(of: selected) { _, nowSel in
+            // 刚变成非选中:立刻把"最后那一帧"糊一次(宽限期内流还在跑,后面会继续跟)
+            if !nowSel { lastBlurAt = 0; refreshBlurredLive() }
+        }
         .onChange(of: record.wid) { _, _ in
             dim = dimTarget
+            blurFade = blurFadeTarget
             settleIn()
         }
     }
@@ -654,10 +716,28 @@ private struct WindowThumb<Overlay: View>: View {
                     } else if let image {
                         Image(nsImage: image).resizable()
                     }
+                    // ★★★ 2026-10-25:非选中卡盖一层**烘焙好的磨砂**(见 `CardImageCache.blurredImage`)。
+                    //   ① 让"有流/没流"在视觉上不存在 ⇒ 只给选中那张起流(22 条 → 1 条)✓
+                    //   ② 交接走 **0.16s 的"对焦"**(磨砂层淡出/淡入),不是硬切:
+                    //      同一张图的模糊↔清晰,不是"两个时刻的鬼影"⇒ 不会重演 dissolve 那条禁令 ✓
                     if let liveFrame {
-                        // ★ S2:实时帧优先。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
+                        // ★ S2:实时帧优先(现在**不分选中** —— 见 `liveFrame` 的病例)。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
                         //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
                         Image(decorative: liveFrame, scale: 1).resizable()
+                    }
+                    // ★★★ 磨砂层**盖在最上面**(它必须糊住"最新的那一帧"):
+                    //   · 优先用**实时帧的磨砂版**(选中期间一直在后台按 ≤5fps 重算)⇒ 内容是新的 ✓
+                    //   · 还没有过任何实时帧(本次运行从没选中过它)⇒ 退回**快照的磨砂版** ✓
+                    if !selected {
+                        if let b = blurredLive {
+                            Image(decorative: b, scale: 1).resizable().opacity(blurFade)
+                        } else if let image,
+                                  let blurred = CardImageCache.shared.blurredImage(
+                                    wid: record.wid, source: image, target: imageBox,
+                                    radius: PanelColors.cardBlur) {
+                            Image(decorative: blurred.cg, scale: blurred.scale).resizable()
+                                .opacity(blurFade)
+                        }
                     }
                 }
                     // ⚠️⚠️ 交接**不做溶解**(2026-10-20 第二次实测定案,别再试 ✗):
@@ -706,6 +786,8 @@ private struct WindowThumb<Overlay: View>: View {
         //     几何(缩放/上浮/阴影)继续听 `selMotion`,换组时照样当拍 ✓
         .opacity(dim)
         .animation(fadeMotion, value: dim)   // ★ 只认 `dim`(布局完全不依赖它)⇒ 不会带走布局 ✓
+        // 「对焦」:只认 `blurFade`(布局完全不依赖它 ✓)⇒ 0.16s 磨砂淡出/淡入
+        .animation(fadeMotion, value: blurFade)
         .saturation(selected ? 1 : 0.88)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
@@ -808,6 +890,9 @@ private struct WindowThumb<Overlay: View>: View {
                     // demo:图标是 6px 圆角方形(6/20 = 0.30,不是 emoji 风格)⇒ 收一道小圆角
                     .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
                                                 style: .continuous))
+                    // ★ 2026-10-25(V3,用户从实验台里挑的):未选中**只去饱和**,不动透明度 ——
+                    //   整排图标安静下来,字却一个像素不变 ⇒ 可读性零风险 ✓
+                    .saturation(selected ? 1 : 0.35)
             }
             Text(displayTitle)
                 // regular 而不是 medium:芯片要"轻",字重是最直接的一档(题头那边用 medium 是因为它是标题)
@@ -819,9 +904,13 @@ private struct WindowThumb<Overlay: View>: View {
                 // 占满中段 ⇒ 圆点被顶到胶囊右端(demo 的 flex:1 同手法)
                 .frame(maxWidth: .infinity, alignment: .leading)
             // 选中圆点:占位永远在(避免文字跳),只有选中那一枚亮成系统强调色
+            // V3:未选中那枚改成**空心**(实心点会抢注意力;空心只交代"位子在这")
             Circle()
-                .fill(selected ? PanelColors.chipDotOn : PanelColors.chipDotOff)
+                .fill(selected ? PanelColors.chipDotOn : Color.clear)
                 .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+                .overlay(Circle()
+                    .strokeBorder(PanelColors.chipDotOff, lineWidth: PanelMetrics.hairline)
+                    .opacity(selected ? 0 : 1))
         }
             // 内边:图标侧紧、圆点侧松(demo `.wtag` 的 6/12 语言;芯片 2026-09-25 放大后同步抬)
             .padding(.leading, 6)
@@ -830,9 +919,11 @@ private struct WindowThumb<Overlay: View>: View {
             .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
             // ★ 2026-09-21:外层玻璃撤掉后,芯片浮在任何背景上 ⇒ 补一层**极淡投影**,
             //   纯白背景上也能读出一块(与加深后的 chipBg 互补,不是替代)
-            .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+            // V3:未选中**不投影**(影子是"浮起来"的语言,不属于非选中)⇒ 只留选中那枚的影子
+            .shadow(color: .black.opacity(selected ? 0.10 : 0), radius: 3, y: 1)
             .overlay(Capsule(style: .continuous)
-                .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+                .strokeBorder(selected ? PanelColors.chipBorder : PanelColors.chipBorderOff,
+                              lineWidth: PanelMetrics.hairline))
             // **没有高光唇**(2026-09-14 深夜删掉的那一段,别加回来):
             // 这里原本有一条"上缘受光唇"—— 沿胶囊弧走、往下收干的一道亮边,理由是"深色里靠受光边
             // 交代我是一块玻璃"。但用户看到的是另一种东西:"像是零几年的 macOS 那种玻璃质感,太过时了"。
@@ -920,6 +1011,10 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     static let maxStreamsFloor = 6
     /// 闲置多久才停:局内**不靠它节流**(环里的窗口全程保留),它只回收"已经不在环里"的窗口。
     static let keepAlive: Double = 5.0
+    /// "只给选中起流"模式下,旧选中那一条的宽限(2026-10-25)。
+    /// 1.5s 的依据:连按 Tab 走一张一张会回到同一扇窗时,它还在 ⇒ 不用重建流(重建 = 45–99ms 系统级重活);
+    /// 再长就是白付抓屏钱(那条流人已经看不见了)。
+    static let keepAliveSelectedOnly: Double = 1.5
 
     /// **每扇窗一个可观察帧**(替代原来的 `@Published frames`)。
     /// 两个理由,一个比一个重要:
@@ -1032,20 +1127,86 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     }
 
     /// 面板上屏 / 散场时由 `PanelController` 调用(同步生效,见上面那条病例)
-    func setAccepting(_ on: Bool) { isAccepting = on }
+    ///
+    /// ★★ 2026-10-23(用户:「怎么又在不停地监控我的 APP 呀?又在不停地共享」):
+    ///   账:71 分钟里起流 **181 次**、关面板 96 次,其中 **60 次是不到 1.5 秒的快速 ⌘Tab** ✗
+    ///   每次开面板都先起一条 SCStream ⇒ 系统的"屏幕共享"指示灯跟着亮一下 ⇒ 快速连按就像"一直在共享"。
+    ///   而那么短的一瞬,用户看到的是快照/上一帧,**根本没看到动图** ⇒ 这条流纯属白开 ✗
+    ///   ⇒ 面板开了之后先等 `streamGateDelay` 再允许起流;真停留下来才起 ✓
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 20, repeating: 20)
+        t.setEventHandler { [weak self] in
+            guard let self, !self.isAccepting, !self.handles.isEmpty else { return }
+            let wids = self.handles.keys.map(String.init).joined(separator: ",")
+            glog("[直播] ⚠️ 面板不在台上却还有 \(self.handles.count) 条流(wid=\(wids)) ⇒ 强制停掉(看门狗)")
+            for (_, h) in self.handles { Task { try? await h.stream.stopCapture() } }
+            self.handles.removeAll(); self.wanted.removeAll(); self.activeGens.removeAll()
+        }
+        t.resume()
+        watchdog = t
+    }
 
-    func sync(_ items: [(wid: CGWindowID, aspect: CGFloat, box: CGSize)], selected: CGWindowID?) {
+    func setAccepting(_ on: Bool) {
+        startWatchdog()
+        isAccepting = on
+        if on {
+            gateLock.lock()
+            streamGateOpenAt = CFAbsoluteTimeGetCurrent() + Self.streamGateDelay
+            gateLock.unlock()
+        }
+    }
+
+    /// 面板开着的头这么久**不起流**(快照照常显示;只挡掉"瞄一眼就走"的那些)
+    /// ★★ 2026-10-25 第二次调(用户:「打开面板的时候…大概要等一秒它才会把流接上,这个能优化吗」):
+    ///   1.2 → **0.2**:1.2 秒是"每局要起 22 条流"那会儿定的;现在**每局只起 1 条**(只给选中那张),
+    ///   代价小了两个数量级 ⇒ 让位给"唤起就有活画面" ✓
+    ///   0.2 仍然挡得住"误触/连按 ⌘Tab 一闪而过"(那种局本来就 <0.2s,起流纯属白付)✓
+    static let streamGateDelay: CFTimeInterval = 0.2
+    private var streamGateOpenAt: CFAbsoluteTime = 0
+    private var gateRetryScheduled = false
+    /// 看门狗(2026-10-23):面板不在台上、池子里却还有流 ⇒ 记一行 + 立刻停。
+    /// 用户实报「没有唤起面板怎么还在持续抓」时,这一行就是判据:
+    ///   · 有这行 ⇒ 真漏了(带上 wid 与起流时刻,能直接定位)
+    ///   · 没这行 ⇒ Glance 没抓,系统那个"正在共享"是它自己的指示(主体写的是 SystemUIServer)
+    private var watchdog: DispatchSourceTimer?
+
+    /// - Parameter force: **跳过"名单没变就返回"那条短路** —— 只给"闸到点后的补一次"用。
+    ///   ★★ 2026-10-25 用户录屏实证:面板开了 **5.3 秒**,日志里**一条流都没起** ✗
+    ///   根因就是闸的重试回头调 `sync(...)`,而那一刻名单/选中都没变 ⇒ 被短路直接返回 ⇒ 永远起不了流 ✗
+    func sync(_ items: [(wid: CGWindowID, aspect: CGFloat, box: CGSize)], selected: CGWindowID?,
+              force: Bool = false) {
         guard Self.enabled else { return }
         let wids = items.map { $0.wid }
         queue.async { [weak self] in
             guard let self else { return }
             // 面板不在台上 ⇒ **一条都不许起**(见 `isAccepting` 的病例)
             guard self.isAccepting else { return }
+            // 面板刚开:先别起流(见 `streamGateDelay` 的病例);到点了带 `force` 再补一次进来
+            let openAt = withLock { self.streamGateOpenAt }
+            let now0 = CFAbsoluteTimeGetCurrent()
+            if !force, now0 < openAt {
+                // 闸期间也要**把最新的名单/选中记下来** —— 否则到点补的那一次会拿着进入闸之前的旧值
+                // (选中在闸期间可能已经换过:面板开着的前 1.2 秒用户完全可能按 Tab ✓)
+                self.lastItems = items
+                self.lastSelected = selected
+                self.queue.asyncAfter(deadline: .now() + (openAt - now0) + 0.02) { [weak self] in
+                    guard let self, self.isAccepting else { return }
+                    self.sync(self.lastItems, selected: self.lastSelected, force: true)
+                }
+                return
+            }
             // 无变化 ⇒ 什么都不做(同组换窗口、重复调用都不该碰流)
             // ★ 但**窗口变形**算变化(2026-09-25 用户实报「调整窗口尺寸后再唤起,卡片有黑边」):
             //   出流规格首启冻结(I3)⇒ 窗被拉高/压扁后,流仍按旧规格要帧,SCK 把变小了的窗口
             //   铺进旧缓冲 ⇒ 空出的部分就是黑边 ✗。名单没变、盒子变了 ⇒ 放行去 reconcile 重启。
-            if Set(wids) == self.wanted, self.pending.isEmpty {
+            // ★★ 2026-10-25 用户实报「展示出来的还是我之前切换的那个旧聊天窗口,而不是我新的这个群聊画面」:
+            //   根因是这条"无变化就直接返回"——它只比**窗口集合**,不比**选中是谁** ✗
+            //   以前没关系(所有卡都有流);改成"只给选中起流"之后,
+            //   **换选中 = 名单没变但该起流的那扇换了** ⇒ 这里提前返回 ⇒ 新选中那张永远拿不到流 ✗
+            //   ⇒ 选中变了也算变化(照常走 150ms 防抖,起流不能压在 hover 那一拍 ✓)
+            if !force, Set(wids) == self.wanted, selected == self.lastSelected, self.pending.isEmpty {
                 let resized = items.contains { it in
                     guard let old = self.lastItems.first(where: { $0.wid == it.wid })?.box else { return false }
                     return abs(old.width - it.box.width) > 1 || abs(old.height - it.box.height) > 1
@@ -1173,7 +1334,8 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             let now = CFAbsoluteTimeGetCurrent()
             // 决策同样交给策略(单测覆盖"扫到了谁、为什么" ✓)
             for req in LivePreviewPolicy.sweepPlan(now: now, running: self.handles.mapValues(\.fps),
-                                                  idleSince: self.idleSince, keepAlive: Self.keepAlive) {
+                                                  idleSince: self.idleSince,
+                                                  keepAlive: Self.keepAliveSelectedOnly) {
                 self.stopStream(req.wid, why: req.reason.logText)
             }
             if !self.handles.isEmpty { self.scheduleSweep() }   // 还有流就继续守着
@@ -1188,16 +1350,27 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         // 原先这四段(记闲置 / 回收 / 换档 / 起流)是命令式的,长在这个类里 ⇒ 判断写漏了没人抓得住 ✗
         // (2026-09-22:抽出后第一条单测就抓出"换档后没重建"的漏 ✗)。**执行**留在这里 ✓
         let now = CFAbsoluteTimeGetCurrent()
+        // ★★★ 2026-10-25(用户:「气流…不会有人一直把面板开着去查看实时流的情况」
+        //   「未选中的卡直接加磨砂玻璃,选中的时候再把流接过来」):
+        //   实测账(上一局日志):**峰值并发流 22 条** · 409 次/秒的窗口捕获 · 每局平均起 12.4 条。
+        //   而其中**只有选中的那一张**在视觉上需要"动"—— 其余卡改成磨砂静帧后,
+        //   流有没有跑**人眼分不出来** ⇒ 只给选中的那张起流:22 → **1 条** ✓
+        //   · 旧选中那张仍由 `keepAlive`(这里收到 1.5s)养着 ⇒ 连按 Tab 来回不看不会重启流 ✓
+        //   · 起流仍走原来的 150ms 防抖与首屏不推迟 ✓
+        let liveItems = items.filter { $0.wid == selected }
         let plan = LivePreviewPolicy.plan(now: now,
-                                          items: items.map { ($0.wid, $0.aspect) },
+                                          items: liveItems.map { ($0.wid, $0.aspect) },
                                           selected: selected,
                                           running: handles.mapValues(\.fps),
                                           pending: pending,
                                           idleSince: idleSince,
                                           tierFps: Self.tierFps,
                                           lowFps: Self.lowFps,
-                                          maxStreams: Self.maxStreams(items.count),
-                                          keepAlive: Self.keepAlive,
+                                          // ★ 上限必须 ≥ 1 + 宽限条数:第一版写成 `max(1, count)`
+                                          //   ⇒ 策略的"超限淘汰"每拍把上一条宽限流抢跑掉 ⇒ 宽限形同虚设,
+                                          //   每次换选中都重起流(日志实证:同一 wid 反复起停,首帧 72–171ms ✗)
+                                          maxStreams: max(1, liveItems.count) + 3,
+                                          keepAlive: Self.keepAliveSelectedOnly,
                                           allowStart: starts)
         // ① 记闲置(不立刻停 —— 见 keepAlive)
         for wid in plan.markIdle { idleSince[wid] = now }
@@ -1643,6 +1816,12 @@ private enum CardSizeLog {
     }
 }
 
+/// 卡片磨砂的后台计算工具(`WindowThumb` 是泛型结构体 ⇒ 不能放 static 存储属性)
+enum CardBlur {
+    static let queue = DispatchQueue(label: "glance.cardblur", qos: .userInitiated)
+    static let context = CIContext(options: [.workingColorSpace: NSNull()])
+}
+
 final class CardImageCache {
     struct Prepared { let cg: CGImage; let scale: CGFloat }
     static let shared = CardImageCache()
@@ -1653,9 +1832,66 @@ final class CardImageCache {
     /// ⚠️ 键是 **(窗 id + 像素尺寸)**，不是"只有窗 id" —— 病例见 `GlanceCore/ImageCacheKey.swift`:
     /// 键只看 id 时，卡片尺寸上限/缩放一变就**永远命中旧尺寸那张图** ✗
     private let cache = ImageCache<ImageCacheKey.Card, Prepared>(label: "glance.cardimg")
+    /// ★ 磨砂**烘焙**而不是在视图里 `.blur()`:未选中卡可能有十几张,
+    ///   每帧跑十几遍高斯比原来更贵 ✗ ⇒ 一张只算一次,之后就是贴图 ✓
+    private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
-    func reset() { cache.reset() }
+    func reset() { cache.reset(); blurStore.removeAll() }
+
+    /// 磨砂版(非选中卡用)。**与锐版同一把尺子**(同裁剪、同像素尺寸)⇒ 交接时几何不变 ✓
+    ///
+    /// ★★ 2026-10-25 用户实报「相当于是两份快照,就很怪」—— 根因在这一行:
+    ///   缓存 key 里**没有"这是第几版快照"** ⇒ 保温拍了新图之后,锐图已经换成新的、
+    ///   磨砂还是上一版 ⇒ 选中那一刻"糊的"和"清的"根本是两张不同的画面 ✗
+    ///   ⇒ key 里带上**源图身份**(`ObjectIdentifier`)—— `image` 换了实例就必然 miss 重算 ✓
+    ///   (用一本手写字典而不是 `ImageCache`:键是动态身份的,旧条目要能被清掉)
+    func blurredImage(wid: CGWindowID, source: NSImage, target: CGSize,
+                      radius: CGFloat) -> Prepared? {
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let scale = PanelScreen.scale
+        let key = ImageCacheKey.card(windowID: wid, target: target, scale: scale)
+        let pxW = key.pixelWidth, pxH = key.pixelHeight
+        let srcID = ObjectIdentifier(source).hashValue
+        let k = "\(wid)-\(srcID)-\(pxW)x\(pxH)-\(Int(radius))"
+        if let hit = blurStore[k] { return hit }
+        if blurStore.count > 48 { blurStore.removeAll() }
+        let out: Prepared? = {
+            guard let sharp = Self.draw(cg, pxW: pxW, pxH: pxH) else { return nil }
+            let rect = CGRect(x: 0, y: 0, width: pxW, height: pxH)
+            let input = CIImage(cgImage: sharp).clampedToExtent()
+            guard let f = CIFilter(name: "CIGaussianBlur",
+                                   parameters: [kCIInputImageKey: input,
+                                                kCIInputRadiusKey: radius * scale]),
+                  let out = f.outputImage?.cropped(to: rect),
+                  let cgOut = self.ciContext.createCGImage(out, from: rect,
+                                                           format: .BGRA8,
+                                                           colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+            else { return nil }
+            return Prepared(cg: cgOut, scale: scale)
+        }()
+        blurStore[k] = out
+        return out
+    }
+
+    /// 磨砂版的手写账(见 `blurredImage` 的病例:键必须带源图身份)
+    private var blurStore: [String: Prepared] = [:]
+
+    /// 把源图按 **.fill 中心裁剪**画进 sRGB 定尺位图(锐/磨砂两条路共用 ⇒ 几何不会各算一套 ✓)
+    private static func draw(_ cg: CGImage, pxW: Int, pxH: Int) -> CGImage? {
+        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: srgb,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        let sw = CGFloat(cg.width), sh = CGFloat(cg.height)
+        let k = max(CGFloat(pxW) / sw, CGFloat(pxH) / sh)
+        let srcRect = CGRect(x: (sw - CGFloat(pxW) / k) / 2, y: (sh - CGFloat(pxH) / k) / 2,
+                             width: CGFloat(pxW) / k, height: CGFloat(pxH) / k)
+        guard let cropped = cg.cropping(to: srcRect) else { return nil }
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: pxW, height: pxH))
+        return ctx.makeImage()
+    }
 
     func image(wid: CGWindowID, source: NSImage, target: CGSize) -> Prepared? {
         // 老代码在主线程做这一步 ⇒ 保持不变 ✓(而且它在登记之前 ⇒ 失败不占账 ✓)

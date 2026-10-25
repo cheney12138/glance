@@ -163,10 +163,25 @@ final class ThumbnailRefresher {
     /// ⚠️ 但"不发生快门"**不等于"不花钱"** ✗ —— 枚举本身实测 P50 90ms / max 1417ms,
     ///   而原来**每 5 秒**就来一下 ⇒ 早就不是"成本可忽略"了(见 `lastSweepSignature` 那段病例 ✓)。
     ///   现在:窗口没变就跳过 + 上次贵就拉长间隔 ✓;Glance 自己的设置窗另有 0.6s 即时钩子 ✓
+    /// 面板关着时的轻扫间隔(秒)。
+    /// ★★ 2026-10-25 用户实报(第三次):「它还一直在共享」「为什么他要自动起流啊,这肯定是 bug」。
+    ///   账(35.8 小时):**[拍照] 2748 次**、轻扫触发 4124 次、而实时预览起流只有 46 次 ⇒
+    ///   让系统"正在共享"指示一直亮着的**不是实时预览,是后台保温拍照** ✗
+    ///   (macOS 14.4+ 起,`SCScreenshotManager` 抓屏同样会点亮那个指示 ✓)
+    ///   ⇒ 面板**关着**时不再 1.5–5 秒一拍,压到 60 秒一拍:
+    ///     窗口刚开几秒内没有新鲜快照无所谓 —— 面板一打开自己会按需补拍(那条路不变 ✓)
     private func schedulePeriodicSweep() {
+        // ★★★ 2026-10-25 定案(用户实测:**退出 Glance 那个"正在共享"立刻灭**⇒ 是我们的抓拍留着状态):
+        //   面板**关着**时**一张都不拍**(原来 60 秒一次也还是会让指示周期性亮)。
+        //   代价照实说:面板关着时新开的窗没有快照 ⇒ 打开那一刻可能先显示上一张旧图/图标,
+        //   但**面板一打开自己会按需补拍**(`Snapshotter.precapture`,`[拍照]` 那条路不变 ✓),
+        //   所以打开后 100ms 内就有新图 ✓ —— 用"第一眼稍旧"换"平时完全不抓屏" ✓
         DispatchQueue.main.asyncAfter(deadline: .now() + adaptiveSweepDelay()) { [weak self] in
-            self?.sweepAllScreens(reason: "开窗拍")
-            self?.schedulePeriodicSweep()
+            guard let self else { return }
+            if PanelStageProbe.isVisible() {
+                self.sweepAllScreens(reason: "开窗拍")
+            }
+            self.schedulePeriodicSweep()
         }
     }
 
@@ -184,6 +199,11 @@ final class ThumbnailRefresher {
         let deactivated = lastActivatedPID
         lastActivatedPID = pid
         let now = CFAbsoluteTimeGetCurrent()
+        // ★ 面板**关着**时把"激活就拍"也压下去:每次切 App 都拍一次 = 每切一次就亮一次指示 ✗
+        //   (用户实报"还一直在共享";账见 `closedPanelSweepInterval` 那条)
+        //   面板开着时保持 1.0s 节流(那时指示本来就因为预览亮着,多拍无所谓)✓
+        // 面板关着 ⇒ **不拍**(见 `schedulePeriodicSweep` 那条:退出 Glance 指示就灭 ⇒ 是我们的抓拍)
+        guard PanelStageProbe.isVisible() else { return }
         if let last = lastRefreshAt[pid], now - last < 1.0 { return }
         lastRefreshAt[pid] = now
 
