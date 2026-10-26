@@ -27,7 +27,7 @@ final class HotkeyTapCenter {
     /// ⌘` **单独**触发 ⇒ 把预览面板提上来(2026-10-23 用户:「强化一下 ⌘` 的功能,
     /// 单独触发的时候把预览窗口提上来,语义还是当前屏幕下的」)。
     /// 与 `onSameAppScreenCycle` 同一套装配纪律:Trigger 不反向依赖 App 层 ⇒ 走闭包钩子 ✓
-    var onRaisePreview: (() -> Void)?
+    var onRaisePreview: ((Bool) -> Void)?
 
 
     enum State { case idle, armed, navigating }
@@ -249,7 +249,12 @@ final class HotkeyTapCenter {
     /// 三指点按的入口:没有触发键的按下,所以直接进导航态。
     /// 已在跑就不重开(手势抖动不产生第二局;面板窗口复用,重开只会把状态搅乱)。
     func beginPinnedSession() {
-        guard state == .idle else { return }
+        // ⚠️ 2026-10-26 病例(用户实报「不唤起面板时 ⌘` 失灵」):
+        //   触发键本身就是 ⌘ ⇒ 按下 ⌘` 的**第一拍**状态已经是 `.armed`(修饰键按住的待命态),
+        //   而这里原来只放行 `.idle` ⇒ **什么都不做,但 ⌘` 已经被吞掉** = 完全失灵 ✗
+        //   (日志:`[热键] tap 看见 \` state=armed takeover=true tapEnabled=true` 之后一行都没有)
+        //   ⇒ `.armed` 也是合法起点 ✓
+        guard state == .idle || state == .armed else { return }
         pinnedSession = true
         setState(.navigating)
         emit(.begin)
@@ -475,6 +480,9 @@ final class HotkeyTapCenter {
         //   ⚠️ 回调必须**立刻返回**:tap 回调超时会被系统摘掉 ⇒ 真正的活挪到 async ✓
         //   ⚠️ 这一支必须在**下面那道 `guard state == .navigating` 之前** —— 第一版写在它后面 ⇒
         //      面板没开时永远到不了这里(实机:注入 ⌘` 日志里一行都没有)✗
+        if isTraceEnabled, __kc == Self.keyGrave {
+            glog("[热键] tap 看见 ` state=\(state) takeover=\(Self.graveTakeoverEnabled) mods=\(event.flags.rawValue) tapEnabled=\(navTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false)")
+        }
         if Self.graveTakeoverEnabled, __kc == Self.keyGrave, state != .navigating {
             let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
             if mods == [.maskCommand] || mods == [.maskCommand, .maskShift] {
@@ -484,11 +492,8 @@ final class HotkeyTapCenter {
                 // ★★ 2026-10-23 用户裁定:「单独触发的时候,把预览窗口提上来,语义还是当前屏幕下的」
                 //   ⇒ ⌘`(**不带 ⇧**)= 唤起面板(钉住那一局,与三指点按同一个入口 ✓);
                 //     ⌘⇧` 仍走"反向循环窗口"—— 它是另一个动作,不在这次改动里 ✓
-                if mods == [.maskCommand] {
-                    onRaisePreview?()
-                } else {
-                    onSameAppScreenCycle?(forward)
-                }
+                // ⌘` 正向 / ⌘⇧` 反向,都交给"当前屏内循环同 App 窗口"那一支 ✓
+                onRaisePreview?(forward)
                 return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
             }
             return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓
