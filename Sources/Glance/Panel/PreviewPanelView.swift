@@ -275,6 +275,8 @@ struct PreviewPanelView: View {
                               //   ⇒ 回到**居中**(已知良好状态);中间那道缝属于"槽宽按组内最宽卡"的
                               //      固有代价 —— 想彻底消掉,只能让**托盘宽跟选中卡走**(宽度会随换窗跳)
                               .frame(width: slotW, alignment: .center)
+                              // 同一条纪律:槽宽的布局也不许被外层动画带走 ✓
+                              .transaction { $0.animation = nil }
                               // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
                               //   它包住**整张卡**,内容三层降级(图标→静帧→live)的换源也被裹进
                               //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
@@ -790,6 +792,12 @@ private struct WindowThumb<Overlay: View>: View {
         //   一比就是"卡偏上"✗ ⇒ 没有芯片就不留那一段 ✓
         .frame(width: box.width,
                height: box.height + (showsChip ? (PanelMetrics.thumbH - PanelMetrics.shotH) : 0))
+        // ★★ 2026-10-26 逐帧实锤的元凶(录屏 203→213 帧:卡宽用 10 帧缩了 37pt、芯片列跟着挪 13pt):
+        //   卡宽 `box` = **选中那扇窗自己的尺寸**(今天才这么改的),而本视图外层的
+        //   `.animation(fadeMotion, value: dim)` 会**自己造一个事务** ⇒ 同一拍里 `box` 的
+        //   **布局**也被它带走 ⇒ 卡片"长/缩"成了 0.2s 的插值,轨道跟着滑 = 用户说的"有先后顺序" ✗
+        //   ⇒ 在这条 frame 之内先断一次事务:几何一律当拍落(opacity/明暗不受影响)✓
+        .transaction { $0.animation = nil }
         // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
         .onHover { hovered = $0 }
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
