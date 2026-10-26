@@ -697,11 +697,6 @@ private struct WindowThumb<Overlay: View>: View {
         PanelLayout.title(WindowTitle.display(raw: record.title, bundleID: bundleID))
     }
 
-    /// ★★ 2026-10-26 用户方案:「形变的时候干脆做玻璃模糊,形变结束再展示内容」
-    ///   —— 形变期间内容层跟不上框(右/左会露一条底色),与其逐层去补,
-    ///   不如**这一拍只给一块玻璃**:模糊自身画面(不透明 => 不露边),落定后再硬切回内容 ✓
-    @State private var morphGlass = false
-
     /// 本卡的宽度:随窗比例自适应(T88,见 `PanelMetrics.thumbWidth`)。
     /// 卡片、模糊层、芯片、文字截断宽全走这一个值 —— 一卡一宽,不许各算各的。
     /// 优先用**截图自己的比例**:透明衬边裁切(T88 v2)后内容会比窗框瘦一圈,
@@ -799,13 +794,6 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: record.wid) { _, _ in
             landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
-        }
-        // 组内换窗且**尺寸真的变了** ⇒ 形变期间盖玻璃,0.42s 落定后揭开 ✓
-        // (换组(motionSuppressed)不上玻璃:那一拍有自己的落位,加一层雾就是多余的闪 ✗)
-        .onChange(of: box) { _, _ in
-            guard !motionSuppressed, WindowLayout.current == .rail else { return }
-            morphGlass = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { morphGlass = false }
         }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
         .onChange(of: bundleID) { _, _ in
@@ -975,8 +963,6 @@ private struct WindowThumb<Overlay: View>: View {
                     .transaction { $0.animation = nil }
             }
         }
-        // 形变那一拍:**只给玻璃**(opaque 模糊 ⇒ 边缘也是实心,不会露底色)✓
-        .blur(radius: morphGlass ? 22 : 0, opaque: morphGlass)
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
         // ★★ 2026-10-20(用户:「卡片有点太单薄了,加点阴影,显得有厚度」):两层影子,挂在**一块
