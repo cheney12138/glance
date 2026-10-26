@@ -181,15 +181,28 @@ extension PanelController {
         return groups[appIndex].appName
     }
 
+    /// ★★ 2026-10-26(性能账):这个属性是**光晕**在 30Hz 里每帧问的(而且一帧问两次),
+    ///   而它内部 `IconProvider.art(for:)` 即使命中缓存也要做一次
+    ///   `NSRunningApplication(processIdentifier:)`(= 一次 LaunchServices XPC)⇒
+    ///   面板开着时每秒 60 次同步 XPC ⇒ 掉帧 ✗
+    ///   ⇒ 按"pid + bundle"记一次结果,只有换格/换 App 才重算 ✓(颜色本来就跟着选中走)
+    private static var sheenTintMemo: (key: String, color: NSColor?)?
     var sheenTint: NSColor? {
+        let key: String
+        let color: NSColor?
         if entrySelected, let li = launchIndex, launchables.indices.contains(li) {
             let app = launchables[li]
-            return IconTint.color(for: app.icon, key: "launch:\(app.id)")
+            key = "launch:\(app.id)"
+            color = IconTint.color(for: app.icon, key: key)
+        } else {
+            guard groups.indices.contains(appIndex) else { return nil }
+            let g = groups[appIndex]
+            key = "pid:\(g.pid):\(g.bundleID ?? "")"
+            if let m = Self.sheenTintMemo, m.key == key { return m.color }
+            color = IconTint.color(for: IconProvider.art(for: g.pid).image, key: key)
         }
-        guard groups.indices.contains(appIndex) else { return nil }
-        let g = groups[appIndex]
-        return IconTint.color(for: IconProvider.art(for: g.pid).image,
-                              key: "pid:\(g.pid):\(g.bundleID ?? "")")
+        Self.sheenTintMemo = (key, color)
+        return color
     }
 
     func startHoverPolling() {

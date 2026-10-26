@@ -679,4 +679,39 @@ extension PanelController {
         if let m = localClickMonitor { NSEvent.removeMonitor(m) }
         localClickMonitor = nil
     }
+
+    // MARK: - Esc(2026-10-26:历史遗留「Esc 关不掉面板」)
+    //
+    // 为什么不能只靠热键 tap:`HotkeyTap` 里 Esc 走 `.cancel`,但那条路要求 tap **正在接管**
+    // (state != idle / tapEnabled)。面板如果是"用鼠标点托盘"或"手势唤起"开的,tap 可能压根
+    // 没在接管 ⇒ Esc 被前台 App 收下,面板纹丝不动 ✗(用户看到的就是"Esc 没反应")。
+    // ⇒ 面板可见期间另挂一对 NSEvent 监听:全局那条保底(吞不掉,但 Esc 发给 App 无害),
+    //   本地那条能吞(自己窗口是 key 的情况)。两条幂等,重复 dismiss 有 `isVisible` 兜门 ✓
+    func installEscapeMonitor() {
+        removeEscapeMonitor()
+        escGlobal = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            guard e.keyCode == 53 else { return }
+            Task { @MainActor in
+                guard let self, self.isVisible else { return }
+                if isTraceEnabled { glog("[Esc] 全局监听 ⇒ 关面板") }
+                self.dismiss(reason: "Esc(全局)")
+            }
+        }
+        escLocal = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            guard e.keyCode == 53 else { return e }
+            Task { @MainActor in
+                guard let self, self.isVisible else { return }
+                if isTraceEnabled { glog("[Esc] 本地监听 ⇒ 关面板(吞键)") }
+                self.dismiss(reason: "Esc(本地)")
+            }
+            return nil
+        }
+    }
+
+    func removeEscapeMonitor() {
+        if let m = escGlobal { NSEvent.removeMonitor(m) }
+        escGlobal = nil
+        if let m = escLocal { NSEvent.removeMonitor(m) }
+        escLocal = nil
+    }
 }

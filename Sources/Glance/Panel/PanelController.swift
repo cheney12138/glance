@@ -121,6 +121,9 @@ final class PanelController: ObservableObject {
     var previewHostingView: ClickThroughHostingView<PreviewPanelView>?
     var contextScreen: NSScreen?
     var outsideClickMonitor: Any?
+    /// Esc 监听(2026-10-26,见 `installEscapeMonitor`:tap 没接管时 Esc 也要能关面板)
+    var escGlobal: Any?
+    var escLocal: Any?
     /// 自己窗口的点击(全局监听看不见自己家的事件,见 `installOutsideClickMonitor`)
     var localClickMonitor: Any?
     /// 退场演出期间的窗口拆迁单(见 `dismiss`):淡出/涟漪播完才 orderOut,
@@ -981,6 +984,7 @@ final class PanelController: ObservableObject {
             SessionMarks.finish()
         }
         installOutsideClickMonitor()
+        installEscapeMonitor()
         updatePreview()
 
         // 起点已就位:首帧提交后把上浮归零 —— "通用"那一层,任何时候都发生
@@ -1136,6 +1140,7 @@ final class PanelController: ObservableObject {
         ringFlipAngle = 0
         ringWidthBlend = 0
         removeOutsideClickMonitor()
+        removeEscapeMonitor()
         entrySelected = false
         launchIndex = nil
         isVisible = false
