@@ -173,6 +173,7 @@ final class PanelController: ObservableObject {
         switch action {
         case .begin: begin(reverse: false)
         case .beginReverse: begin(reverse: true)
+        case .beginStay: begin(reverse: false, keepCurrentApp: true)
         case .next: moveApp(1)
         case .prev: moveApp(-1)
         case .firstGroup: jumpToGroupEdge(0)
@@ -277,7 +278,12 @@ final class PanelController: ObservableObject {
 
     // MARK: - 生命周期
 
-    private func begin(reverse: Bool) {
+    /// ⌘` 接管那一支要"开局但不换 App"(见 `begin` 头注)。名单是**异步**回来的,
+    /// 落点其实在 `finishBegin` 里算 ⇒ 用这个标记把它带过去 ✓
+    private var beginKeepsCurrentApp = false
+
+    private func begin(reverse: Bool, keepCurrentApp: Bool = false) {
+        beginKeepsCurrentApp = keepCurrentApp
         // ★ 连着快速 ⌘Tab:上一局那次"名单还没到"的确认还挂着 ⇒ **先兑现它**(一次按键 = 一次切换 ✓),
         //   否则那一发就白按了(用户实报的"偶尔换不起来"里有一部分就是这种叠加 ✓)
         if confirmBeforeList, listReady, !groups.isEmpty {
@@ -480,9 +486,13 @@ final class PanelController: ObservableObject {
         //   后者会被常驻浮窗带歪 ⇒ 落点落到自己身上(按 ⌘Tab 等于没切换)✗(病例见 `recentlyActivePID`)
         let currentIdx = WindowEnumerator.recentlyActivePID(of: Set(groups.map(\.pid)))
             .flatMap { pid in groups.firstIndex { $0.pid == pid } } ?? 0
-        appIndex = advanceOnOpen
-            ? LandingRule.landingIndex(count: groups.count, from: currentIdx, reverse: reverse)
-            : 0
+        // ★ 2026-10-26:接管 ⌘` 那一支(keepCurrentApp)**留在当前 App**——
+        //   系统 ⌘` 的语义是"同一个 App 的下一个窗口",落在下一个 App 上等于换 App(用户实报"失灵")
+        appIndex = beginKeepsCurrentApp
+            ? min(currentIdx, max(0, groups.count - 1))
+            : (advanceOnOpen
+               ? LandingRule.landingIndex(count: groups.count, from: currentIdx, reverse: reverse)
+               : 0)
         if isTraceEnabled {
             glog("[落点] 当前=第 \(currentIdx + 1) 格(\(groups.indices.contains(currentIdx) ? groups[currentIdx].appName : "?"))"
                  + " · 顺序 " + groups.prefix(4).map(\.appName).joined(separator: " > "))
