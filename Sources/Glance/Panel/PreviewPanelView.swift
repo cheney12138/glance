@@ -2180,6 +2180,13 @@ struct ChipRailGroup: View {
                 .offset(y: (1 - entryProgress) * 10)
                 .opacity(Double(entryProgress))
         }
+        // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
+        //   60fps 逐帧实锤:卡在**一帧内**跳到新尺寸,而芯片列宽从 116pt 一路长到 184pt 用了 ~12 帧 ✗):
+        //   换窗时控制器会在同一轮里跑环/翻牌的 `withAnimation` —— SwiftUI 的事务是**全局的**,
+        //   托盘那块 hosting 也跟着吃到这条动画 ⇒ 卡与轨道的**几何**被拉成 0.2s 的插值 ⇒ 看着"有先后" ✗
+        //   ⇒ 托盘内容**断掉继承的动画事务**(几何一律当拍落);轨道自己的滚动仍由
+        //     `.animation(scrollMotion, value: viewPos)` 显式发起 ⇒ 不受影响 ✓
+        .transaction { $0.animation = nil }
         .onAppear {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
