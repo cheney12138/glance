@@ -80,6 +80,12 @@ enum ScreenWindowIndex {
     /// **当前屏** = 焦点窗口(前台 App 最前一扇窗)所在的那块屏 ✓ —— **与鼠标指针无关** ✓
     /// (用户 2026-09-22 裁掉了"以哪块屏为准"这个配置项,口径只留这一种 ✓)
     static func contextScreen(snapshot snap: [RawWindow]) -> NSScreen? {
+        // ★★ 2026-10-26 病例(用户:「现在环在左边屏幕,窗口在右边屏幕」):
+        //   这里原来是"**前台 App 那扇窗所在的屏**"(6a7b7e5 做 ⌘Tab 屏隔离时引入)。
+        //   而面板(环/托)用的是 ADR-0001 的**光标所在屏** ⇒ 两套口径分裂:
+        //   光标在左屏、前台窗口在右屏时,面板落在左屏、⌘` 却去右屏循环并激活 ⇒ 左右错位 ✗
+        //   ⇒ 统一到 ADR-0001 的语境屏:**光标屏优先**,拿不到才退回前台窗口屏 ✓
+        if let cursor = CursorScreenAnchor.cursorScreen { return cursor }
         guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               let bounds = snap.first(where: { $0.pid == front })?.bounds else { return nil }
         return screen(owning: bounds)
