@@ -84,6 +84,16 @@ final class PanelController: ObservableObject {
     /// 视图实例没变、`onAppear` 不再触发;`bundleID` 也没变 ⇒ 动画就"有时播有时不播" ✗
     /// ⇒ 入场统一认这个令牌 ✓
     @Published private(set) var entryTick = 0
+    /// **入场进度**(0…1,1 = 到位):芯片 / 轨道那一记"自下而上浮出"由它驱动。
+    ///
+    /// ★★ 2026-10-26 第三次修(用户:「动效还是时有时没有」):
+    ///   SwiftUI 的 `withAnimation` 方案在这条链路上**天生不稳** ——
+    ///   状态归零与起动画落在同一个事务、或窗口还没上屏、或视图被重建,
+    ///   任意一条都会让动画被合并/看不到 ✗(10-23 卡片落位踩过同样的坑)
+    ///   ⇒ 改成**自己按帧推**(与 `settleIn` 同一套):每 8ms 写一次值,每一次都是真实提交,
+    ///     不依赖 SwiftUI 的动画事务 ⇒ 稳定可见 ✓
+    @Published private(set) var entryProgress: CGFloat = 1
+    private var entryTimer: DispatchSourceTimer?
     /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)
     private var sessionBaseline: SessionSnapshot?
     /// 本局查过几次(防呆:不变量一旦违反会**每拍都报** ⇒ 只报第一次,免得刷屏 ✗)
@@ -852,6 +862,28 @@ final class PanelController: ObservableObject {
                          maxRows: PanelMetrics.trayMaxRows)
     }
 
+    /// 入场浮出:0 → 1,按帧推(见 `entryProgress` 的注释)
+    func startEntryFloat() {
+        entryTimer?.cancel()
+        entryProgress = 0
+        let t0 = CACurrentMediaTime()
+        let dur: CFTimeInterval = 0.26
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.02, repeating: 0.008)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let p = min(1, (CACurrentMediaTime() - t0) / dur)
+            self.entryProgress = CGFloat(1 - pow(1 - p, 2))   // easeOut
+            if p >= 1 {
+                self.entryProgress = 1
+                self.entryTimer?.cancel()
+                self.entryTimer = nil
+            }
+        }
+        entryTimer = timer
+        timer.resume()
+    }
+
     private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
         buildPanelIfNeeded()
         lastPointerMoveAt = 0                       // 开局面板底下的停驻不算"动过"(键盘=唤起者,后动)
@@ -944,6 +976,11 @@ final class PanelController: ObservableObject {
             panel.orderFrontRegardless()
         }
         SessionMarks.step("上屏")     // 🔬 细账:orderFront + 首轮布局
+        // 入场浮出(芯片 / 轨道):上屏之后再起跳,按帧推 ⇒ 稳定可见 ✓
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isVisible else { return }
+            self.startEntryFloat()
+        }
         // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
         //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
         if summonFadeEnabled {

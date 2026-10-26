@@ -46,6 +46,9 @@ extension PanelController {
         //   用户实报的复现是**「tab 切到大象那一拍掉帧」**,而这条路径**从不打点** ✗
         //   ⇒ 我们前几轮量到的长帧全是指针那一路的,压根没量到用户报的那一下 ✗✗
         FrameProbe.lastHoverMark = CACurrentMediaTime()
+        // ★ 2026-10-26 用户:「每次切换 App 都要有(入场动效)」⇒ 换 App 就重播一次浮出 ✓
+        //   (组内换窗走 `moveWindow`,这里不会被调用 ⇒ 那边保持现状 ✓)
+        startEntryFloat()
         traceCost("键盘换选中") {
             // 模型 C(ADR-0013):**逻辑上只有一条环** —— 主环走完 `Tab` 自然进入未启动段,
             // 未启动段走完接回主环;`⇧Tab` 反向对称。两条旧裁定(2026-09-16「不经 Tab 到达」、

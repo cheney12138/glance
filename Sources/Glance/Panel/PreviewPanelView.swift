@@ -288,7 +288,8 @@ struct PreviewPanelView: View {
                           //   `0` 永远落在**第 1 张卡** ⇒ 点第 3 枚也去开第 1 扇窗 ✗
                           //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
                           onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
-                          entryTick: controller.entryTick)
+                          entryTick: controller.entryTick,
+                          entryProgress: controller.entryProgress)
         } else {
             cardRowGrid
         }
@@ -422,6 +423,7 @@ struct PreviewPanelView: View {
             settlesOnGroupChange: settlesOnGroupChange,
             chipEntersFromRight: windows.count == 1,
             entryTick: controller.entryTick,
+            entryProgress: controller.entryProgress,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -576,10 +578,10 @@ private struct WindowThumb<Overlay: View>: View {
     /// ★ 2026-10-26 用户:「多窗口的时候芯片有渐入登场的效果,单窗口没有 ⇒ 单窗口也从右边入场」
     ///   —— 只给**单窗口**那一局(那时芯片是卡片底下唯一的一枚,入场才看得出来)✓
     var chipEntersFromRight: Bool = false
-    /// 芯片入场进度(1 = 到位)
-    @State private var chipIn: CGFloat = 1
     /// 入场令牌(每开一局 +1;见 `PanelController.entryTick`)—— 入场动效**只认它** ✓
     var entryTick: Int = 0
+    /// 入场进度(0…1):由控制器按帧推 ⇒ 稳定可见(见 `PanelController.entryProgress`)✓
+    var entryProgress: CGFloat = 1
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -618,17 +620,6 @@ private struct WindowThumb<Overlay: View>: View {
     /// 明暗/糊化**当拍落**,且走禁动画事务 —— 祖先任何 `.animation(value: wid)`
     /// 都带不动它(2026-10-25 用户实报「换窗还有闪动」:dim 修正被形变动画播成
     /// 0.16s 渐变 = 闪 ✗)。明暗是"状态落定",不是动效 ✓
-    /// 芯片上浮(单窗口):**先当拍归零,下一拍再动画**
-    /// —— 归零与动画挤在同一事务里时,SwiftUI 会直接取终值 ⇒ 看不见 ✗(用户实报「第一次唤起也不出现」)
-    private func playChipIn() {
-        if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
-        chipIn = 0
-        // 等面板真的上屏(开局到上屏 ≈30ms)再起动画,否则动画在"窗还没显"的那几拍就走完了 ✗
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
-        }
-    }
-
     private func landDim() {
         var tx = Transaction()
         tx.disablesAnimations = true
@@ -776,9 +767,9 @@ private struct WindowThumb<Overlay: View>: View {
             if showsChip {
                 chip
                     // ★ 2026-10-26 用户改口径:「从右入场不好, 也跟芯片轨道一样, 看起来是上浮」
-                    //   ⇒ 与轨道浮出同一套语言:自下而上 8pt + 渐显 ✓
-                    .offset(y: chipEntersFromRight ? (1 - chipIn) * 8 : 0)
-                    .opacity(chipEntersFromRight ? Double(chipIn) : 1)
+                    //   ⇒ 自下而上 8pt + 渐显;进度由控制器按帧推(不再用 SwiftUI 动画事务)✓
+                    .offset(y: chipEntersFromRight ? (1 - entryProgress) * 8 : 0)
+                    .opacity(chipEntersFromRight ? Double(entryProgress) : 1)
             }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
@@ -796,9 +787,7 @@ private struct WindowThumb<Overlay: View>: View {
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
-            if chipEntersFromRight, PanelMotion.select != nil {
-                playChipIn()
-            }
+            // 芯片浮出由 `entryProgress` 驱动(无需这里起动画)✓
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
@@ -838,9 +827,7 @@ private struct WindowThumb<Overlay: View>: View {
         // 因为面板窗口常驻,同一个组再次唤起时 onAppear / bundleID 都不会响 ✗
         .onChange(of: entryTick) { _, _ in
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
-            if chipEntersFromRight, PanelMotion.select != nil {
-                playChipIn()
-            }
+            // 芯片浮出由 `entryProgress` 驱动(无需这里起动画)✓
         }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
         .onChange(of: bundleID) { _, _ in
@@ -849,9 +836,7 @@ private struct WindowThumb<Overlay: View>: View {
             // ★ 2026-10-26 用户:「不是第一次唤起才有, 是**每次切换 App** 都要有;
             //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
             //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
-            if chipEntersFromRight, PanelMotion.select != nil {
-                playChipIn()
-            }
+            // 芯片浮出由 `entryProgress` 驱动(无需这里起动画)✓
         }
     }
 
@@ -2159,6 +2144,8 @@ struct ChipRailGroup: View {
     let onTap: (Int) -> Void
     /// 入场令牌(每开一局 +1)⇒ 同一个 App 组再次唤起也重播浮出 ✓
     var entryTick: Int = 0
+    /// 入场进度(0…1):控制器按帧推 ⇒ 稳定可见 ✓
+    var entryProgress: CGFloat = 1
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
@@ -2173,8 +2160,6 @@ struct ChipRailGroup: View {
     /// 视口顶端的连续坐标
     @State private var viewPos: Int = 0
 
-    /// 轨道入场进度(1 = 到位)。待办第 3 条:跟着"第一次出现"的落位,**自下而上浮出**一次 ✓
-    @State private var railIn: CGFloat = 1
     /// 轨道滚动的动效(2026-10-26 用户:「把芯片轨道的动效也加一下,选中滚动的步长是 1」)
     /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
     /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
@@ -2185,13 +2170,13 @@ struct ChipRailGroup: View {
             card
             rail
                 // 只抬轨道:卡片自己有落位,两件事叠在一起会像"整块面板在飘" ✗
-                .offset(y: (1 - railIn) * 10)
-                .opacity(Double(railIn))
+                // 进度由控制器按帧推(0→1)⇒ 稳定可见 ✓
+                .offset(y: (1 - entryProgress) * 10)
+                .opacity(Double(entryProgress))
         }
         .onAppear {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
-            playRailIn()
             // 浮出(0.26s)落定之后再开滚动动画,免得开场变成"一边浮一边滚" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
@@ -2201,29 +2186,19 @@ struct ChipRailGroup: View {
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
         .onChange(of: entryTick) { _, _ in
             scrollMotion = nil
-            playRailIn()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
         }
         .onChange(of: bundleID) { _, _ in
             scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
-            playRailIn()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
         }
     }
 
-    private func playRailIn() {
-        if isTraceEnabled { glog("[动效] 轨道浮出 bundle=\(bundleID ?? "-")") }
-        guard WindowLayout.current == .rail, PanelMotion.select != nil else { railIn = 1; return }
-        railIn = 0
-        // 同样的坑:归零与动画同一事务 ⇒ 取终值 ⇒ 看不见 ✗ ⇒ 下一拍再动画 ✓
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            withAnimation(.easeOut(duration: 0.26)) { railIn = 1 }
-        }
-    }
+
 
     /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
     private var fits: Bool {
