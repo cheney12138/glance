@@ -258,8 +258,11 @@ struct PreviewPanelView: View {
                           bundleID: controller.currentGroup?.bundleID,
                           card: AnyView(thumb(at: selIndex, showsChip: false, face: selBox,
                                               settlesOnGroupChange: true)
-                              // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
-                              .frame(width: slotW, alignment: .center)
+                              // ★★ 2026-10-26 终审(用户:「我是说中间这个间隙,有办法解决吗」):
+                              //   居中 ⇒ 卡与轨道之间的缝 = (槽宽 − 卡宽)/2 + thumbGap,窄窗时能到 150pt ✗
+                              //   贴**右**(靠近轨道)⇒ 缝恒定 = thumbGap ✓,空出来的宽度留在左侧。
+                              //   槽本身不缩:缩槽 = 托盘每次换窗都变宽 = 用户早就否掉的"在动" ✗
+                              .frame(width: slotW, alignment: .trailing)
                               // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
                               //   它包住**整张卡**,内容三层降级(图标→静帧→live)的换源也被裹进
                               //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
