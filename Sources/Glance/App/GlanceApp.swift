@@ -104,21 +104,13 @@ struct GlanceApp: App {
                     hotkeys.onSameAppScreenCycle = { forward in
                         Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
                     }
-                    // ⌘`(不带 ⇧)= **把面板提上来**(与三指点按同一个入口:钉住那一局 ✓)
-                    hotkeys.onRaisePreview = { [weak hotkeys, weak panelController] delta in
-                        // ★ 2026-10-26:⌘` = 同 App 的下一个窗口 —— 开局留在当前 App,再推进选中 ✓
-                        guard let hotkeys else { return }
-                        hotkeys.beginPinnedSession(stayOnCurrentApp: true)
-                        guard let pc = panelController else { return }
-                        pc.moveWindow(delta)
-                        // ⌘` 的语义是"按一下就换过去"(系统那条也不是先让人看面板)⇒
-                        // 面板只做「这一下要切到哪」的即时反馈,随后自动确认。
-                        // 世代号守卫:期间又开了一局(连按 ⌘`)⇒ 这一发作废,别把新一局确认掉 ✗
-                        let gen = pc.beginGeneration
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                            guard pc.beginGeneration == gen, pc.isVisible else { return }
-                            pc.confirmSelection()
-                        }
+                    // ★ 2026-10-26 复原(用户:「去看之前 ⌘` 覆盖系统级是什么语义、怎么实现的」):
+                    //   ⌘` 的接管语义 = **只在当前屏内循环同一个 App 的窗口**,实现就是
+                    //   `SameAppScreenCycler.step`(带屏隔离,见 ScreenScopedSwitching.swift)。
+                    //   我上一版自己造了"开局 + moveWindow + 定时确认"一套 ⇒ 语义跑偏 ✗
+                    //   ⇒ 回到既有实现,⌘` 正向、⌘⇧` 反向,两条都走同一个入口 ✓
+                    hotkeys.onRaisePreview = { forward in
+                        Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
                     }
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }

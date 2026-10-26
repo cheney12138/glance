@@ -27,7 +27,7 @@ final class HotkeyTapCenter {
     /// ⌘` **单独**触发 ⇒ 把预览面板提上来(2026-10-23 用户:「强化一下 ⌘` 的功能,
     /// 单独触发的时候把预览窗口提上来,语义还是当前屏幕下的」)。
     /// 与 `onSameAppScreenCycle` 同一套装配纪律:Trigger 不反向依赖 App 层 ⇒ 走闭包钩子 ✓
-    var onRaisePreview: ((Int) -> Void)?
+    var onRaisePreview: ((Bool) -> Void)?
 
 
     enum State { case idle, armed, navigating }
@@ -36,10 +36,6 @@ final class HotkeyTapCenter {
     enum Action {
         case begin            // 首次 ⌥+Tab:进入导航态(面板应出现)
         case beginReverse     // 首次 ⇧⌥+Tab:同上,但方向相反(落点判断要用,见 PanelController)
-        /// ★ 2026-10-26:接管 ⌘` 时"开局但不换 App"——面板落在**当前 App 这组**,
-        ///   然后把选中推进到相邻窗口。系统 ⌘` 的语义就是"同一个 App 的下一个窗口",
-        ///   而 `.begin` 走的是「唤起即切换」(落在**下一个 App**)⇒ 按下等于换 App,用户实报"失灵" ✗
-        case beginStay
         case next             // Tab:图标层后移
         case prev             // ⇧Tab:图标层前移
         case firstGroup      // ←:跳到**最左**的 App
@@ -252,7 +248,7 @@ final class HotkeyTapCenter {
 
     /// 三指点按的入口:没有触发键的按下,所以直接进导航态。
     /// 已在跑就不重开(手势抖动不产生第二局;面板窗口复用,重开只会把状态搅乱)。
-    func beginPinnedSession(stayOnCurrentApp: Bool = false) {
+    func beginPinnedSession() {
         // ⚠️ 2026-10-26 病例(用户实报「不唤起面板时 ⌘` 失灵」):
         //   触发键本身就是 ⌘ ⇒ 按下 ⌘` 的**第一拍**状态已经是 `.armed`(修饰键按住的待命态),
         //   而这里原来只放行 `.idle` ⇒ **什么都不做,但 ⌘` 已经被吞掉** = 完全失灵 ✗
@@ -261,8 +257,7 @@ final class HotkeyTapCenter {
         guard state == .idle || state == .armed else { return }
         pinnedSession = true
         setState(.navigating)
-        if isTraceEnabled { glog("[热键] ⌘` 开局:stay=\(stayOnCurrentApp)") }
-        emit(stayOnCurrentApp ? .beginStay : .begin)
+        emit(.begin)
     }
 
     // MARK: - Carbon 热键(触发键)
@@ -497,12 +492,8 @@ final class HotkeyTapCenter {
                 // ★★ 2026-10-23 用户裁定:「单独触发的时候,把预览窗口提上来,语义还是当前屏幕下的」
                 //   ⇒ ⌘`(**不带 ⇧**)= 唤起面板(钉住那一局,与三指点按同一个入口 ✓);
                 //     ⌘⇧` 仍走"反向循环窗口"—— 它是另一个动作,不在这次改动里 ✓
-                if mods == [.maskCommand] {
-                    // ⌘` = 当前 App 的下一个窗口(系统语义)⇒ 开局**不换 App**,由装配方推进 winIndex
-                    onRaisePreview?(forward ? 1 : -1)
-                } else {
-                    onSameAppScreenCycle?(forward)
-                }
+                // ⌘` 正向 / ⌘⇧` 反向,都交给"当前屏内循环同 App 窗口"那一支 ✓
+                onRaisePreview?(forward)
                 return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
             }
             return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓
@@ -677,7 +668,6 @@ final class HotkeyTapCenter {
         switch action {
         case .begin: return "首次 ⌥+Tab → 导航开始(面板应出现)"
         case .beginReverse: return "首次 ⇧⌥+Tab → 导航开始(反向)"
-        case .beginStay: return "⌘` → 在**当前 App** 上开局(不换 App)"
         case .next: return "Tab → 后移"
         case .prev: return "⇧Tab → 前移"
         case .firstGroup: return "← → 跳到最左的 App"
