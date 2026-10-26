@@ -281,6 +281,13 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
+        //   上一局散场时,轨道样式会 `holdTrayFrame(0.5)`(冻住窗框,免得"先缩小再消失")✗
+        //   若用户在 0.5s 内又唤起,`trayFrame()` 仍返回**上一局那个冻住的框** ⇒
+        //   新一局的内容按新尺寸排、窗框却是旧尺寸 ⇒ 芯片被挤到玻璃外/下面 ✓
+        //   ⇒ 新一局开始 = 冻结作废(上一局已经散场,没有任何东西还需要那个框)✓
+        trayFrameHoldUntil = 0
+        heldTrayFrame = nil
         // ★ 连着快速 ⌘Tab:上一局那次"名单还没到"的确认还挂着 ⇒ **先兑现它**(一次按键 = 一次切换 ✓),
         //   否则那一发就白按了(用户实报的"偶尔换不起来"里有一部分就是这种叠加 ✓)
         if confirmBeforeList, listReady, !groups.isEmpty {
