@@ -240,7 +240,13 @@ struct PreviewPanelView: View {
         if useRail {
             // ★ 卡宽随真窗变,但**轨道的位置不许跟着动**(用户口径)⇒
             //   卡放进一个**固定宽度的槽**(= 本组最宽卡),槽内居中;轨道永远贴着槽的右缘 ⇒ 一个像素都不动 ✓
-            let slotW = windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0
+            // ★★ 2026-10-26 终审第二轮(用户:「间隙怎么又变大了」):
+            //   槽宽原来取**组内最宽卡** ⇒ 窄窗时那一块差值就成了卡与轨道之间的大缝 ✗
+            //   ⇒ 槽宽 = **选中卡自己的宽度**:卡与轨道恒为 thumbGap,没有缝 ✓
+            //   代价(照实说):换到不同宽度的窗时,托盘窗会跟着变宽/变窄
+            let slotW = windows.indices.contains(selIndex)
+                ? PanelMetrics.thumbWidth(aspect: windows[selIndex].aspect)
+                : (windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0)
             // ★ 卡盒恒定 = 本组最大卡(2026-10-25 日志铁证):IDEA 的"4 窗同尺寸"实为
             //   1728x1084 / 920x492 / 1204x1084 / 1728x1050(有一扇是弹窗)⇒ 卡跟选中走 =
             //   每次组内换选中卡都变尺寸 = 用户说的"落位"✗ ⇒ 卡盒 = 组内最大卡,恒定;

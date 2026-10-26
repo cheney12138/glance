@@ -37,8 +37,12 @@ extension PanelController {
         //   轨道悬在玻璃外;且窗框追内容连跳数帧 = 「小→大」阶梯(用户录屏逐帧实锤)✗
         if WindowLayout.current == .rail, group.windows.count > 1 {
             let sizes = Self.cardSizes(group.windows)
-            let slotW = (sizes.map(\.width).max() ?? 0)
-            let cardH = (sizes.map(\.height).max() ?? 0)
+            // ★ 与视图同源:槽宽 = **选中卡宽**(2026-10-26,消掉卡与轨道之间那道缝 ✓)
+            //   选中项不在这一组里(换组那一拍)⇒ 退回组内最宽卡(当拍的过渡值)
+            let selIdx = min(max(winIndex, 0), max(group.windows.count - 1, 0))
+            let selectedGroup = (currentGroup?.bundleID == group.bundleID)
+            let slotW = (selectedGroup ? (sizes[selIdx].width) : (sizes.map(\.width).max() ?? 0))
+            let cardH = (selectedGroup ? sizes[selIdx].height : (sizes.map(\.height).max() ?? 0))
             return NSSize(
                 width: slotW + PanelMetrics.thumbGap + PanelMetrics.chipRailWidth + PanelMetrics.trayPadX * 2,
                 height: PanelMetrics.trayPadTop + cardH + PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath
