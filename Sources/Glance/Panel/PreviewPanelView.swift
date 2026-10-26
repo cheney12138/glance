@@ -744,8 +744,11 @@ private struct WindowThumb<Overlay: View>: View {
             if showsChip { chip }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
+        // ★★ 2026-10-26 病例(用户:「是不是没相对居中呀,卡片」):轨道版式 `showsChip = false`,
+        //   但这里**仍然预留了芯片那一段高** ⇒ 卡片内容被顶到框的上半截,和右侧轨道(按卡高居中)
+        //   一比就是"卡偏上"✗ ⇒ 没有芯片就不留那一段 ✓
         .frame(width: box.width,
-               height: box.height + (PanelMetrics.thumbH - PanelMetrics.shotH))
+               height: box.height + (showsChip ? (PanelMetrics.thumbH - PanelMetrics.shotH) : 0))
         // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
         .onHover { hovered = $0 }
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
