@@ -283,7 +283,11 @@ struct PreviewPanelView: View {
                           // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
                           railHeight: slotH,
                           onSelect: { controller.hoverWindow($0) },
-                          onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) },
+                          // ★★ 2026-10-26 病例(用户:「芯片 hover 有动效, 但点击之后不会打开对应窗口」):
+                          //   原来点芯片走 `cardTapped(localX: 0)` —— 它按**卡片的 localX** 重新算命中,
+                          //   `0` 永远落在**第 1 张卡** ⇒ 点第 3 枚也去开第 1 扇窗 ✗
+                          //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
+                          onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
                           entryTick: controller.entryTick)
         } else {
             cardRowGrid
