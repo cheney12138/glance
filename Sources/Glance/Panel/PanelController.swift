@@ -51,6 +51,10 @@ final class PanelController: ObservableObject {
                 //   白线 = 被切断的选中环 ✓
                 //   ⇒ 在**状态落下来之前**先把窗框改成新组的尺寸(didSet 早于 body 求值 ✓),
                 //     渲染那一帧窗宽已经够,不再切 ✓
+                // ★ 2026-10-26(用户:「鼠标 hover app 的时候, 芯片没动效」):
+                //   入场浮出原来只在 `begin` / `moveApp` 里起跳 —— 而**指针悬停换组**不走 `moveApp`,
+                //   直接从 `appIndex` 过账 ⇒ 少了一次浮出 ✗ ⇒ 统一放到这里(所有换组路径的唯一出口)
+                startEntryFloat()
                 updatePreview()
             }
         }

@@ -91,6 +91,12 @@ struct PreviewPanelView: View {
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
+        // ★★ 2026-10-26(用户:「卡片变化的时候芯片轨道的移动有点怪, 好像有先后顺序」):
+        //   换窗时控制器在同一轮里跑的 `withAnimation`(环/翻牌)是**全局事务** ——
+        //   托盘这块 hosting 也会吃到 ⇒ 卡当拍跳、芯片列却被插值 0.2s,读作"卡先到、轨道后到" ✗
+        //   ⇒ 托盘整棵子树**断掉继承的动画**;需要动的地方一律用显式 `.animation(_:value:)`
+        //     (轨道的滚动就是这么写的 ⇒ 不受影响 ✓)
+        .transaction { $0.animation = nil }
         // ★★ 2026-10-13 病例(用户两张对比图 + 他的方案:「是不是要给一个容器, 固定这个容器跟环的边距,
         //   然后 resize 在这个容器里做会比较好呀」—— **他这套是对的** ✓):
         //   探针量到的事实(同一局内):
