@@ -614,6 +614,17 @@ private struct WindowThumb<Overlay: View>: View {
     /// 明暗/糊化**当拍落**,且走禁动画事务 —— 祖先任何 `.animation(value: wid)`
     /// 都带不动它(2026-10-25 用户实报「换窗还有闪动」:dim 修正被形变动画播成
     /// 0.16s 渐变 = 闪 ✗)。明暗是"状态落定",不是动效 ✓
+    /// 芯片上浮(单窗口):**先当拍归零,下一拍再动画**
+    /// —— 归零与动画挤在同一事务里时,SwiftUI 会直接取终值 ⇒ 看不见 ✗(用户实报「第一次唤起也不出现」)
+    private func playChipIn() {
+        if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
+        chipIn = 0
+        // 等面板真的上屏(开局到上屏 ≈30ms)再起动画,否则动画在"窗还没显"的那几拍就走完了 ✗
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+        }
+    }
+
     private func landDim() {
         var tx = Transaction()
         tx.disablesAnimations = true
@@ -782,9 +793,7 @@ private struct WindowThumb<Overlay: View>: View {
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
             if chipEntersFromRight, PanelMotion.select != nil {
-                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
-                chipIn = 0
-                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+                playChipIn()
             }
         }
         .onChange(of: selected) { _, _ in
@@ -826,9 +835,7 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: entryTick) { _, _ in
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             if chipEntersFromRight, PanelMotion.select != nil {
-                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
-                chipIn = 0
-                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+                playChipIn()
             }
         }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
@@ -839,9 +846,7 @@ private struct WindowThumb<Overlay: View>: View {
             //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
             //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
             if chipEntersFromRight, PanelMotion.select != nil {
-                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
-                chipIn = 0
-                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+                playChipIn()
             }
         }
     }
@@ -2210,7 +2215,10 @@ struct ChipRailGroup: View {
         if isTraceEnabled { glog("[动效] 轨道浮出 bundle=\(bundleID ?? "-")") }
         guard WindowLayout.current == .rail, PanelMotion.select != nil else { railIn = 1; return }
         railIn = 0
-        withAnimation(.easeOut(duration: 0.26)) { railIn = 1 }
+        // 同样的坑:归零与动画同一事务 ⇒ 取终值 ⇒ 看不见 ✗ ⇒ 下一拍再动画 ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeOut(duration: 0.26)) { railIn = 1 }
+        }
     }
 
     /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
