@@ -782,6 +782,7 @@ private struct WindowThumb<Overlay: View>: View {
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
             if chipEntersFromRight, PanelMotion.select != nil {
+                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
                 chipIn = 0
                 withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
             }
@@ -825,6 +826,7 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: entryTick) { _, _ in
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             if chipEntersFromRight, PanelMotion.select != nil {
+                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
                 chipIn = 0
                 withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
             }
@@ -833,6 +835,14 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: bundleID) { _, _ in
             landDim()
             if settlesOnGroupChange { settleIn() }
+            // ★ 2026-10-26 用户:「不是第一次唤起才有, 是**每次切换 App** 都要有;
+            //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
+            //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
+            if chipEntersFromRight, PanelMotion.select != nil {
+                if isTraceEnabled { glog("[动效] 芯片上浮 bundle=\(bundleID ?? "-")") }
+                chipIn = 0
+                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+            }
         }
     }
 
