@@ -273,10 +273,12 @@ struct PreviewPanelView: View {
                               //   换组时卡的位置/槽宽/图片全都变了 ⇒ 整张卡从上一组的几何**插值过去**
                               //   = "从角落长出来" ✗。形变只属于**组内换窗**(尺寸真的不同那一拍);
                               //   换组有自己的落位(`settlesOnGroupChange`),不许叠形变 ✓
-                              .animation(((controller.isRingSwapInFlight || controller.isContentSwapInFlight)
-                                          || PanelMotion.select == nil)
-                                         ? nil : .easeOut(duration: 0.42),
-                                         value: selBox)
+                              // ★★ 2026-10-26 三连失败后的定论(用户:「白边更明显了,内容没有跟随尺寸变化」):
+                              //   卡片形变期间**内容层追不上框**,试过的三条路都不成 ——
+                              //     ① 每层图给显式尺寸 ② scaledToFill+clipped ③ 按旧尺寸排+scaleEffect 拉伸
+                              //   ⇒ 关掉尺寸动画本身:卡与内容**同一帧**换到新尺寸,
+                              //     没有中间帧 = 物理上不可能露白边 ✓(代价:尺寸切换是硬切,不做形变)
+                              .animation(nil, value: selBox)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
                           railHeight: slotH,
