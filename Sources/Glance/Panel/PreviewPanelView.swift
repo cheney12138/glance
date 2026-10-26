@@ -830,8 +830,10 @@ private struct WindowThumb<Overlay: View>: View {
                        let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
                                                                  target: imageBox) {
                         Image(decorative: prepared.cg, scale: prepared.scale).resizable()
+                            .frame(width: box.width + 6, height: box.height + 6)
                     } else if let image {
                         Image(nsImage: image).resizable()
+                            .frame(width: box.width + 6, height: box.height + 6)
                     }
                     // ★★★ 2026-10-25:非选中卡盖一层**烘焙好的磨砂**(见 `CardImageCache.blurredImage`)。
                     //   ① 让"有流/没流"在视觉上不存在 ⇒ 只给选中那张起流(22 条 → 1 条)✓
@@ -841,18 +843,22 @@ private struct WindowThumb<Overlay: View>: View {
                         // ★ S2:实时帧优先(现在**不分选中** —— 见 `liveFrame` 的病例)。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
                         //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
                         Image(decorative: liveFrame, scale: 1).resizable()
+                            .frame(width: box.width + 6, height: box.height + 6)
                     }
                     // ★★★ 磨砂层**盖在最上面**(它必须糊住"最新的那一帧"):
                     //   · 优先用**实时帧的磨砂版**(选中期间一直在后台按 ≤5fps 重算)⇒ 内容是新的 ✓
                     //   · 还没有过任何实时帧(本次运行从没选中过它)⇒ 退回**快照的磨砂版** ✓
                     if !selected {
                         if let b = blurredLive {
-                            Image(decorative: b, scale: 1).resizable().opacity(blurFade)
+                            Image(decorative: b, scale: 1).resizable()
+                                .frame(width: box.width + 6, height: box.height + 6)
+                                .opacity(blurFade)
                         } else if let image,
                                   let blurred = CardImageCache.shared.blurredImage(
                                     wid: record.wid, source: image, target: imageBox,
                                     radius: PanelColors.cardBlur) {
                             Image(decorative: blurred.cg, scale: blurred.scale).resizable()
+                                .frame(width: box.width + 6, height: box.height + 6)
                                 .opacity(blurFade)
                         }
                     }
