@@ -256,8 +256,7 @@ struct PreviewPanelView: View {
             ChipRailGroup(windows: windows,
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
-                          card: AnyView(thumb(at: selIndex, showsChip: false, face: selBox,
-                                              settlesOnGroupChange: true)
+                          card: AnyView(thumb(at: selIndex, showsChip: false, face: selBox)
                               // ★★ 2026-10-26 **撤回贴右**(用户:「怎么多窗口的位置跑偏了」):
                               //   贴右把"槽宽 − 卡宽"那一坨全甩到左边 ⇒ 整块内容在**定宽的托盘窗**里
                               //   重心右移 = 看起来跑偏 ✗(环溢出那一版还会把长条撑宽、右侧被切)
@@ -413,7 +412,9 @@ struct PreviewPanelView: View {
             // 轨道模式下连单窗特例(卡+底芯片,走 row 网格)也不落位 ——
             // 用户实报(2026-10-25):「IDEA 窗口一样大也有先缩后放的动效」✗
             // 病根:单窗组走 row 网格,onAppear 每次换组都落位 ✗
-            settlesOnSwap: WindowLayout.current == .row,
+            // ★ 2026-10-26 用户:「多窗口的时候, 卡片还有落位动效. 不要了」⇒
+            //   卡片落位只留给**单窗口**(多窗口那局的入场交给芯片/轨道的浮出)✓
+            settlesOnSwap: WindowLayout.current == .row && windows.count == 1,
             settlesOnGroupChange: settlesOnGroupChange,
             chipEntersFromRight: windows.count == 1,
             entryTick: controller.entryTick,
