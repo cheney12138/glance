@@ -247,11 +247,17 @@ struct PreviewPanelView: View {
             //   换选中只剩内容直换;小窗内容在盒内 aspect-fit ✓
             let slotH = windows.map { PanelMetrics.thumbSize(real: $0.bounds.size,
                                                             aspect: $0.aspect).height }.max() ?? 0
+            // ★★ 2026-10-26 待办第 2 条(用户口径):「组内换窗**没有落位**,只有窗口尺寸
+            //   变化时的形变」⇒ 卡盒 = **选中窗自己的卡尺寸**,并且把动画挂在"尺寸"这个值上:
+            //   `.animation(_:value:)` 只在值**变了**才启动 ⇒ 同尺寸窗之间切换 = 零动画 ✓,
+            //   尺寸真的不同时才播 0.42s 形变 ✓(这正是用户要的那条区分)
+            let selBox = PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
+                                                aspect: windows[selIndex].aspect)
             ChipRailGroup(windows: windows,
                           selected: selIndex,
                           bundleID: controller.currentGroup?.bundleID,
-                          card: AnyView(thumb(at: selIndex, showsChip: false,
-                                              face: CGSize(width: slotW, height: slotH))
+                          card: AnyView(thumb(at: selIndex, showsChip: false, face: selBox,
+                                              settlesOnGroupChange: true)
                               // 居中(2026-10-25 用户终审:贴左时小窗离轨道太远「看着怪怪的」✗)
                               .frame(width: slotW, alignment: .center)
                               // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
@@ -259,6 +265,8 @@ struct PreviewPanelView: View {
                               //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
                               //   ⇒ 摘掉:换窗 = 内容一帧直换、无任何动画;尺寸形变等"只对几何
                               //      生效的窄动画"(face 驱动)验证后再上,不再让动效沾内容 ✓
+                              .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42),
+                                         value: selBox)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
                           railHeight: slotH,
@@ -323,7 +331,8 @@ struct PreviewPanelView: View {
         return min(max(controller.winIndex, 0), windows.count - 1)
     }
 
-    private func thumb(at i: Int, showsChip: Bool = true, face: CGSize? = nil) -> some View {
+    private func thumb(at i: Int, showsChip: Bool = true, face: CGSize? = nil,
+                       settlesOnGroupChange: Bool = false) -> some View {
         let w = windows[i]
         // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
         let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
@@ -391,6 +400,7 @@ struct PreviewPanelView: View {
             // 用户实报(2026-10-25):「IDEA 窗口一样大也有先缩后放的动效」✗
             // 病根:单窗组走 row 网格,onAppear 每次换组都落位 ✗
             settlesOnSwap: WindowLayout.current == .row,
+            settlesOnGroupChange: settlesOnGroupChange,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -538,6 +548,10 @@ private struct WindowThumb<Overlay: View>: View {
     /// 同一格子换成另一扇窗时,要不要"落位"一次(实验台 v4 定稿:轨道版式**不落位** ——
     /// 换窗唯一的动作 = 卡形变;落位只属于唤起那一刻的默认窗)。row 版式保持 true ✓
     var settlesOnSwap: Bool = true
+    /// ★ 2026-10-26 待办第 1 条(用户口径):「所有 App 只有在切换到它、窗口**第一次出现**时,
+    ///   才有落位动画;组内换窗没有任何落位」⇒ 轨道版式传 true(只认 bundleID 变化),
+    ///   row 版式保持 false(它走 `settlesOnSwap` 那条既有路径)✓
+    var settlesOnGroupChange: Bool = false
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -586,6 +600,7 @@ private struct WindowThumb<Overlay: View>: View {
     }
 
     private func settleIn() {
+        if isTraceEnabled { glog("[动效] 卡片落位 wid=\(record.wid) 组换=\(settlesOnGroupChange)") }
         // ★★ 2026-10-23 用户裁定:「只针对默认选中的窗口,再加强幅度」+「时有时没有」。
         //   "时有时没有" = **时序问题**(靠 `async`/16ms 猜帧,猜中才动,没猜中就被合并成一帧)✗
         //   ⇒ 改成**自己按帧推**(与窗口淡入 `fadeInWindow` 同一套):每 8ms 一步,
@@ -731,7 +746,7 @@ private struct WindowThumb<Overlay: View>: View {
             landDim()
             // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
-            if settlesOnSwap { settleIn() } else { entrySettle = 1 }
+            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
@@ -766,6 +781,11 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: record.wid) { _, _ in
             landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
+        }
+        // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
+        .onChange(of: bundleID) { _, _ in
+            landDim()
+            if settlesOnGroupChange { settleIn() }
         }
     }
 
@@ -2069,13 +2089,31 @@ struct ChipRailGroup: View {
     /// 视口顶端的连续坐标
     @State private var viewPos: Int = 0
 
+    /// 轨道入场进度(1 = 到位)。待办第 3 条:跟着"第一次出现"的落位,**自下而上浮出**一次 ✓
+    @State private var railIn: CGFloat = 1
+
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
             card
             rail
+                // 只抬轨道:卡片自己有落位,两件事叠在一起会像"整块面板在飘" ✗
+                .offset(y: (1 - railIn) * 10)
+                .opacity(Double(railIn))
         }
-        .onAppear { selPos = selected; viewPos = selected }
+        .onAppear {
+            selPos = selected; viewPos = selected
+            playRailIn()
+        }
         .onChange(of: selected) { _, new in selPos = new }
+        // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
+        .onChange(of: bundleID) { _, _ in playRailIn() }
+    }
+
+    private func playRailIn() {
+        if isTraceEnabled { glog("[动效] 轨道浮出 bundle=\(bundleID ?? "-")") }
+        guard WindowLayout.current == .rail, PanelMotion.select != nil else { railIn = 1; return }
+        railIn = 0
+        withAnimation(.easeOut(duration: 0.26)) { railIn = 1 }
     }
 
     /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
