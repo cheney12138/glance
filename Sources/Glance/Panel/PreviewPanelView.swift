@@ -2228,6 +2228,12 @@ struct ChipRailGroup: View {
         .contentShape(Rectangle())
         // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
         // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
+        // ★★ 2026-10-26 用户:「不只是位移,芯片的移动也需要有选中放大的这种动效」⇒
+        //   选中的那枚**满格**、其余缩 3.5% —— 轨道宽是定值,放大只能做成"别人让开",
+        //   真放大到 >1 会被 .clipped() 切边 ✗。视觉上就是选中那枚"立起来" ✓
+        .scaleEffect(isOn ? 1 : 0.965)
+        // 入场/换组那一拍 scrollMotion 为 nil ⇒ 当拍落(不许从上一组的缩放里长出来)✓
+        .animation(scrollMotion, value: isOn)
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
