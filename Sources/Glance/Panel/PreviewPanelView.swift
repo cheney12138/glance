@@ -265,7 +265,14 @@ struct PreviewPanelView: View {
                               //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
                               //   ⇒ 摘掉:换窗 = 内容一帧直换、无任何动画;尺寸形变等"只对几何
                               //      生效的窄动画"(face 驱动)验证后再上,不再让动效沾内容 ✓
-                              .animation(PanelMotion.select == nil ? nil : .easeOut(duration: 0.42),
+                              // ★★ 2026-10-26 病例(用户:「从 Sublime 切到 IDEA 时会形变,然后从
+                              //   左下角出来」):`.animation(value: selBox)` 在**换组**那一拍也生效 ——
+                              //   换组时卡的位置/槽宽/图片全都变了 ⇒ 整张卡从上一组的几何**插值过去**
+                              //   = "从角落长出来" ✗。形变只属于**组内换窗**(尺寸真的不同那一拍);
+                              //   换组有自己的落位(`settlesOnGroupChange`),不许叠形变 ✓
+                              .animation(((controller.isRingSwapInFlight || controller.isContentSwapInFlight)
+                                          || PanelMotion.select == nil)
+                                         ? nil : .easeOut(duration: 0.42),
                                          value: selBox)
                               .onTapGesture { controller.cardTapped(localX: 0) }),
                           // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
