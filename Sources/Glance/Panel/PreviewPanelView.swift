@@ -2104,6 +2104,10 @@ struct ChipRailGroup: View {
 
     /// 轨道入场进度(1 = 到位)。待办第 3 条:跟着"第一次出现"的落位,**自下而上浮出**一次 ✓
     @State private var railIn: CGFloat = 1
+    /// 轨道滚动的动效(2026-10-26 用户:「把芯片轨道的动效也加一下,选中滚动的步长是 1」)
+    /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
+    /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
+    @State private var scrollMotion: Animation?
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2114,12 +2118,23 @@ struct ChipRailGroup: View {
                 .opacity(Double(railIn))
         }
         .onAppear {
-            selPos = selected; viewPos = selected
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
             playRailIn()
+            // 浮出(0.26s)落定之后再开滚动动画,免得开场变成"一边浮一边滚" ✗
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
         }
         .onChange(of: selected) { _, new in selPos = new }
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
-        .onChange(of: bundleID) { _, _ in playRailIn() }
+        .onChange(of: bundleID) { _, _ in
+            scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
+            playRailIn()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
+        }
     }
 
     private func playRailIn() {
@@ -2170,8 +2185,9 @@ struct ChipRailGroup: View {
         )
         .overlay(alignment: .top) { edgeBand(up: false) }
         .overlay(alignment: .bottom) { edgeBand(up: true) }
-        // ★ 2026-10-25:轨道式**无动效**(用户口径)—— 步进/卡高当拍落
-        .animation(nil, value: viewPos)
+        // 滚动:**一次一枚**(clampViewport 只挪最小距离)⇒ 0.22s easeOut ✓
+        // 卡高仍然是当拍落(换组时轨道不许"长"出来)✓
+        .animation(scrollMotion, value: viewPos)
         .animation(nil, value: railHeight)
         .onChange(of: selPos) { _, _ in clampViewport() }
         .onAppear { clampViewport() }
