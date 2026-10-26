@@ -61,6 +61,8 @@ final class PanelController: ObservableObject {
     /// 那 0.34s 里卡片仍画在**旧位置**上,而托盘窗已经会按新内容收窄 ⇒ 会被窗缘裁掉 ✗
     /// ⇒ 这一段暂时把托盘窗留大一点(窗口本身透明,留大不可见 ✓)
     var trayFrameHoldUntil: CFAbsoluteTime = 0
+    /// 上一次给托盘渲染的组(2026-10-26,换组残帧的判据)
+    var lastPreviewBundleID: String?
     var heldTrayFrame: NSRect?
 
     /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
@@ -305,6 +307,7 @@ final class PanelController: ObservableObject {
         //   ⇒ 新一局开始 = 冻结作废(上一局已经散场,没有任何东西还需要那个框)✓
         trayFrameHoldUntil = 0
         heldTrayFrame = nil
+        lastPreviewBundleID = nil      // 新一局第一拍也整窗重绘一次(窗是复用的)✓
         // ★ 连着快速 ⌘Tab:上一局那次"名单还没到"的确认还挂着 ⇒ **先兑现它**(一次按键 = 一次切换 ✓),
         //   否则那一发就白按了(用户实报的"偶尔换不起来"里有一部分就是这种叠加 ✓)
         if confirmBeforeList, listReady, !groups.isEmpty {

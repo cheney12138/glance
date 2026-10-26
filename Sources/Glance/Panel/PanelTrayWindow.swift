@@ -310,6 +310,19 @@ extension PanelController {
             }
         }
         __mark("setFrame")
+        // ★★ 2026-10-26 换组残帧(用户实报的"坏电视色块"):换到另一个 App 的那一拍,
+        //   窗口的 backing store 里还留着上一组的像素 ⇒ 闪一块彩色的乱码 ✗
+        //   ⇒ 换组就**强制整窗重绘**(影子和内容一起):这是最便宜、且不依赖"猜是哪一层的"做法 ✓
+        let thisBundle = currentGroup?.bundleID
+        if thisBundle != lastPreviewBundleID {
+            lastPreviewBundleID = thisBundle
+            previewPanel.invalidateShadow()
+            previewPanel.contentView?.needsDisplay = true
+            if isTraceEnabled {
+                glog("[残帧] 换组 ⇒ 整窗重绘 bundle=\(thisBundle ?? "-") "
+                     + "窗=\(Int(previewPanel.frame.width))x\(Int(previewPanel.frame.height))")
+            }
+        }
         // ★★ 2026-09-21 真凶(分段计时抓到):`orderFrontRegardless()` 在**每次 hover 更新**都被调用 ✗
         //   ⇒ AppKit 窗口排序 4–35ms/次 ✗(日志:[工] 托盘分段 … **orderFront 34.8**)。
         //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套
