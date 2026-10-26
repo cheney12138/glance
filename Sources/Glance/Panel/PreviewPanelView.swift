@@ -413,6 +413,7 @@ struct PreviewPanelView: View {
             // 病根:单窗组走 row 网格,onAppear 每次换组都落位 ✗
             settlesOnSwap: WindowLayout.current == .row,
             settlesOnGroupChange: settlesOnGroupChange,
+            chipEntersFromRight: windows.count == 1,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -564,6 +565,11 @@ private struct WindowThumb<Overlay: View>: View {
     ///   才有落位动画;组内换窗没有任何落位」⇒ 轨道版式传 true(只认 bundleID 变化),
     ///   row 版式保持 false(它走 `settlesOnSwap` 那条既有路径)✓
     var settlesOnGroupChange: Bool = false
+    /// ★ 2026-10-26 用户:「多窗口的时候芯片有渐入登场的效果,单窗口没有 ⇒ 单窗口也从右边入场」
+    ///   —— 只给**单窗口**那一局(那时芯片是卡片底下唯一的一枚,入场才看得出来)✓
+    var chipEntersFromRight: Bool = false
+    /// 芯片入场进度(1 = 到位)
+    @State private var chipIn: CGFloat = 1
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -746,7 +752,11 @@ private struct WindowThumb<Overlay: View>: View {
         // (用户口径:"不跟预览窗耦合" —— 所以选中态的各种形变不会拖着芯片一起动)
         VStack(spacing: PanelMetrics.chipGap) {
             card
-            if showsChip { chip }
+            if showsChip {
+                chip
+                    .offset(x: chipEntersFromRight ? (1 - chipIn) * 12 : 0)
+                    .opacity(chipEntersFromRight ? Double(chipIn) : 1)
+            }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
         // ★★ 2026-10-26 病例(用户:「是不是没相对居中呀,卡片」):轨道版式 `showsChip = false`,
@@ -762,6 +772,11 @@ private struct WindowThumb<Overlay: View>: View {
             // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
+            // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
+            if chipEntersFromRight, PanelMotion.select != nil {
+                chipIn = 0
+                withAnimation(.easeOut(duration: 0.24)) { chipIn = 1 }
+            }
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
