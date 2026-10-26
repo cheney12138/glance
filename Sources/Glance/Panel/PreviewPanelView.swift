@@ -759,7 +759,9 @@ private struct WindowThumb<Overlay: View>: View {
             card
             if showsChip {
                 chip
-                    .offset(x: chipEntersFromRight ? (1 - chipIn) * 12 : 0)
+                    // ★ 2026-10-26 用户改口径:「从右入场不好, 也跟芯片轨道一样, 看起来是上浮」
+                    //   ⇒ 与轨道浮出同一套语言:自下而上 8pt + 渐显 ✓
+                    .offset(y: chipEntersFromRight ? (1 - chipIn) * 8 : 0)
                     .opacity(chipEntersFromRight ? Double(chipIn) : 1)
             }
         }
@@ -780,7 +782,7 @@ private struct WindowThumb<Overlay: View>: View {
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
             if chipEntersFromRight, PanelMotion.select != nil {
                 chipIn = 0
-                withAnimation(.easeOut(duration: 0.24)) { chipIn = 1 }
+                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
             }
         }
         .onChange(of: selected) { _, _ in
@@ -816,6 +818,15 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: record.wid) { _, _ in
             landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
+        }
+        // 每开一局(令牌 +1):重播"落位 + 单窗芯片上浮" —— **只认它**,
+        // 因为面板窗口常驻,同一个组再次唤起时 onAppear / bundleID 都不会响 ✗
+        .onChange(of: entryTick) { _, _ in
+            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
+            if chipEntersFromRight, PanelMotion.select != nil {
+                chipIn = 0
+                withAnimation(.easeOut(duration: 0.26)) { chipIn = 1 }
+            }
         }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
         .onChange(of: bundleID) { _, _ in
