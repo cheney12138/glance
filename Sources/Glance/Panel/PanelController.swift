@@ -78,6 +78,12 @@ final class PanelController: ObservableObject {
     var isContentSwapInFlight: Bool { CFAbsoluteTimeGetCurrent() < contentSwapUntil }
     @Published var winIndex = 0
     @Published private(set) var isVisible = false
+    /// **入场令牌**:每开一局 +1(2026-10-26)。
+    /// 为什么需要它(用户:「一样的操作, 入场动画不是稳定出现」):入场动效原来挂在
+    /// `onAppear` / `onChange(bundleID)` 上 —— 面板窗口是常驻的,同一个 App 组再唤起时
+    /// 视图实例没变、`onAppear` 不再触发;`bundleID` 也没变 ⇒ 动画就"有时播有时不播" ✗
+    /// ⇒ 入场统一认这个令牌 ✓
+    @Published private(set) var entryTick = 0
     /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)
     private var sessionBaseline: SessionSnapshot?
     /// 本局查过几次(防呆:不变量一旦违反会**每拍都报** ⇒ 只报第一次,免得刷屏 ✗)
@@ -281,6 +287,7 @@ final class PanelController: ObservableObject {
     // MARK: - 生命周期
 
     private func begin(reverse: Bool) {
+        entryTick &+= 1
         // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
         //   上一局散场时,轨道样式会 `holdTrayFrame(0.5)`(冻住窗框,免得"先缩小再消失")✗
         //   若用户在 0.5s 内又唤起,`trayFrame()` 仍返回**上一局那个冻住的框** ⇒

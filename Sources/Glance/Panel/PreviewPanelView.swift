@@ -284,7 +284,8 @@ struct PreviewPanelView: View {
                           // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
                           railHeight: slotH,
                           onSelect: { controller.hoverWindow($0) },
-                          onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) })
+                          onTap: { i in controller.hoverWindow(i); controller.cardTapped(localX: 0) },
+                          entryTick: controller.entryTick)
         } else {
             cardRowGrid
         }
@@ -415,6 +416,7 @@ struct PreviewPanelView: View {
             settlesOnSwap: WindowLayout.current == .row,
             settlesOnGroupChange: settlesOnGroupChange,
             chipEntersFromRight: windows.count == 1,
+            entryTick: controller.entryTick,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -571,6 +573,8 @@ private struct WindowThumb<Overlay: View>: View {
     var chipEntersFromRight: Bool = false
     /// 芯片入场进度(1 = 到位)
     @State private var chipIn: CGFloat = 1
+    /// 入场令牌(每开一局 +1;见 `PanelController.entryTick`)—— 入场动效**只认它** ✓
+    var entryTick: Int = 0
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -2122,6 +2126,8 @@ struct ChipRailGroup: View {
     let onSelect: (Int) -> Void
     /// 点芯片 = 选中并确认
     let onTap: (Int) -> Void
+    /// 入场令牌(每开一局 +1)⇒ 同一个 App 组再次唤起也重播浮出 ✓
+    var entryTick: Int = 0
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
@@ -2162,6 +2168,13 @@ struct ChipRailGroup: View {
         }
         .onChange(of: selected) { _, new in selPos = new }
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
+        .onChange(of: entryTick) { _, _ in
+            scrollMotion = nil
+            playRailIn()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
+        }
         .onChange(of: bundleID) { _, _ in
             scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
             playRailIn()
