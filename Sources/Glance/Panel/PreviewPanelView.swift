@@ -697,12 +697,6 @@ private struct WindowThumb<Overlay: View>: View {
         PanelLayout.title(WindowTitle.display(raw: record.title, bundleID: bundleID))
     }
 
-    /// 形变的**基准尺寸**(2026-10-26 用户:「卡片尺寸变化时,内容也跟着压缩/拉扯,
-    /// 这时不需要可见性,只求过渡丝滑」):组内换窗尺寸变了 ⇒ 把内容按**旧尺寸**排一次,
-    /// 再用 `scaleEffect` **等比拉到新尺寸** —— 变换不会像布局那样"露一条底色" ✓
-    @State private var morphRef: CGSize = .zero
-    private var refBox: CGSize { morphRef == .zero ? box : morphRef }
-
     /// 本卡的宽度:随窗比例自适应(T88,见 `PanelMetrics.thumbWidth`)。
     /// 卡片、模糊层、芯片、文字截断宽全走这一个值 —— 一卡一宽,不许各算各的。
     /// 优先用**截图自己的比例**:透明衬边裁切(T88 v2)后内容会比窗框瘦一圈,
@@ -801,11 +795,6 @@ private struct WindowThumb<Overlay: View>: View {
             landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
         }
-        // 形变的基准 = 换窗前的尺寸;0.5s 后归零(回到"按当前尺寸原样排" ⇒ 不长期重采样)✓
-        .onChange(of: box) { old, _ in
-            morphRef = old
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { morphRef = .zero }
-        }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
         .onChange(of: bundleID) { _, _ in
             landDim()
@@ -899,12 +888,7 @@ private struct WindowThumb<Overlay: View>: View {
                     //   缝里看到的永远是卡片自己的内容 ✓
                     // 向外多画 3pt(不是 1pt):除了盖图层缝,**还把窗口截图自带的 1px 白边挤到卡片外**
                     //   (用户:「白边也不要了」—— 那圈 1px 近白 (216,219,222) 量过,正是截图边缘)
-                    .frame(width: refBox.width + 6, height: refBox.height + 6)
-                    // 拉到当前卡面(变换而不是布局 ⇒ 任何中间帧都是满的,不会露底色)✓
-                    .scaleEffect(x: (box.width + 6) / (refBox.width + 6),
-                                 y: (box.height + 6) / (refBox.height + 6))
                     .frame(width: box.width + 6, height: box.height + 6)
-                    .clipped()
             } else {
                 // ★ 静默态(2026-09-21 定版):**该窗所属 App 的淡图标**。
                 //   为什么不是深色块:用户实报"像没加载出来/黑窗" ✗;为什么不是"截图中…":那是 loading 文案 ✗。
