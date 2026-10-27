@@ -1259,6 +1259,10 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     private var gen = 0
     private var startedAt: [CGWindowID: CFAbsoluteTime] = [:]
     private var firstFrameLogged: Set<CGWindowID> = []
+    /// 只为"首帧色彩空间"那条日志限次(避免每帧刷屏)✓
+    private var firstFramesHandled = 0
+    /// 每条流已收到的帧数(丢掉起流初期的 2 帧:那两帧亮度会跳 ~8%)
+    private var framesSeen: [CGWindowID: Int] = [:]
     /// 起流时冻结的**像素规格**。⚠️ 只写不清是不行的(2026-09-21 病例):
     /// 它是按"当时那块屏"的像素尺寸算的 ⇒ 接拔外接屏/改分辨率后**全部过期** ✗
     /// ⇒ 见 `screenConfigChanged()`:显示配置一变,整本作废 ✓
@@ -1623,6 +1627,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         Task { try? await h.stream.stopCapture() }
         activeGens.remove(h.gen)
         handles[wid] = nil; startedAt[wid] = nil; firstFrameLogged.remove(wid); idleSince[wid] = nil
+        framesSeen[wid] = nil
         glog("[直播] 停流 wid=\(wid)(\(why))")
     }
 
@@ -1814,9 +1819,24 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   SCK 的帧**有时带 sRGB 标签、有时不带**(日志里两种都出现过)⇒ 不带的那条会被
         //   合成器按显示器空间直出,与静帧/带标签的帧都不一样 ⇒ 切源时亮度跳。
         //   这里给**没标签的**补上 sRGB(只改标签、不动像素;SCK 的缓冲本来就是 sRGB ✓)
-        let tagged: CGImage = img.colorSpace == nil
-            ? (CGColorSpace(name: CGColorSpace.sRGB).flatMap { img.copy(colorSpace: $0) } ?? img)
-            : img
+        // ★★ 2026-10-27(用户:「snapshot → live 的闪动更明显了」,60fps 逐帧量:
+        //   卡片同一行亮度 30.3 → **32.7(整整 2 帧)** → 30.2 ⇒ 一次 ~8% 的 33ms 闪):
+        //   上一版只给"**没有**色彩空间标签"的帧补 sRGB;而这批帧**有时带 P3、有时带 sRGB**
+        //   (SCK 输出不稳定) ⇒ 带 P3 标签的那一两帧被按 P3 解释 ⇒ 亮度/颜色偏 ⇒ 闪 ✗
+        //   ⇒ **一律统一到 sRGB**(只改标签,不动像素;我们的缓冲本来就是 sRGB),
+        //     顺便把前 3 帧实际带的色彩空间打进日志,便于复核 ✓
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB)
+        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB, firstFramesHandled < 3 {
+            firstFramesHandled += 1
+            glog("[直播] 首帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 统一按 sRGB 解释 wid=\(wid)")
+        }
+        let tagged: CGImage = (img.colorSpace?.name == CGColorSpace.sRGB || srgb == nil)
+            ? img
+            : (srgb.flatMap { img.copy(colorSpace: $0) } ?? img)
+        // ★★ 2026-10-27:**丢掉每条流的前 2 帧**(实测那两帧亮度 +8%、之后立刻回到与静帧一致):
+        //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
+        framesSeen[wid, default: 0] += 1
+        if framesSeen[wid, default: 0] <= 2 { return }
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
