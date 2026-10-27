@@ -1837,6 +1837,8 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
         framesSeen[wid, default: 0] += 1
         if framesSeen[wid, default: 0] <= 2 { return }
+        // 🔬 二分开关:`debug.noLive` ⇒ 丢掉所有实时帧(只留静帧)
+        if DebugFlags.noLive { return }
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
