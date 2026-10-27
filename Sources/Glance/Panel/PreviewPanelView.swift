@@ -801,7 +801,6 @@ private struct WindowThumb<Overlay: View>: View {
                     let p = chipFloatProgress(at: ctx.date)
                     chip
                         .offset(y: chipEntersFromRight ? (1 - p) * 8 : 0)
-                        .opacity(chipEntersFromRight ? Double(p) : 1)
                 }
             }
         }
@@ -2179,6 +2178,22 @@ final class CardImageCache {
 ///   · **无极**:芯片渲染三份、视口停在中间那份 ⇒ 走到最后继续走就是接着滚第一枚,
 ///     不会反向跳(用户:「第 6 个再滚一次就回到第 1 个」)
 ///   · 遮罩**有方向**:上面还有内容才渐隐顶部,下面还有内容才渐隐底部;装得下 ⇒ 两侧都不糊
+/// 🔬 临时探针(2026-10-27):把浮出期间**每一帧的真实间隔**记下来,
+/// 浮完打一行 —— 用来判定"是 SwiftUI 没被驱动(间隔>20ms)",还是"画了但合成丢帧"。
+final class FloatProbe {
+    var last: CFTimeInterval?
+    var dts: [Double] = []
+    func tick(_ t: CFTimeInterval) {
+        if let l = last, l > 0 { dts.append((t - l) * 1000) }
+        last = t
+    }
+    func drain() -> String {
+        let s = dts.map { String(format: "%.0f", $0) }.joined(separator: ",")
+        dts.removeAll(); last = nil
+        return s
+    }
+}
+
 struct ChipRailGroup: View {
     /// 探针计时起点(临时)
     static var probeT0: CFAbsoluteTime = 0
@@ -2221,6 +2236,7 @@ struct ChipRailGroup: View {
     /// 轨道"自下而上浮出"的起始时刻(nil = 没在浮)
     /// —— 由 `TimelineView(.animation)` 逐帧求值,不经过任何状态发布 ✓
     @State private var railFloatStart: Date?
+    private let floatProbe = FloatProbe()
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2234,10 +2250,16 @@ struct ChipRailGroup: View {
             //   `.animation` 默认就是**跟着显示器刷新**走 ✓
             TimelineView(.animation(paused: railFloatStart == nil)) { ctx in
                 let p = railFloatProgress(at: ctx.date)
+                let _ = { if railFloatStart != nil, isTraceEnabled {
+                    floatProbe.tick(CACurrentMediaTime())
+                } }()
                 rail
                     // 只抬轨道:卡片自己有落位,叠在一起会像"整块面板在飘" ✗
+                    // ★☆ 2026-10-27 实验:浮出**只做位移,不做透明度**
+                    //   —— 探针证明驱动端是稳的 60Hz(帧间隔 ~16ms,无 >20ms 缺口),
+                    //   那掉帧只能发生在**合成**这一侧:托盘是一扇带毛玻璃的窗,
+                    //   每帧改它的 alpha 要整窗重新混合一次背景 ✗ ⇒ 先把 alpha 去掉试 ✓
                     .offset(y: (1 - p) * 10)
-                    .opacity(Double(p))
             }
         }
         // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
@@ -2309,8 +2331,17 @@ struct ChipRailGroup: View {
 
     /// 起一次浮出:记下起点,0.3s 后停表(`TimelineView` 随之 paused)
     private func startRailFloat() {
+        floatProbe.dts.removeAll(); floatProbe.last = nil
         railFloatStart = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { railFloatStart = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+            railFloatStart = nil
+            if isTraceEnabled {
+                let d = floatProbe.drain()
+                let arr = d.split(separator: ",").compactMap { Double($0) }
+                let over = arr.filter { $0 > 20 }.count
+                glog("[浮出帧] n=\(arr.count) 超20ms=\(over) 帧间隔=\(d)")
+            }
+        }
     }
 
     /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
