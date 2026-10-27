@@ -1825,14 +1825,26 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   (SCK 输出不稳定) ⇒ 带 P3 标签的那一两帧被按 P3 解释 ⇒ 亮度/颜色偏 ⇒ 闪 ✗
         //   ⇒ **一律统一到 sRGB**(只改标签,不动像素;我们的缓冲本来就是 sRGB),
         //     顺便把前 3 帧实际带的色彩空间打进日志,便于复核 ✓
-        let srgb = CGColorSpace(name: CGColorSpace.sRGB)
-        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB, firstFramesHandled < 3 {
-            firstFramesHandled += 1
-            glog("[直播] 首帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 统一按 sRGB 解释 wid=\(wid)")
+        // ★★ 2026-10-27 第二版(用户:「还是一样的闪」):
+        //   上一版只是 `copy(colorSpace:)` —— 那是**改标签**而不是转换像素 ✗
+        //   如果帧本来是按 P3 出的像素,贴个 sRGB 标签只会被解释成"更艳/更亮" ✗
+        //   ⇒ 现在按 `CardImageCache` 那条老规矩:**真的重绘进 sRGB 位图**(一次色彩转换)✓
+        //   成本:536×292 一次 draw ≈1–2ms,跑在池队列上(20fps ⇒ 可忽略)✓
+        var tagged: CGImage = img
+        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB,
+           let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
+            let w = img.width, h = img.height
+            if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
+                ctx.interpolationQuality = .none
+                ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+                if let out = ctx.makeImage() { tagged = out }
+            }
+            if firstFramesHandled < 3 {
+                firstFramesHandled += 1
+                glog("[直播] 帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 已转换到 sRGB wid=\(wid)")
+            }
         }
-        let tagged: CGImage = (img.colorSpace?.name == CGColorSpace.sRGB || srgb == nil)
-            ? img
-            : (srgb.flatMap { img.copy(colorSpace: $0) } ?? img)
         // ★★ 2026-10-27:**丢掉每条流的前 2 帧**(实测那两帧亮度 +8%、之后立刻回到与静帧一致):
         //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
         framesSeen[wid, default: 0] += 1

@@ -268,7 +268,16 @@ extension PanelController {
                 // 选中的那一扇按用户档位,其余 5fps(成本 = 1×档位 + (N-1)×5fps)
             let sel = currentGroup?.windows.indices.contains(winIndex) == true
                 ? currentGroup?.windows[winIndex].wid : nil
-            LivePreviewPool.shared.sync(items, selected: sel)
+            // ★★ 2026-10-27(用户:「做了这个功能之后 snapshot → live 的闪动更明显了」):
+            //   ⌘` 的"只有窗口"那一局**只用静帧、不起直播流** ——
+            //   二分已证明闪来自实时层(关掉实时帧 ⇒ 闪消失),
+            //   而这种局只活几百毫秒、用户就是瞄一眼再松手选窗,直播的收益为 0 ✓
+            //   Q:为什么不在全局关掉?—— ⌘Tab 那一局时间长、看着像"活窗口",那边保留直播 ✓
+            if windowsOnly {
+                LivePreviewPool.shared.stopAll(reason: "窗口局只用静帧")
+            } else {
+                LivePreviewPool.shared.sync(items, selected: sel)
+            }
             }
         } else {
             LivePreviewPool.shared.stopAll(reason: "入口槽选中(启停生活动)")
