@@ -76,6 +76,8 @@ final class PanelController: ObservableObject {
     /// 托盘**允许上屏**的时刻:开局后这段时间内保持 alpha 0 ——
     /// 否则会先看到"上一局那一帧"(托盘窗复用,后备存储里还是旧画面)✓
     var trayRevealAt: CFAbsoluteTime = 0
+    /// 本局"托盘等图"的起算时刻(用于 0.4s 上限,防止永远等不到图)✓
+    var trayGateStartAt: CFAbsoluteTime = 0
     var heldTrayFrame: NSRect?
 
     /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
@@ -337,6 +339,7 @@ final class PanelController: ObservableObject {
     func beginWindows(reverse: Bool) -> Bool {
         // 窗口局:托盘要多等一会儿(卡片图到齐)✓
         trayRevealAt = CFAbsoluteTimeGetCurrent() + 0.14
+        trayGateStartAt = CFAbsoluteTimeGetCurrent()
         // ★★★ 2026-10-27 用户:「焦点不在内键屏也能唤起整个面板,但 ⌘` 唤不起窗口 —— 应该跟面板
         //   保持一样的唤起逻辑:**鼠标在哪就唤起哪个屏幕、台前的第一个应用**,不管它有没有焦点」
         //   上一版错在拿**全局前台 App**(`frontmostApplication`):内键屏上 IDEA 在最前面、
@@ -364,6 +367,7 @@ final class PanelController: ObservableObject {
         //     加延迟只是让面板更晚出现,白挨一次体感 ✗
         //   ⇒ 常规会话恢复**当拍显示**(0);窗口局仍然是 140ms(那条已验证有效 ✓)
         trayRevealAt = 0
+        trayGateStartAt = CFAbsoluteTimeGetCurrent()
         entryTick &+= 1
         // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
         //   上一局散场时,轨道样式会 `holdTrayFrame(0.5)`(冻住窗框,免得"先缩小再消失")✗

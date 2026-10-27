@@ -315,23 +315,30 @@ extension PanelController {
         //   而第一帧的画面是**一层浅灰玻璃、没有内容**):窗口先上屏、内容后画 = 老"白光" ✗
         //   常规会话靠 `entryFade`(SwiftUI 侧渐入)遮住这一拍;窗口局的托盘没走那条 ⇒ 漏了 ✓
         //   ⇒ 窗口局:托盘自己按 ~90ms 从 0 淡到 1(与"画完再显"同一条纪律)✓
-        // ★★★ 2026-10-27 第四次(用户:「⌘Tab 也会闪,闪的那一下是**出现了之前的画面**」):
-        //   托盘窗是**复用**的 ⇒ 上屏那一刻 WindowServer 里还留着**上一局那一帧**的位图 ✗
-        //   SwiftUI 的 `entryFade` 只能盖住"新内容",盖不住"还没被替换掉的旧位图" ✗
-        //   ⇒ **所有会话**统一走时间闸:开局后 `trayRevealAt` 之前保持 alpha 0,
-        //     到点再显示(此时后备存储已经是新内容)✓
-        //     窗口局 140ms(等卡片图),常规会话 60ms(内容本来就到得快)
-        let w = previewPanel
-        let reveal = trayRevealAt
-        let now = CFAbsoluteTimeGetCurrent()
-        if now < reveal {
-            w.alphaValue = 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, reveal - now + 0.01)) {
-                guard self.isVisible else { return }
-                w.alphaValue = 1
-            }
+        // ★★★ 2026-10-27 第五版(用户:「旧帧/白光又回来了」;固定时长会"迟钝且没修复"):
+        //   **内容就绪**才显示托盘,而不是等一个固定时间 ——
+        //   卡片还没拿到图时,那层灰玻璃就是用户看到的"空/旧"画面 ✗
+        //   ⇒ 选中的那扇窗**有图**(静帧缓存 或 已到的实时帧)才 alpha 1;
+        //     没图就继续 alpha 0,并且 ~16ms 后再自检一次,最多等 ~0.4s(防卡死)✓
+        let selWid: CGWindowID? = {
+            guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
+            return g.windows[winIndex].wid
+        }()
+        let hasImage: Bool = {
+            guard let wid = selWid else { return true }
+            if Snapshotter.shared.cache[wid] != nil { return true }
+            if LivePreviewPool.shared.box(for: wid).image != nil { return true }
+            return false
+        }()
+        let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
+        if hasImage || waited > 0.4 {
+            previewPanel.alphaValue = 1
         } else {
-            w.alphaValue = 1
+            previewPanel.alphaValue = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                guard let self, self.isVisible else { return }
+                self.updatePreview()
+            }
         }
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
