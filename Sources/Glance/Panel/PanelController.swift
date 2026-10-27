@@ -359,8 +359,10 @@ final class PanelController: ObservableObject {
 
 
     private func begin(reverse: Bool) {
-        // 常规会话:60ms 足够让新内容画进后备存储(窗口局会在 `beginWindows` 里改成 140ms)
-        trayRevealAt = CFAbsoluteTimeGetCurrent() + 0.06
+        // ★★ 2026-10-27(用户澄清:「白光没了」靠的是**时间闸**,不是去掉直播流):
+        //   常规会话同样用 **140ms**(与窗口局同一个数)——
+        //   60ms 时卡片图/玻璃还没画完,那一下"空玻璃"照样会被看见 ✗
+        trayRevealAt = CFAbsoluteTimeGetCurrent() + 0.14
         entryTick &+= 1
         // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
         //   上一局散场时,轨道样式会 `holdTrayFrame(0.5)`(冻住窗框,免得"先缩小再消失")✗
