@@ -324,10 +324,15 @@ extension PanelController {
             guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
             return g.windows[winIndex].wid
         }()
+        // ★★ 2026-10-27(用户:「不白了, 但会在上一个画面和 live 之间切换」):
+        //   开直播时,若先显示**静帧**(可能是几分钟前的画面)、再叠化到 live,
+        //   看得到的不是"闪"而是"画面跳了一下" ✗
+        //   ⇒ 开直播时,选中卡**等 live 第一帧**再显示托盘(静帧只在等不到时兜底)✓
+        let liveEnabled = LivePreviewPool.enabled
         let hasImage: Bool = {
             guard let wid = selWid else { return true }
-            if Snapshotter.shared.cache[wid] != nil { return true }
-            if LivePreviewPool.shared.box(for: wid).image != nil { return true }
+            if liveEnabled, LivePreviewPool.shared.box(for: wid).image != nil { return true }
+            if !liveEnabled, Snapshotter.shared.cache[wid] != nil { return true }
             return false
         }()
         let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
