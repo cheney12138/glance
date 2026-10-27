@@ -303,7 +303,8 @@ struct PreviewPanelView: View {
                           //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
                           onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
                           entryTick: controller.entryTick,
-                          entryFloat: controller.entryFloat)
+                          entryFloat: controller.entryFloat,
+                          visible: controller.isVisible)
         } else {
             cardRowGrid
         }
@@ -596,6 +597,8 @@ private struct WindowThumb<Overlay: View>: View {
     var entryTick: Int = 0
     /// 入场进度(独立小对象 ⇒ 每拍只重绘用到它的小块,不再拖整块面板)✓
     @ObservedObject var entryFloat: EntryFloatModel
+    /// 面板是否可见(同轨道那条理由:常驻视图不会 onAppear)✓
+    var visible: Bool = false
     /// 单窗芯片浮出的起始时刻(由 `TimelineView(.animation)` 求值,不经状态发布 ✓)
     @State private var chipFloatStart: Date?
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
@@ -859,6 +862,9 @@ private struct WindowThumb<Overlay: View>: View {
         .onChange(of: record.wid) { _, _ in
             landDim()
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
+        }
+        .onChange(of: visible) { _, v in
+            if v { startChipFloat() }
         }
         // 每开一局(令牌 +1):重播"落位 + 单窗芯片上浮" —— **只认它**,
         // 因为面板窗口常驻,同一个组再次唤起时 onAppear / bundleID 都不会响 ✗
@@ -2192,6 +2198,9 @@ struct ChipRailGroup: View {
     var entryTick: Int = 0
     /// 入场进度(独立小对象,见 `EntryFloatModel`)✓
     @ObservedObject var entryFloat: EntryFloatModel
+    /// 面板是否可见 —— **常驻视图不会 `onAppear`**,而隐藏期间的 `entryTick` 变化可能根本没被求值
+    /// ⇒ 入场浮出也要认"从隐藏变可见"这一拍 ✓
+    var visible: Bool = false
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
@@ -2274,6 +2283,9 @@ struct ChipRailGroup: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
+        }
+        .onChange(of: visible) { _, v in
+            if v { startRailFloat() }     // 面板刚上屏 ⇒ 浮一次 ✓
         }
         .onChange(of: bundleID) { _, _ in
             startRailFloat()              // 换组 = 再浮一次 ✓
