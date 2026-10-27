@@ -67,6 +67,9 @@ final class PanelController: ObservableObject {
     var trayFrameHoldUntil: CFAbsoluteTime = 0
     /// 上一次给托盘渲染的组(2026-10-26,换组残帧的判据)
     var lastPreviewBundleID: String?
+    /// ⌘` 的"只有窗口"会话(2026-10-27):不显示环(长条),只上屏托盘;
+    /// 组名单只留**当前前台 App** 那一组 ⇒ 托盘里就是这个 App 的窗口(轨道或卡片行)✓
+    var windowsOnly = false
     var heldTrayFrame: NSRect?
 
     /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
@@ -303,6 +306,14 @@ final class PanelController: ObservableObject {
 
     // MARK: - 生命周期
 
+    /// ⌘` 新语义的入口:唤醒"只有窗口"的一局(没有环)
+    /// · 默认**先切一扇**(预览下一次切换),松手才真正切窗(确认在触发层:松 ⌘ ⇒ `.confirm`)
+    /// · Esc / 点空白 ⇒ 放弃(既有路径)
+    func beginWindows(reverse: Bool) {
+        windowsOnly = true
+        begin(reverse: reverse)
+    }
+
     private func begin(reverse: Bool) {
         entryTick &+= 1
         // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
@@ -433,6 +444,19 @@ final class PanelController: ObservableObject {
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        if windowsOnly {
+            // 只保留**前台 App**那一组 ⇒ 托盘里就是这个 App 的窗口
+            let frontPID = WindowEnumerator.recentlyActivePID(of: Set(groups.map(\.pid)))
+            if let pid = frontPID, let idx = groups.firstIndex(where: { $0.pid == pid }) {
+                let g = groups[idx]
+                groups = [g]
+                if isTraceEnabled {
+                    glog("[窗口局] 只留前台 App: \(g.appName) · \(g.windows.count) 扇窗")
+                }
+            } else if groups.count > 1 {
+                groups = [groups[0]]
+            }
+        }
         SessionMarks.step("顺序")     // 🔬 细账(2026-10-09):拆"落点"这一段
         // 记下这份名单(和它属于哪块屏):下一局唤起要靠它先上屏 ✓
         lastSessionGroups = groups
@@ -530,6 +554,11 @@ final class PanelController: ObservableObject {
             trace("[T6] 落点顺序 [\(groups.map(\.appName).joined(separator: " | "))]")
         }
         winIndex = 0
+        if windowsOnly, let g = groups.first, g.windows.count > 1 {
+            // 默认**先切一扇**:正向 = 第 2 扇(MRU 里第 1 扇是当前窗),反向 = 最后一扇 ✓
+            winIndex = reverse ? g.windows.count - 1 : 1
+            trace("[窗口局] 默认落点 [\(winIndex + 1)/\(g.windows.count)] \(g.windows[winIndex].title)")
+        }
         // ★ 上一发"手已经松了、名单还没到"的确认 ⇒ **就在这里兑现**(一次按键 = 一次切换 ✓)。
         //   放在预截/建窗**之前**:这一局的目的已经达成,不必再开面板、也不必白拍一批图 ✓
         if confirmBeforeList {
@@ -1009,7 +1038,12 @@ final class PanelController: ObservableObject {
             // ★ 入场渐入 = **窗口 alpha**(不是内容 opacity,见 PanelView 那条病例)
             //   ⚠️ 不要用 `NSAnimationContext + animator()`:对这扇无边框窗口**根本不跑**
             //      (实测:加完就"闪现"出来,没有任何渐入 ✗)⇒ 自己按 ~8ms 一步推过去 ✓
-            if self?.summonFadeEnabled == true {
+            if self?.windowsOnly == true {
+                // ⌘` 的"只有窗口"那一局:**不上屏环**(长条整块不出现)⇒ 一直 alpha 0 ✓
+                // 托盘照常上屏(它是另一个窗口,位置本来就按环的几何算 ⇒ 不会跳)✓
+                panel.alphaValue = 0
+                panel.ignoresMouseEvents = true
+            } else if self?.summonFadeEnabled == true {
                 self?.fadeInWindow(panel)
             } else {
                 panel.alphaValue = 1
@@ -1188,6 +1222,8 @@ final class PanelController: ObservableObject {
 
     func dismiss(reason: String) {
         hintWork?.cancel(); hintWork = nil; hintText = nil
+        // ⌘` 的"只有窗口"会话结束 ⇒ 复位(下一局按常规显示环)✓
+        windowsOnly = false
         idleWork?.cancel()   // 散场就把表撤掉(免得迟到的那一发对着已关的面板说话)
         idleWork = nil
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——

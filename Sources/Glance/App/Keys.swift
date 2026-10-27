@@ -272,5 +272,8 @@ enum KeyDefaults {
     static let moveFillMinRatio: Double = 50
     /// 接管系统 ⌘Tab / ⌘`。**关**:抢系统快捷键必须先问(ADR-0005)⇒ 出厂不许默认抢 ✓
     static let takeoverSystemSwitcher = false
-    static let takeoverGraveCyclesWindows = false
+    /// ⌘` —— **开**(2026-10-27 用户裁定:把它改成"唤起只有窗口的一局",不再保留系统那条)。
+    /// 语义:按 ⌘` ⇒ 托盘/芯片轨道出现(没有环)、默认先切一扇;松手才真正切窗;
+    ///       Esc / 点空白 = 放弃。⇧⌘` 反向。
+    static let takeoverGraveCyclesWindows = true
 }

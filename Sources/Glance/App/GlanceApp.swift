@@ -112,6 +112,11 @@ struct GlanceApp: App {
                     hotkeys.onRaisePreview = { forward in
                         Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
                     }
+                    // ⌘` 新语义(2026-10-27):唤起"只有窗口"的一局(托盘 / 芯片轨道,**没有环**),
+                    // 默认先切一扇;松手才真正切窗(确认由触发层的 `.confirm` 发下来)✓
+                    hotkeys.onWindowsSession = { [weak panelController] forward in
+                        panelController?.beginWindows(reverse: !forward)
+                    }
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
                     // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
