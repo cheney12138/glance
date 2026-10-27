@@ -1830,27 +1830,33 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   如果帧本来是按 P3 出的像素,贴个 sRGB 标签只会被解释成"更艳/更亮" ✗
         //   ⇒ 现在按 `CardImageCache` 那条老规矩:**真的重绘进 sRGB 位图**(一次色彩转换)✓
         //   成本:536×292 一次 draw ≈1–2ms,跑在池队列上(20fps ⇒ 可忽略)✓
+        // ★★★ 2026-10-27(探针实测,终于有硬数字了):
+        //   实时帧 **α=1.000(不透明)**,但**比静帧暗 12%**(live 0.268 vs 静帧 0.303,比 0.884,
+        //   前 10 帧恒定)⇒ 用户看到的就是"snapshot → live 那一下整体变暗" ✓
+        //   原因:静帧在 `CardImageCache` 里被**重绘进 sRGB**(一次真色彩转换),
+        //   而实时帧只在"带了非 sRGB 标签"时才转换 —— nil 标签的帧直接按器件空间解释 ⇒ 偏暗 ✗
+        //   ⇒ **一律重绘进 sRGB**,与静帧同一把尺子 ✓(536×292 一次 draw ≈1–2ms,20fps 可忽略)
+        // ★ 源色空间:帧有标签就用它;没有则按**显示器**的色空间解释(SCK 的缓冲本就是显示器空间),
+        //   再一路转换到 sRGB —— 与静帧(也是从显示器空间转到 sRGB)同一把尺子 ✓
+        var src = img
+        if img.colorSpace == nil, let displaySpace = NSScreen.main?.colorSpace?.cgColorSpace,
+           let retagged = img.copy(colorSpace: displaySpace) {
+            src = retagged
+        }
         var tagged: CGImage = img
-        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB,
-           let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
+        if let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
             let w = img.width, h = img.height
             if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                    space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
                 ctx.interpolationQuality = .none
-                ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+                ctx.draw(src, in: CGRect(x: 0, y: 0, width: w, height: h))
                 if let out = ctx.makeImage() { tagged = out }
             }
             if firstFramesHandled < 3 {
                 firstFramesHandled += 1
-                glog("[直播] 帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 已转换到 sRGB wid=\(wid)")
+                glog("[直播] 帧色彩空间 = \(img.colorSpace?.name as String? ?? "nil") ⇒ 已重绘进 sRGB wid=\(wid)")
             }
         }
-        // ★★ 2026-10-27:**丢掉每条流的前 2 帧**(实测那两帧亮度 +8%、之后立刻回到与静帧一致):
-        //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
-        framesSeen[wid, default: 0] += 1
-        if framesSeen[wid, default: 0] <= 2 { return }
-        // 🔬 二分开关:`debug.noLive` ⇒ 丢掉所有实时帧(只留静帧)
-        if DebugFlags.noLive { return }
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
@@ -1858,6 +1864,35 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             glog(String(format: "[直播] 首帧 %.0fms wid=%u", (now - t0) * 1000, wid))
         }
         deliver(tagged, wid: wid)
+    }
+
+    /// 平均亮度(0…1):32×32 缩略后按 BT.601 加权 ✓
+    /// 平均 alpha(0…1):用来判断实时帧是不是**半透明**(半透明叠在深色底上会整体变暗)
+    static func meanAlpha(_ img: CGImage) -> Double {
+        let n = 32
+        guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 1 }
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: n, height: n))
+        guard let buf = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return 1 }
+        var sum = 0.0
+        for i in stride(from: 0, to: n * n * 4, by: 4) { sum += Double(buf[i + 3]) }
+        return sum / Double(n * n) / 255.0
+    }
+
+    static func meanLuma(_ img: CGImage) -> Double {
+        let n = 32
+        guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+        ctx.interpolationQuality = .low
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: n, height: n))
+        guard let buf = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+        var sum = 0.0
+        for i in stride(from: 0, to: n * n * 4, by: 4) {
+            sum += 0.299 * Double(buf[i]) + 0.587 * Double(buf[i + 1]) + 0.114 * Double(buf[i + 2])
+        }
+        return sum / Double(n * n) / 255.0
     }
 
     /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
