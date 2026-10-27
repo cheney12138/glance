@@ -161,7 +161,9 @@ final class HotkeyTapCenter {
     /// ⌘` 的**新语义**(2026-10-27 用户口径):触发时直接唤起"只有窗口/轨道的托盘"(没有环),
     /// 默认先切一扇(预览下一次切换),**松手才真正切窗**;Esc / 点空白 = 放弃。
     /// (旧语义"当前屏内循环同 App 窗口"由 `onRaisePreview` 那条路保留,开关切换)
-    var onWindowsSession: ((Bool) -> Void)?
+    /// 返回 `true` = 这一发我们接了(进入会话);`false` = **不接**(例如前台 App 只有 1 扇窗,
+    /// 那就没有可切的东西 ⇒ 面板不弹、键也放行给系统)✓
+    var onWindowsSession: ((Bool) -> Bool)?
     /// 接管系统 ⌘` 的开关(opt-in;`object(forKey:)` 区分"没写过"与"写成 false" ✓ —— 同 `Keys` 其它开关)
     private static var graveTakeoverEnabled: Bool {
         UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool
@@ -500,9 +502,12 @@ final class HotkeyTapCenter {
                 //   ⇒ 这是 **hold 语义**(pinnedSession = false):松 ⌘ 时 `handleFlags` 会发 `.confirm` ✓
                 //   连着按 ` 在同一局里继续前后选(见 `handleNavKey` 里的 keyGrave 分支)✓
                 if state == .idle || state == .armed {
+                    // ★ 2026-10-27 用户:「单窗口不唤起卡片, 多窗口 App 才有意义」
+                    //   ⇒ 先问一句"这一发值不值得接"(前台 App 有没有 ≥2 扇窗);
+                    //     不接就**什么都不做**并放行(系统那条 ⌘` 在单窗口时本来也没有行为)✓
                     pinnedSession = false
+                    guard onWindowsSession?(forward) == true else { return false }
                     setState(.navigating)
-                    onWindowsSession?(forward)
                     return true          // 吞掉这一发:不再走"当前屏内循环"那条路 ✓
                 }
                 onRaisePreview?(forward)   // (兜底:理论上到不了)

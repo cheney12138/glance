@@ -309,9 +309,33 @@ final class PanelController: ObservableObject {
     /// ⌘` 新语义的入口:唤醒"只有窗口"的一局(没有环)
     /// · 默认**先切一扇**(预览下一次切换),松手才真正切窗(确认在触发层:松 ⌘ ⇒ `.confirm`)
     /// · Esc / 点空白 ⇒ 放弃(既有路径)
-    func beginWindows(reverse: Bool) {
+    @discardableResult
+    func beginWindows(reverse: Bool) -> Bool {
+        // ★ 2026-10-27 用户:「单窗口不唤起卡片, 多窗口 App 才有意义」
+        //   ⇒ 这一发先做一次**廉价**判定(只读 CG 窗口表,不碰 AX):
+        //     前台 App 在屏上的普通窗 < 2 ⇒ 不接(面板不弹,键也放行)✓
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              Self.onscreenWindowCount(pid: front.processIdentifier) >= 2 else {
+            if isTraceEnabled { glog("[窗口局] 前台 App 只有 1 扇窗 ⇒ 不唤起") }
+            return false
+        }
         windowsOnly = true
         begin(reverse: reverse)
+        return true
+    }
+
+    /// 前台 App 在屏上的**普通窗**数量(廉价:一次 `CGWindowListCopyWindowInfo`,~1–3ms,
+    /// 不触发 AX)。只用于"值不值得开这一局"的判定 —— 真正的名单仍走后台枚举 ✓
+    private static func onscreenWindowCount(pid: pid_t) -> Int {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]] else { return 0 }
+        return list.filter { info in
+            (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+                && (info[kCGWindowLayer as String] as? Int) == 0
+                && ((info[kCGWindowBounds as String] as? [String: Any])
+                        .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }?
+                        .height ?? 0) > 100
+        }.count
     }
 
     private func begin(reverse: Bool) {
@@ -458,6 +482,17 @@ final class PanelController: ObservableObject {
             }
         }
         SessionMarks.step("顺序")     // 🔬 细账(2026-10-09):拆"落点"这一段
+        // ★ 2026-10-27 用户:「单窗口不唤起卡片」⇒ 廉价预检只能"宁松勿紧",
+        //   真正的判据放在这里(枚举已经拿到**真实名单**):
+        //   前台 App 不足 2 扇窗 ⇒ 这一局**根本不开**,连面板都不上屏 ✓
+        if windowsOnly, (groups.first?.windows.count ?? 0) < 2 {
+            if isTraceEnabled {
+                glog("[窗口局] 实际只有 \(groups.first?.windows.count ?? 0) 扇窗 ⇒ 不唤起")
+            }
+            windowsOnly = false
+            dismiss(reason: "单窗口 ⇒ 不开面板")
+            return
+        }
         // 记下这份名单(和它属于哪块屏):下一局唤起要靠它先上屏 ✓
         lastSessionGroups = groups
         lastSessionScreenID = screen.flatMap { DisplayOrder.displayID(of: $0) }

@@ -115,7 +115,7 @@ struct GlanceApp: App {
                     // ⌘` 新语义(2026-10-27):唤起"只有窗口"的一局(托盘 / 芯片轨道,**没有环**),
                     // 默认先切一扇;松手才真正切窗(确认由触发层的 `.confirm` 发下来)✓
                     hotkeys.onWindowsSession = { [weak panelController] forward in
-                        panelController?.beginWindows(reverse: !forward)
+                        panelController?.beginWindows(reverse: !forward) ?? false
                     }
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
