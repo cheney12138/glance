@@ -2235,7 +2235,9 @@ struct ChipRailGroup: View {
     @State private var scrollMotion: Animation?
     /// 轨道"自下而上浮出"的起始时刻(nil = 没在浮)
     /// —— 由 `TimelineView(.animation)` 逐帧求值,不经过任何状态发布 ✓
-    @State private var railFloatStart: Date?
+    /// 轨道浮出的**纵向偏移**(10 = 起始位,0 = 到位)——
+    /// 只被 `.offset` 用 ⇒ 不参与布局 ⇒ 交给渲染服务器插值,主线程零负担 ✓
+    @State private var railFloatY: CGFloat = 0
     private let floatProbe = FloatProbe()
 
     var body: some View {
@@ -2248,19 +2250,15 @@ struct ChipRailGroup: View {
             // ⚠️ 不要写 `minimumInterval: 1/60` —— 那是**把上限压到 60Hz**:
             //   在这台 ProMotion(120Hz)上等于丢掉一半的帧 ⇒ 渐显读作"一格一格" ✗
             //   `.animation` 默认就是**跟着显示器刷新**走 ✓
-            TimelineView(.animation(paused: railFloatStart == nil)) { ctx in
-                let p = railFloatProgress(at: ctx.date)
-                let _ = { if railFloatStart != nil, isTraceEnabled {
-                    floatProbe.tick(CACurrentMediaTime())
-                } }()
-                rail
-                    // 只抬轨道:卡片自己有落位,叠在一起会像"整块面板在飘" ✗
-                    // ★☆ 2026-10-27 实验:浮出**只做位移,不做透明度**
-                    //   —— 探针证明驱动端是稳的 60Hz(帧间隔 ~16ms,无 >20ms 缺口),
-                    //   那掉帧只能发生在**合成**这一侧:托盘是一扇带毛玻璃的窗,
-                    //   每帧改它的 alpha 要整窗重新混合一次背景 ✗ ⇒ 先把 alpha 去掉试 ✓
-                    .offset(y: (1 - p) * 10)
-            }
+            rail
+                // ★★ 2026-10-27 第四版(用户:「没顺, 还是掉帧」):
+                //   前三版都是"**自己逐帧算**"(定时器推值 / TimelineView 每帧求值)。
+                //   探针证明它们确实按 60Hz 在跑(间隔 ~16ms、无缺口),可用户仍看着掉帧 ——
+                //   因为每帧都要主线程算一遍再提交一次。而 `.offset` **不参与布局**,
+                //   完全可以交给**渲染服务器**插值 ⇒ 用一条普通动画驱动它:
+                //   主线程只在开头和结尾各碰一次,中间零负担(与 CSS transform 同理)✓
+                .offset(y: railFloatY)
+                .animation(.easeOut(duration: 0.26), value: railFloatY)
         }
         // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
         //   60fps 逐帧实锤:卡在**一帧内**跳到新尺寸,而芯片列宽从 116pt 一路长到 184pt 用了 ~12 帧 ✗):
@@ -2322,25 +2320,12 @@ struct ChipRailGroup: View {
 
 
 
-    /// 浮出进度(由 `TimelineView(.animation)` 逐帧求值 —— 与屏幕同拍,不经状态发布 ✓)
-    private func railFloatProgress(at date: Date) -> CGFloat {
-        guard let t0 = railFloatStart else { return 1 }
-        let p = min(1, max(0, date.timeIntervalSince(t0) / 0.26))
-        return CGFloat(p * p * (3 - 2 * p))    // smoothstep:两边都缓,中段稳
-    }
-
-    /// 起一次浮出:记下起点,0.3s 后停表(`TimelineView` 随之 paused)
+    /// 起一次浮出:当拍摆到起始位(禁动画),下一拍再打开动画 ⇒ 一条纯 transform 动画 ✓
     private func startRailFloat() {
-        floatProbe.dts.removeAll(); floatProbe.last = nil
-        railFloatStart = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-            railFloatStart = nil
-            if isTraceEnabled {
-                let d = floatProbe.drain()
-                let arr = d.split(separator: ",").compactMap { Double($0) }
-                let over = arr.filter { $0 > 20 }.count
-                glog("[浮出帧] n=\(arr.count) 超20ms=\(over) 帧间隔=\(d)")
-            }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { railFloatY = 10 }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.26)) { railFloatY = 0 }
         }
     }
 
