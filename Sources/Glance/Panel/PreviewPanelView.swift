@@ -903,6 +903,7 @@ private struct WindowThumb<Overlay: View>: View {
                         // ★ S2:实时帧优先(现在**不分选中** —— 见 `liveFrame` 的病例)。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
                         //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
                         Image(decorative: liveFrame, scale: 1).resizable()
+                            .opacity(liveBox.fade)
                             .scaledToFill()
                             .frame(width: box.width + 6, height: box.height + 6)
                             .clipped()
@@ -1928,6 +1929,19 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
     /// ⚠️ 只在**池队列**上调用(账本 `latest`/`latestOrder`/`wanted` 全是池队列状态 ✓)
     fileprivate func deliver(_ img: CGImage, wid: CGWindowID) {
+        // 首次交付 = 这一扇窗从"静帧"切到"实时" ⇒ 让实时层 0→1 淡入(~100ms)、
+        // 静帧永远垫在下面 ⇒ 那一拍不是"整块换源",而是叠化 ✓
+        if framesSeen[wid] == 1 {
+            DispatchQueue.main.async {
+                let box = LivePreviewPool.shared.box(for: wid)
+                box.fade = 0
+                for i in 1...5 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.02) {
+                        box.fade = Double(i) / 5.0
+                    }
+                }
+            }
+        }
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
         gateLock.lock(); cachedFrames[wid] = img; gateLock.unlock()
@@ -1958,6 +1972,9 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
 /// 一扇窗的"最新一帧盒子" —— 卡片 `@ObservedObject` 它,只在自己这扇窗来帧时重绘 ✓
 final class LiveFrameBox: ObservableObject {
     @Published var image: CGImage?
+    /// 实时层的**淡入进度**(0…1):snapshot → live 那一拍做 ~100ms 交叉,
+    /// 免得"整块换源"被读成闪(2026-10-27 用户:「还在闪」)✓
+    @Published var fade: Double = 1
 }
 
 /// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
