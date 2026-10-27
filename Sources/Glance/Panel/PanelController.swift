@@ -306,6 +306,24 @@ final class PanelController: ObservableObject {
 
     // MARK: - 生命周期
 
+    /// **这块屏上最前面那扇窗**属于哪个 App(按 CG 的 z 序:列表就是前→后)✓
+    /// 为什么不用 `NSWorkspace.frontmostApplication`:那是**全局键盘焦点**,
+    /// 焦点在另一块屏/另一个 App 时它不代表这块屏的台前 App ✗(用户实报过)
+    private static func frontPID(on screen: NSScreen) -> pid_t? {
+        guard let infos = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let own = ProcessInfo.processInfo.processIdentifier
+        for info in infos {
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != own,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let bd = info[kCGWindowBounds as String] as? NSDictionary,
+                  let b = CGRect(dictionaryRepresentation: bd),
+                  b.width > 50, b.height > 50 else { continue }
+            if WindowEnumerator.ownsByContextScreen(b, contextScreen: screen) { return pid }
+        }
+        return nil
+    }
+
     /// ⌘` 新语义的入口:唤醒"只有窗口"的一局(没有环)
     /// · 默认**先切一扇**(预览下一次切换),松手才真正切窗(确认在触发层:松 ⌘ ⇒ `.confirm`)
     /// · Esc / 点空白 ⇒ 放弃(既有路径)
@@ -320,8 +338,8 @@ final class PanelController: ObservableObject {
         //      由 `finishBegin` 拿到真实名单后再判(见那里 `<2 扇窗 ⇒ 整局作废`)
         if let screen = CursorScreenAnchor.cursorScreen,
            DisplayOrder.displayID(of: screen) == lastSessionScreenID,
-           let first = lastSessionGroups.first, first.windows.count < 2 {
-            if isTraceEnabled { glog("[窗口局] 这块屏的台前 App \(first.appName) 只有 1 扇窗 ⇒ 不唤起") }
+           lastSessionGroups.map(\.windows.count).max() ?? 0 < 2 {
+            if isTraceEnabled { glog("[窗口局] 这块屏上没有任何多窗口 App ⇒ 不唤起") }
             return false
         }
         windowsOnly = true
@@ -467,7 +485,14 @@ final class PanelController: ObservableObject {
             // ★ 2026-10-27:口径改成"**这块屏**台前的第一个 App"(与面板同一个源):
             //   `groups` 已经是 `orderByMRU(raw, on: screen)` 的结果 ⇒ 第一组就是它 ✓
             //   (上一版用全局 `recentlyActivePID`,焦点在别的屏时会选错人 ✗)
-            if let first = groups.first {
+            // ★★ 2026-10-27 第三次修正(用户:「cmd ` 没有窗口了」):
+            //   `groups` 是按 **MRU(激活序)** 排的;而用户要的是"**台前**那个 App" ——
+            //   例如焦点刚回到 IDEA、但 Ghostty 是上一次激活过的 ⇒ MRU 第一格是 Ghostty,
+            //   它只有 1 扇窗 ⇒ 整局被判定"没得切" ✗
+            //   ⇒ 改成按 **窗口 z 序**:`raw` 是前→后排列的,取**这块屏上第一扇窗**的 pid ✓
+            let frontPID = screen.flatMap { Self.frontPID(on: $0) }
+            let matched = frontPID.flatMap { pid in groups.first(where: { $0.pid == pid }) }
+            if let first = matched ?? groups.first {
                 groups = [first]
                 if isTraceEnabled {
                     glog("[窗口局] 只留台前 App: \(first.appName) · \(first.windows.count) 扇窗")
