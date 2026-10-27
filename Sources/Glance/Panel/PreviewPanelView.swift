@@ -303,7 +303,7 @@ struct PreviewPanelView: View {
                           //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
                           onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
                           entryTick: controller.entryTick,
-                          entryProgress: controller.entryProgress)
+                          entryFloat: controller.entryFloat)
         } else {
             cardRowGrid
         }
@@ -437,7 +437,7 @@ struct PreviewPanelView: View {
             settlesOnGroupChange: settlesOnGroupChange,
             chipEntersFromRight: windows.count == 1,
             entryTick: controller.entryTick,
-            entryProgress: controller.entryProgress,
+            entryFloat: controller.entryFloat,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -594,8 +594,8 @@ private struct WindowThumb<Overlay: View>: View {
     var chipEntersFromRight: Bool = false
     /// 入场令牌(每开一局 +1;见 `PanelController.entryTick`)—— 入场动效**只认它** ✓
     var entryTick: Int = 0
-    /// 入场进度(0…1):由控制器按帧推 ⇒ 稳定可见(见 `PanelController.entryProgress`)✓
-    var entryProgress: CGFloat = 1
+    /// 入场进度(独立小对象 ⇒ 每拍只重绘用到它的小块,不再拖整块面板)✓
+    @ObservedObject var entryFloat: EntryFloatModel
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -782,8 +782,8 @@ private struct WindowThumb<Overlay: View>: View {
                 chip
                     // ★ 2026-10-26 用户改口径:「从右入场不好, 也跟芯片轨道一样, 看起来是上浮」
                     //   ⇒ 自下而上 8pt + 渐显;进度由控制器按帧推(不再用 SwiftUI 动画事务)✓
-                    .offset(y: chipEntersFromRight ? (1 - entryProgress) * 8 : 0)
-                    .opacity(chipEntersFromRight ? Double(entryProgress) : 1)
+                    .offset(y: chipEntersFromRight ? (1 - entryFloat.progress) * 8 : 0)
+                    .opacity(chipEntersFromRight ? Double(entryFloat.progress) : 1)
             }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
@@ -2173,8 +2173,8 @@ struct ChipRailGroup: View {
     let onTap: (Int) -> Void
     /// 入场令牌(每开一局 +1)⇒ 同一个 App 组再次唤起也重播浮出 ✓
     var entryTick: Int = 0
-    /// 入场进度(0…1):控制器按帧推 ⇒ 稳定可见 ✓
-    var entryProgress: CGFloat = 1
+    /// 入场进度(独立小对象,见 `EntryFloatModel`)✓
+    @ObservedObject var entryFloat: EntryFloatModel
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
@@ -2200,8 +2200,8 @@ struct ChipRailGroup: View {
             rail
                 // 只抬轨道:卡片自己有落位,两件事叠在一起会像"整块面板在飘" ✗
                 // 进度由控制器按帧推(0→1)⇒ 稳定可见 ✓
-                .offset(y: (1 - entryProgress) * 10)
-                .opacity(Double(entryProgress))
+                .offset(y: (1 - entryFloat.progress) * 10)
+                .opacity(Double(entryFloat.progress))
         }
         // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
         //   60fps 逐帧实锤:卡在**一帧内**跳到新尺寸,而芯片列宽从 116pt 一路长到 184pt 用了 ~12 帧 ✗):

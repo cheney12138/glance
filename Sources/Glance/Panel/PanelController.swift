@@ -98,7 +98,8 @@ final class PanelController: ObservableObject {
     ///   任意一条都会让动画被合并/看不到 ✗(10-23 卡片落位踩过同样的坑)
     ///   ⇒ 改成**自己按帧推**(与 `settleIn` 同一套):每 8ms 写一次值,每一次都是真实提交,
     ///     不依赖 SwiftUI 的动画事务 ⇒ 稳定可见 ✓
-    @Published private(set) var entryProgress: CGFloat = 1
+    /// 入场浮出的进度(单独的小对象 —— 只让"浮出那一小块"重绘,见 `EntryFloatModel`)
+    let entryFloat = EntryFloatModel()
     private var entryTimer: DispatchSourceTimer?
     /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)
     private var sessionBaseline: SessionSnapshot?
@@ -872,17 +873,17 @@ final class PanelController: ObservableObject {
     /// 入场浮出:0 → 1,按帧推(见 `entryProgress` 的注释)
     func startEntryFloat() {
         entryTimer?.cancel()
-        entryProgress = 0
+        entryFloat.progress = 0
         let t0 = CACurrentMediaTime()
         let dur: CFTimeInterval = 0.26
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.02, repeating: 0.008)
+        timer.schedule(deadline: .now() + 0.02, repeating: 1.0 / 60.0)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let p = min(1, (CACurrentMediaTime() - t0) / dur)
-            self.entryProgress = CGFloat(1 - pow(1 - p, 2))   // easeOut
+            self.entryFloat.progress = CGFloat(1 - pow(1 - p, 2))   // easeOut
             if p >= 1 {
-                self.entryProgress = 1
+                self.entryFloat.progress = 1
                 self.entryTimer?.cancel()
                 self.entryTimer = nil
             }
@@ -1945,4 +1946,21 @@ final class GlancePanel: NSPanel {
     var keyable: Bool = true
     override var canBecomeKey: Bool { keyable }
     override var canBecomeMain: Bool { false }
+}
+
+// MARK: - 入场浮出的进度模型
+
+import SwiftUI
+
+/// **入场浮出**的进度(0…1),由 `PanelController.startEntryFloat()` 按帧推。
+///
+/// 为什么单独一个对象(2026-10-27,用户:「多窗口芯片的登场动画不流畅」):
+/// 之前进度放在 `PanelController` 的 `@Published` 上 ⇒ 每 8ms 一次发布,
+/// 而**环(长条)和托盘都观察同一个 controller** ⇒ 每一拍两边都整体重算一遍,
+/// 托盘里还挂着卡片内容 ⇒ 掉帧、看起来一顿一顿 ✗
+/// ⇒ 进度挪进这个只有"浮出那一小块"观察的小对象里:
+///   每拍只重算那一块(把轨道抬 10pt、改透明度),环和其他卡片完全不动 ✓
+final class EntryFloatModel: ObservableObject {
+    /// 1 = 到位
+    @Published var progress: CGFloat = 1
 }
