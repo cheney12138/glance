@@ -642,7 +642,7 @@ private struct WindowThumb<Overlay: View>: View {
     private func chipFloatProgress(at date: Date) -> CGFloat {
         guard let t0 = chipFloatStart else { return 1 }
         let p = min(1, max(0, date.timeIntervalSince(t0) / 0.26))
-        return CGFloat(1 - pow(1 - p, 2))
+        return CGFloat(p * p * (3 - 2 * p))     // smoothstep(与轨道同一曲线)
     }
 
     private func startChipFloat() {
@@ -2304,7 +2304,7 @@ struct ChipRailGroup: View {
     private func railFloatProgress(at date: Date) -> CGFloat {
         guard let t0 = railFloatStart else { return 1 }
         let p = min(1, max(0, date.timeIntervalSince(t0) / 0.26))
-        return CGFloat(1 - pow(1 - p, 2))       // easeOut
+        return CGFloat(p * p * (3 - 2 * p))    // smoothstep:两边都缓,中段稳
     }
 
     /// 起一次浮出:记下起点,0.3s 后停表(`TimelineView` 随之 paused)
