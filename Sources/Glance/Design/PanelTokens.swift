@@ -998,7 +998,10 @@ struct TrayGeometry {
     ///   - maxContentSize: 本局所有托盘内容里的**最大**尺寸(整局恒定 ⇒ 窗口整局只落位一次)
     ///   - panelFrame: 主面板窗框(托盘与它同轴、并贴在它下沿)
     ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
-    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
+    /// - Parameter centeredOnScreen: true = 与环无关,直接在屏上居中
+    ///   (⌘` 的"只有窗口"那一局没有环 ⇒ 没有可贴的目标 ✓,用户口径:「相对屏幕居中」)
+    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect,
+         centeredOnScreen: Bool = false) {
         let pad = PanelMetrics.shadowPadPop * 2
         // ★★ 2026-10-13 定稿(用户:「不管有多少窗口, 我都要卡片距离环边距是一样的」✓):
         //   高 = **内容 + 底部那一段内缩**,顶上不留透明呼吸 ✗
@@ -1006,7 +1009,7 @@ struct TrayGeometry {
         //     (先前留了两份 pad ⇒ 内容贴顶时"矮内容离环更远" ✗ = 用户看到的"单窗太宽" ✓)
         var size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
                           height: (maxContentSize.height + PanelMetrics.shadowPadPop).rounded(.up))
-        var x = panelFrame.midX - size.width / 2          // 窗口居中 ⇒ 内容随之居中(与长条同轴)
+        var x = (centeredOnScreen ? screenArea.midX : panelFrame.midX) - size.width / 2
         let margin = PanelMetrics.screenMargin
         if size.width <= screenArea.width - margin * 2 {
             x = min(max(x, screenArea.minX + margin), screenArea.maxX - margin - size.width)
@@ -1053,13 +1056,23 @@ struct TrayGeometry {
         // ⚠️ 2026-10-13 最后一处符号错(用户设 4 却看到 ≈33 ✗):上面那 14 我**加了两遍** ✗
         //   实测:内容框底 ≈ 窗底(+1) · 芯片底 = 内容框底 + trayPadBottom(14) ⇒ 芯片底 = y + 15
         //   要"芯片底 = 玻璃顶 + gap" ⇒ **y = 玻璃顶 + gap − trayPadBottom** ✓(不是 + ✗)
-        let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
+        var y = panelFrame.maxY - PanelMetrics.shadowPadStrip
             + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
+        if centeredOnScreen {
+            // ⌘` 的"只有窗口"那一局:**没有环可贴** ⇒ 托盘在屏上居中(纵横都居中)✓
+            // (用户口径:「相对屏幕居中」)
+            y = screenArea.midY - size.height / 2
+        }
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
         //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
         //   ⇒ 下限必须 = 内容 + `shadowPadPop`(底部那段内缩 ✓):
         //     宁可让窗**顶**伸出屏幕(那是透明区,看不见 ✓),也不许挤内容 ✗
+        if centeredOnScreen {
+            self.windowSize = size
+            self.windowOrigin = NSPoint(x: x.rounded(.down), y: y.rounded(.down))
+            return
+        }
         let minHeight = maxContentSize.height + PanelMetrics.shadowPadPop
         let topLimit = screenArea.maxY - margin          // ← 被上一版的正则误删 ✗,补回 ✓
         if y + size.height > topLimit {

@@ -186,7 +186,8 @@ extension PanelController {
         //   卡片这时还画在旧位置上,窗一收就会把它们裁掉;而"按新内容重算"还会连带改位置/比例 ✗
         if CFAbsoluteTimeGetCurrent() < trayFrameHoldUntil, let held = heldTrayFrame { return held }
         let maxContent = previewContentSize()
-        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
+        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area,
+                               centeredOnScreen: windowsOnly)
         if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
             trayOverflowLogged = true
             glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")

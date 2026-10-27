@@ -320,7 +320,8 @@ final class PanelController: ObservableObject {
             return false
         }
         windowsOnly = true
-        PanelMetrics.trayZoom = 2      // 没有环 ⇒ 卡片可以放大一倍 ✓
+        // 没有环 ⇒ 卡片放大,**但比"一倍"收 20%**(用户:「相对屏幕居中, 缩小 20%」)✓
+        PanelMetrics.trayZoom = 1.6
         begin(reverse: reverse)
         return true
     }
