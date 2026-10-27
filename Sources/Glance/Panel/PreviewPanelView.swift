@@ -599,8 +599,6 @@ private struct WindowThumb<Overlay: View>: View {
     @ObservedObject var entryFloat: EntryFloatModel
     /// 面板是否可见(同轨道那条理由:常驻视图不会 onAppear)✓
     var visible: Bool = false
-    /// 单窗芯片浮出的起始时刻(由 `TimelineView(.animation)` 求值,不经状态发布 ✓)
-    @State private var chipFloatStart: Date?
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
     var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
@@ -639,18 +637,6 @@ private struct WindowThumb<Overlay: View>: View {
     /// 明暗/糊化**当拍落**,且走禁动画事务 —— 祖先任何 `.animation(value: wid)`
     /// 都带不动它(2026-10-25 用户实报「换窗还有闪动」:dim 修正被形变动画播成
     /// 0.16s 渐变 = 闪 ✗)。明暗是"状态落定",不是动效 ✓
-    private func chipFloatProgress(at date: Date) -> CGFloat {
-        guard let t0 = chipFloatStart else { return 1 }
-        let p = min(1, max(0, date.timeIntervalSince(t0) / 0.26))
-        return CGFloat(p * p * (3 - 2 * p))     // smoothstep(与轨道同一曲线)
-    }
-
-    private func startChipFloat() {
-        guard chipEntersFromRight else { return }
-        chipFloatStart = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { chipFloatStart = nil }
-    }
-
     private func landDim() {
         var tx = Transaction()
         tx.disablesAnimations = true
@@ -796,12 +782,7 @@ private struct WindowThumb<Overlay: View>: View {
         VStack(spacing: PanelMetrics.chipGap) {
             card
             if showsChip {
-                // 同样交给渲染环逐帧求值(单窗芯片的浮出)✓
-                TimelineView(.animation(paused: chipEntersFromRight ? chipFloatStart == nil : true)) { ctx in
-                    let p = chipFloatProgress(at: ctx.date)
-                    chip
-                        .offset(y: chipEntersFromRight ? (1 - p) * 8 : 0)
-                }
+                chip
             }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
@@ -825,7 +806,6 @@ private struct WindowThumb<Overlay: View>: View {
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
-            startChipFloat()
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
@@ -862,13 +842,11 @@ private struct WindowThumb<Overlay: View>: View {
             if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
         }
         .onChange(of: visible) { _, v in
-            if v { startChipFloat() }
         }
         // 每开一局(令牌 +1):重播"落位 + 单窗芯片上浮" —— **只认它**,
         // 因为面板窗口常驻,同一个组再次唤起时 onAppear / bundleID 都不会响 ✗
         .onChange(of: entryTick) { _, _ in
             if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
-            startChipFloat()
         }
         // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
         .onChange(of: bundleID) { _, _ in
@@ -877,7 +855,6 @@ private struct WindowThumb<Overlay: View>: View {
             // ★ 2026-10-26 用户:「不是第一次唤起才有, 是**每次切换 App** 都要有;
             //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
             //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
-            startChipFloat()
         }
     }
 
@@ -2178,25 +2155,7 @@ final class CardImageCache {
 ///   · **无极**:芯片渲染三份、视口停在中间那份 ⇒ 走到最后继续走就是接着滚第一枚,
 ///     不会反向跳(用户:「第 6 个再滚一次就回到第 1 个」)
 ///   · 遮罩**有方向**:上面还有内容才渐隐顶部,下面还有内容才渐隐底部;装得下 ⇒ 两侧都不糊
-/// 🔬 临时探针(2026-10-27):把浮出期间**每一帧的真实间隔**记下来,
-/// 浮完打一行 —— 用来判定"是 SwiftUI 没被驱动(间隔>20ms)",还是"画了但合成丢帧"。
-final class FloatProbe {
-    var last: CFTimeInterval?
-    var dts: [Double] = []
-    func tick(_ t: CFTimeInterval) {
-        if let l = last, l > 0 { dts.append((t - l) * 1000) }
-        last = t
-    }
-    func drain() -> String {
-        let s = dts.map { String(format: "%.0f", $0) }.joined(separator: ",")
-        dts.removeAll(); last = nil
-        return s
-    }
-}
-
 struct ChipRailGroup: View {
-    /// 探针计时起点(临时)
-    static var probeT0: CFAbsoluteTime = 0
     let windows: [WindowRecord]
     let selected: Int
     let bundleID: String?
@@ -2233,32 +2192,15 @@ struct ChipRailGroup: View {
     /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
     /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
     @State private var scrollMotion: Animation?
-    /// 轨道"自下而上浮出"的起始时刻(nil = 没在浮)
-    /// —— 由 `TimelineView(.animation)` 逐帧求值,不经过任何状态发布 ✓
-    /// 轨道浮出的**纵向偏移**(10 = 起始位,0 = 到位)——
-    /// 只被 `.offset` 用 ⇒ 不参与布局 ⇒ 交给渲染服务器插值,主线程零负担 ✓
-    @State private var railFloatY: CGFloat = 0
-    private let floatProbe = FloatProbe()
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
             card
-            // ★★ 2026-10-27 第三版(用户:「还是掉帧」):
-            //   前两版都是"由控制器定时器推一个值"⇒ 每一拍都要走一次状态发布 + 视图重算;
-            //   现在交给 `TimelineView(.animation)`:由**渲染环**按显示器刷新逐帧求值,
-            //   不发布状态、不惊动别处,天然与屏幕同拍 ✓
-            // ⚠️ 不要写 `minimumInterval: 1/60` —— 那是**把上限压到 60Hz**:
-            //   在这台 ProMotion(120Hz)上等于丢掉一半的帧 ⇒ 渐显读作"一格一格" ✗
-            //   `.animation` 默认就是**跟着显示器刷新**走 ✓
             rail
-                // ★★ 2026-10-27 第四版(用户:「没顺, 还是掉帧」):
-                //   前三版都是"**自己逐帧算**"(定时器推值 / TimelineView 每帧求值)。
-                //   探针证明它们确实按 60Hz 在跑(间隔 ~16ms、无缺口),可用户仍看着掉帧 ——
-                //   因为每帧都要主线程算一遍再提交一次。而 `.offset` **不参与布局**,
-                //   完全可以交给**渲染服务器**插值 ⇒ 用一条普通动画驱动它:
-                //   主线程只在开头和结尾各碰一次,中间零负担(与 CSS transform 同理)✓
-                .offset(y: railFloatY)
-                .animation(.easeOut(duration: 0.26), value: railFloatY)
+                // ★★ 2026-10-27 定论(用户:「还是掉帧, 去掉芯片动画吧」):
+                //   入场浮出**整条删掉**。四轮尝试(定时器推值 / TimelineView / 纯 transform)都
+                //   无法在这台机器上做到顺畅 —— 判定为"托盘这一帧的渲染成本已经吃满",
+                //   再往上叠任何逐帧动画都会掉 ✗。芯片到位即显示,不做位移、不做渐显 ✓
         }
         // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
         //   60fps 逐帧实锤:卡在**一帧内**跳到新尺寸,而芯片列宽从 116pt 一路长到 184pt 用了 ~12 帧 ✗):
@@ -2267,31 +2209,9 @@ struct ChipRailGroup: View {
         //   ⇒ 托盘内容**断掉继承的动画事务**(几何一律当拍落);轨道自己的滚动仍由
         //     `.animation(scrollMotion, value: viewPos)` 显式发起 ⇒ 不受影响 ✓
         .transaction { $0.animation = nil }
-        // 🔬 临时探针(2026-10-27,查"整列芯片左移用了 12 帧"):把**布局真实值**逐帧打出来 ——
-        //   如果它是一帧跳到位、而屏幕上仍是滑的 ⇒ 问题不在 SwiftUI 布局,在窗口/合成层;
-        //   如果它自己就是十几帧渐变 ⇒ 还有一条把布局卷进事务的动画,继续找 ✓
-        .background {
-            GeometryReader { proxy in
-                let f = proxy.frame(in: .global)
-                Color.clear
-                    .onChange(of: f.origin.x) { _, new in
-                        if isTraceEnabled {
-                            glog(String(format: "[轨道x] 布局值 %.1f (t=%.0fms)",
-                                        new, (CFAbsoluteTimeGetCurrent() - Self.probeT0) * 1000))
-                        }
-                    }
-                    .onAppear {
-                        if isTraceEnabled {
-                            Self.probeT0 = CFAbsoluteTimeGetCurrent()
-                            glog(String(format: "[轨道x] 起始 %.1f", f.origin.x))
-                        }
-                    }
-            }
-        }
         .onAppear {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
-            startRailFloat()
             // 浮出(0.26s)落定之后再开滚动动画,免得开场变成"一边浮一边滚" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
@@ -2300,32 +2220,16 @@ struct ChipRailGroup: View {
         .onChange(of: selected) { _, new in selPos = new }
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
         .onChange(of: entryTick) { _, _ in
-            startRailFloat()
             scrollMotion = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
         }
-        .onChange(of: visible) { _, v in
-            if v { startRailFloat() }     // 面板刚上屏 ⇒ 浮一次 ✓
-        }
         .onChange(of: bundleID) { _, _ in
-            startRailFloat()              // 换组 = 再浮一次 ✓
             scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
-        }
-    }
-
-
-
-    /// 起一次浮出:当拍摆到起始位(禁动画),下一拍再打开动画 ⇒ 一条纯 transform 动画 ✓
-    private func startRailFloat() {
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { railFloatY = 10 }
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.26)) { railFloatY = 0 }
         }
     }
 
@@ -2428,20 +2332,6 @@ struct ChipRailGroup: View {
         //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
         //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
-        // 🔬 临时探针(2026-10-27):**逐枚**记录芯片的 x —— 用来判定"一列是不是同帧一起动"
-        .background {
-            GeometryReader { proxy in
-                let x = proxy.frame(in: .global).origin.x
-                Color.clear
-                    .onChange(of: x) { _, new in
-                        if isTraceEnabled {
-                            glog(String(format: "[芯片x] i=%d x=%.1f t=%.0fms",
-                                        logical, new,
-                                        (CFAbsoluteTimeGetCurrent() - ChipRailGroup.probeT0) * 1000))
-                        }
-                    }
-            }
-        }
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
@@ -2482,5 +2372,6 @@ struct ChipRailGroup: View {
             viewPos = target
         }
     }
+
 
 }
