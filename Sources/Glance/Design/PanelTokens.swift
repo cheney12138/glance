@@ -1059,9 +1059,12 @@ struct TrayGeometry {
         var y = panelFrame.maxY - PanelMetrics.shadowPadStrip
             + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
         if centeredOnScreen {
-            // ⌘` 的"只有窗口"那一局:**没有环可贴** ⇒ 托盘在屏上居中(纵横都居中)✓
-            // (用户口径:「相对屏幕居中」)
-            y = screenArea.midY - size.height / 2
+            // ⌘` 的"只有窗口"那一局:**没有环可贴** ⇒ 托盘在屏上居中 ✓
+            // ⚠️ 2026-10-27 病例(用户:「上下左右居中,做的对吗,视觉上不对」):
+            //   窗高 = **内容 + 底部那段 `shadowPadPop`**(阴影呼吸只在下边)⇒ 直接对**窗**居中,
+            //   内容会整体**偏上半个 pad**(≈48pt),眼睛一眼就看出来 ✗
+            //   ⇒ 要对齐的是**内容**的中心:y = 屏中 − 窗高/2 − pad/2 ✓
+            y = screenArea.midY - size.height / 2 - PanelMetrics.shadowPadPop / 2
         }
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
