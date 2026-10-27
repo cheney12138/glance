@@ -32,9 +32,30 @@ enum AXWindowList {
         let rejected: [CGWindowID: String]
     }
 
+    /// 枚举路径的 AX 超时(2026-10-27)
+    ///
+    /// 病例(用户:「现在唤起面板有延迟」):最近 200 次唤起里 5 次 ~600ms,
+    /// 全部是 `枚举 530–548ms` —— 正好撞上全局 AX 超时(0.5s):
+    /// 某个 App 不响应 AX 时,枚举会一直等满 0.5s,而那一局又没有"陈旧名单"可先上屏 ⇒
+    /// 面板就干等这半秒 ✗
+    /// ⇒ 枚举这一路把超时压到 **0.15s**(拿不到 AX 时本来就有"不过滤"的降级,不影响正确性),
+    ///   并把超过 50ms 的 pid 点名叫出来,下次直接知道是谁在拖 ✓
+    /// ⚠️ 用户动作那一侧(`WindowFocuser`)仍用 0.5s,那里超时太短会误伤真实操作 ✗
+    static let enumerationTimeout: Float = 0.15
+    static var slowCalls: [(pid: pid_t, ms: Double)] = []
+
     /// nil = AX 没话说,调用方不许过滤
     static func admission(ofPID pid: pid_t) -> Admission? {
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, enumerationTimeout)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer {
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            if ms > 50 {
+                let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+                glog(String(format: "[AX] 慢 %.0fms pid=%d %@", ms, pid, name))
+            }
+        }
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement], !windows.isEmpty else { return nil }
