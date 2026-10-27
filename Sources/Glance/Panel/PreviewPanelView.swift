@@ -2158,6 +2158,8 @@ final class CardImageCache {
 ///     不会反向跳(用户:「第 6 个再滚一次就回到第 1 个」)
 ///   · 遮罩**有方向**:上面还有内容才渐隐顶部,下面还有内容才渐隐底部;装得下 ⇒ 两侧都不糊
 struct ChipRailGroup: View {
+    /// 探针计时起点(临时)
+    static var probeT0: CFAbsoluteTime = 0
     let windows: [WindowRecord]
     let selected: Int
     let bundleID: String?
@@ -2208,6 +2210,27 @@ struct ChipRailGroup: View {
         //   ⇒ 托盘内容**断掉继承的动画事务**(几何一律当拍落);轨道自己的滚动仍由
         //     `.animation(scrollMotion, value: viewPos)` 显式发起 ⇒ 不受影响 ✓
         .transaction { $0.animation = nil }
+        // 🔬 临时探针(2026-10-27,查"整列芯片左移用了 12 帧"):把**布局真实值**逐帧打出来 ——
+        //   如果它是一帧跳到位、而屏幕上仍是滑的 ⇒ 问题不在 SwiftUI 布局,在窗口/合成层;
+        //   如果它自己就是十几帧渐变 ⇒ 还有一条把布局卷进事务的动画,继续找 ✓
+        .background {
+            GeometryReader { proxy in
+                let f = proxy.frame(in: .global)
+                Color.clear
+                    .onChange(of: f.origin.x) { _, new in
+                        if isTraceEnabled {
+                            glog(String(format: "[轨道x] 布局值 %.1f (t=%.0fms)",
+                                        new, (CFAbsoluteTimeGetCurrent() - Self.probeT0) * 1000))
+                        }
+                    }
+                    .onAppear {
+                        if isTraceEnabled {
+                            Self.probeT0 = CFAbsoluteTimeGetCurrent()
+                            glog(String(format: "[轨道x] 起始 %.1f", f.origin.x))
+                        }
+                    }
+            }
+        }
         .onAppear {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
@@ -2319,12 +2342,13 @@ struct ChipRailGroup: View {
         .contentShape(Rectangle())
         // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
         // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
-        // ★★ 2026-10-26 用户:「不只是位移,芯片的移动也需要有选中放大的这种动效」⇒
-        //   选中的那枚**满格**、其余缩 3.5% —— 轨道宽是定值,放大只能做成"别人让开",
-        //   真放大到 >1 会被 .clipped() 切边 ✗。视觉上就是选中那枚"立起来" ✓
-        .scaleEffect(isOn ? 1 : 0.965)
-        // 入场/换组那一拍 scrollMotion 为 nil ⇒ 当拍落(不许从上一组的缩放里长出来)✓
-        .animation(scrollMotion, value: isOn)
+        // ★★ 2026-10-27 关键裁定(用户:「你现在 14 动, 23 不动, 是何意味」):
+        //   每枚芯片的 `.animation(_:value: isOn)` 会把**这枚芯片自己的位置**卷进它的事务
+        //   —— 换窗那一拍,恰好是"选中态变了"的那两枚进入动画事务 ⇒ 它们滞后、其余当拍跳
+        //   ⇒ 一列芯片被读成"有的动有的不动" ✗(这就是连修四轮都没治对的根)
+        //   ⇒ **芯片不再持有任何自己的动画**:尺寸恒定(不再做 0.965 缩放),
+        //     选中只靠颜色/圆点区分 ⇒ 整列永远一起走 ✓
+        //   (要把"选中放大"加回来,必须像 `entryProgress` 那样由控制器按帧推标量,不许用事务)
         // ★★ 2026-10-26 第二次(用户:「期望是窗口缩小、芯片**整体**左移, 但芯片不是一齐移动的」):
         //   `.animation(_:value:)` 会把**这枚芯片的布局**(位置)也卷进它自己的事务 ⇒
         //   换窗那一拍,只有"选中状态变了"的那两枚芯片在 0.22s 里滑过去,其余当拍跳 ⇒
@@ -2332,6 +2356,20 @@ struct ChipRailGroup: View {
         //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
         //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
+        // 🔬 临时探针(2026-10-27):**逐枚**记录芯片的 x —— 用来判定"一列是不是同帧一起动"
+        .background {
+            GeometryReader { proxy in
+                let x = proxy.frame(in: .global).origin.x
+                Color.clear
+                    .onChange(of: x) { _, new in
+                        if isTraceEnabled {
+                            glog(String(format: "[芯片x] i=%d x=%.1f t=%.0fms",
+                                        logical, new,
+                                        (CFAbsoluteTimeGetCurrent() - ChipRailGroup.probeT0) * 1000))
+                        }
+                    }
+            }
+        }
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
