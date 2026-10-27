@@ -797,8 +797,7 @@ private struct WindowThumb<Overlay: View>: View {
             card
             if showsChip {
                 // 同样交给渲染环逐帧求值(单窗芯片的浮出)✓
-                TimelineView(.animation(minimumInterval: 1.0 / 60,
-                                        paused: chipEntersFromRight ? chipFloatStart == nil : true)) { ctx in
+                TimelineView(.animation(paused: chipEntersFromRight ? chipFloatStart == nil : true)) { ctx in
                     let p = chipFloatProgress(at: ctx.date)
                     chip
                         .offset(y: chipEntersFromRight ? (1 - p) * 8 : 0)
@@ -2230,7 +2229,10 @@ struct ChipRailGroup: View {
             //   前两版都是"由控制器定时器推一个值"⇒ 每一拍都要走一次状态发布 + 视图重算;
             //   现在交给 `TimelineView(.animation)`:由**渲染环**按显示器刷新逐帧求值,
             //   不发布状态、不惊动别处,天然与屏幕同拍 ✓
-            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: railFloatStart == nil)) { ctx in
+            // ⚠️ 不要写 `minimumInterval: 1/60` —— 那是**把上限压到 60Hz**:
+            //   在这台 ProMotion(120Hz)上等于丢掉一半的帧 ⇒ 渐显读作"一格一格" ✗
+            //   `.animation` 默认就是**跟着显示器刷新**走 ✓
+            TimelineView(.animation(paused: railFloatStart == nil)) { ctx in
                 let p = railFloatProgress(at: ctx.date)
                 rail
                     // 只抬轨道:卡片自己有落位,叠在一起会像"整块面板在飘" ✗
