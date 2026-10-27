@@ -311,7 +311,22 @@ extension PanelController {
                         entryFadeProgress, trayShownOnce ? "否" : "是"))
         }
         trayShownOnce = true
-        previewPanel.alphaValue = 1
+        // ★★ 2026-10-27(用户:「有个很明显的闪烁」,60fps 逐帧:卡片亮度 81 → 63 → 48 → 37 → 34,
+        //   而第一帧的画面是**一层浅灰玻璃、没有内容**):窗口先上屏、内容后画 = 老"白光" ✗
+        //   常规会话靠 `entryFade`(SwiftUI 侧渐入)遮住这一拍;窗口局的托盘没走那条 ⇒ 漏了 ✓
+        //   ⇒ 窗口局:托盘自己按 ~90ms 从 0 淡到 1(与"画完再显"同一条纪律)✓
+        if windowsOnly, previewPanel.alphaValue < 1 {
+            let w = previewPanel
+            w.alphaValue = 0
+            for i in 1...5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.018) {
+                    guard self.isVisible else { return }
+                    w.alphaValue = CGFloat(i) / 5.0
+                }
+            }
+        } else {
+            previewPanel.alphaValue = 1
+        }
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
         // (整块 tray 内容重排 + 后备存储重分配)。实机日志里 `[工] 键盘换选中 主线程 13–26ms`
