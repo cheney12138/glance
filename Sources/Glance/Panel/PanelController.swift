@@ -70,6 +70,10 @@ final class PanelController: ObservableObject {
     /// ⌘` 的"只有窗口"会话(2026-10-27):不显示环(长条),只上屏托盘;
     /// 组名单只留**当前前台 App** 那一组 ⇒ 托盘里就是这个 App 的窗口(轨道或卡片行)✓
     var windowsOnly = false
+    /// 窗口局托盘的"允许上屏"时刻(CD 时间)。在那之前托盘一律 alpha 0 ——
+    /// 因为毛玻璃那一层是**窗口自己的材质**,SwiftUI 的 opacity 管不到它 ⇒
+    /// 窗口一上屏就先看见一层浅灰玻璃、内容后到 = 用户看到的闪 ✗
+    var windowsTrayRevealAt: CFAbsoluteTime = 0
     var heldTrayFrame: NSRect?
 
     /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
@@ -343,6 +347,7 @@ final class PanelController: ObservableObject {
             return false
         }
         windowsOnly = true
+        windowsTrayRevealAt = CFAbsoluteTimeGetCurrent() + 0.14
         // 没有环 ⇒ 卡片放大,**但比"一倍"收 20%**(用户:「相对屏幕居中, 缩小 20%」)✓
         PanelMetrics.trayZoom = 1.28
         begin(reverse: reverse)
