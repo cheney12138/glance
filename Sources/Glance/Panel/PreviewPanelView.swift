@@ -2267,9 +2267,11 @@ struct ChipRailGroup: View {
         )
         .overlay(alignment: .top) { edgeBand(up: false) }
         .overlay(alignment: .bottom) { edgeBand(up: true) }
-        // 滚动:**一次一枚**(clampViewport 只挪最小距离)⇒ 0.22s easeOut ✓
-        // 卡高仍然是当拍落(换组时轨道不许"长"出来)✓
-        .animation(scrollMotion, value: viewPos)
+        // ★★ 2026-10-27 逐帧实锤(录屏 181→193 帧:整列芯片左移用了 ~12 帧、卡片却当拍到位):
+        //   `.animation(_:value:)` 会把**这棵子树的布局(含位置)**卷进它自己的事务 ⇒
+        //   换窗那一拍 `clampViewport` 顺手挪了 `viewPos`,于是整列芯片的位置被插值 ✗
+        //   ⇒ 删掉这条隐式动画;**滚动的平滑改在"真正要滚"的那两处显式发起**
+        //     (边缘感应带 / clampViewport 里选择越界时)✓
         .animation(nil, value: railHeight)
         .onChange(of: selPos) { _, _ in clampViewport() }
         .onAppear { clampViewport() }
@@ -2338,15 +2340,30 @@ struct ChipRailGroup: View {
                 .onHover { inside in
                     guard inside else { return }
                     let hi = windows.count - slotCount
-                    viewPos = min(max(viewPos + (up ? 1 : -1), 0), hi)
+                    let next = min(max(viewPos + (up ? 1 : -1), 0), hi)
+                    if next == viewPos { return }
+                    if let anim = scrollMotion {
+                        withAnimation(anim) { viewPos = next }
+                    } else {
+                        viewPos = next
+                    }
                 }
         }
     }
 
     /// 视口只为"选中出视口"服务 —— **一次一枚**,不按像素算最小距离 ✓
     private func clampViewport() {
-        if selPos - viewPos < 0 { viewPos = selPos }
-        if selPos - viewPos > slotCount - 1 { viewPos = selPos - slotCount + 1 }
+        var target = viewPos
+        if selPos - viewPos < 0 { target = selPos }
+        if selPos - viewPos > slotCount - 1 { target = selPos - slotCount + 1 }
+        guard target != viewPos else { return }
+        // 只有"选中走出视口"才滚,而且这一步是**平滑**的(用户口径:选中滚动,步长 1)✓
+        // ⚠️ 换窗那一拍若同时也变了尺寸,几何本身已经当拍落 ⇒ 这里只影响纵向滚动 ✓
+        if let anim = scrollMotion {
+            withAnimation(anim) { viewPos = target }
+        } else {
+            viewPos = target
+        }
     }
 
 }
