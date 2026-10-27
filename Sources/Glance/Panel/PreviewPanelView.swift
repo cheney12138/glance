@@ -1263,6 +1263,8 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     private var firstFramesHandled = 0
     /// 每条流已收到的帧数(丢掉起流初期的 2 帧:那两帧亮度会跳 ~8%)
     private var framesSeen: [CGWindowID: Int] = [:]
+    /// 每条流的**亮度增益**(补 snapshot→live 的那点偏暗;按实测比值算,不猜)✓
+    private var gains: [CGWindowID: Double] = [:]
     /// 起流时冻结的**像素规格**。⚠️ 只写不清是不行的(2026-09-21 病例):
     /// 它是按"当时那块屏"的像素尺寸算的 ⇒ 接拔外接屏/改分辨率后**全部过期** ✗
     /// ⇒ 见 `screenConfigChanged()`:显示配置一变,整本作废 ✓
@@ -1628,6 +1630,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         activeGens.remove(h.gen)
         handles[wid] = nil; startedAt[wid] = nil; firstFrameLogged.remove(wid); idleSince[wid] = nil
         framesSeen[wid] = nil
+        gains[wid] = nil
         glog("[直播] 停流 wid=\(wid)(\(why))")
     }
 
@@ -1849,12 +1852,39 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                    space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
                 ctx.interpolationQuality = .none
-                ctx.draw(src, in: CGRect(x: 0, y: 0, width: w, height: h))
+                let rect = CGRect(x: 0, y: 0, width: w, height: h)
+                ctx.draw(src, in: rect)
+                // ★ 增益补偿(2026-10-27):实时帧比静帧暗约 5%(实测比值)——
+                //   "再叠一层同图 + plusLighter"等价于把 RGB 乘一个系数,
+                //   比 CoreImage 便宜,也不用自己写像素循环 ✓
+                if let g = gains[wid], g > 1.002 {
+                    ctx.setBlendMode(.plusLighter)
+                    ctx.setAlpha(CGFloat(min(g - 1, 0.12)))
+                    ctx.draw(src, in: rect)
+                    ctx.setAlpha(1)
+                    ctx.setBlendMode(.normal)
+                }
                 if let out = ctx.makeImage() { tagged = out }
             }
             if firstFramesHandled < 3 {
                 firstFramesHandled += 1
                 glog("[直播] 帧色彩空间 = \(img.colorSpace?.name as String? ?? "nil") ⇒ 已重绘进 sRGB wid=\(wid)")
+            }
+        }
+        framesSeen[wid, default: 0] += 1
+        if gains[wid] == nil, framesSeen[wid, default: 0] <= 3 {
+            let liveL = Self.meanLuma(img)
+            let snapImg: CGImage? = DispatchQueue.main.sync {
+                Snapshotter.shared.cache[wid]?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            }
+            if let snapImg {
+                let snapL = Self.meanLuma(snapImg)
+                if liveL > 0.005, snapL > 0.005 {
+                    let g = min(max(snapL / liveL, 1.0), 1.12)
+                    gains[wid] = g
+                    glog(String(format: "[直播增益] wid=%u live=%.3f 静帧=%.3f ⇒ 增益 %.3f",
+                                wid, liveL, snapL, g))
+                }
             }
         }
         let now = CFAbsoluteTimeGetCurrent()
