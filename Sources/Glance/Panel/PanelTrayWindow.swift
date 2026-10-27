@@ -194,6 +194,16 @@ extension PanelController {
             trayOverflowLogged = true
             glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")
         }
+        if windowsOnly, isTraceEnabled {
+            let f = geo.frame
+            let cf = areaForTray
+            let pad = PanelMetrics.shadowPadPop
+            // 只印**内容中心 vs 屏幕中心**(窗里含透明阴影 pad,那个不该参与视觉判断)
+            let contentCenterY = f.minY + pad + maxContent.height / 2
+            glog(String(format: "[居中] 屏=%.0fx%.0f@%.0f,%.0f 中心=(%.0f,%.0f) · 窗心=(%.0f,%.0f) · 差=(%.0f,%.0f)",
+                        cf.width, cf.height, cf.minX, cf.minY, cf.midX, cf.midY,
+                        f.midX, f.midY, f.midX - cf.midX, f.midY - cf.midY))
+        }
         return geo.frame
     }
 

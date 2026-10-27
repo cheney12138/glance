@@ -461,7 +461,8 @@ final class PanelController: ObservableObject {
         let screen = contextScreen
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
-        groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        let fullGroups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
+        groups = fullGroups
         if windowsOnly {
             // ★ 2026-10-27:口径改成"**这块屏**台前的第一个 App"(与面板同一个源):
             //   `groups` 已经是 `orderByMRU(raw, on: screen)` 的结果 ⇒ 第一组就是它 ✓
@@ -486,7 +487,10 @@ final class PanelController: ObservableObject {
             return
         }
         // 记下这份名单(和它属于哪块屏):下一局唤起要靠它先上屏 ✓
-        lastSessionGroups = groups
+        // ⚠️ 2026-10-27 病例(用户:「没有窗口了」):⌘` 的窗口局会把 `groups` 过滤成**一组**,
+        //   而这里存进去的是过滤后的 ⇒ 下一局 ⌘Tab 的"陈旧名单先上屏"只显示那**一个 App**
+        //   ⇒ 用户看到"没有窗口了" ✗ ⇒ 必须存**完整名单** ✓
+        lastSessionGroups = fullGroups
         lastSessionScreenID = screen.flatMap { DisplayOrder.displayID(of: $0) }
         // ★ 唤起**也要**剪一次记号(2026-09-22 用户实报「已经从缩率态回来了, 图标没有消失」的真因 ✓):
         //   剪枝原本只挂在 `applyRefreshed` 上 —— 而它只在我们**自己的动作后**才跑(⌘M/W/H ✓)。
