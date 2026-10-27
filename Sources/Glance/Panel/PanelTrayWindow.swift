@@ -315,24 +315,23 @@ extension PanelController {
         //   而第一帧的画面是**一层浅灰玻璃、没有内容**):窗口先上屏、内容后画 = 老"白光" ✗
         //   常规会话靠 `entryFade`(SwiftUI 侧渐入)遮住这一拍;窗口局的托盘没走那条 ⇒ 漏了 ✓
         //   ⇒ 窗口局:托盘自己按 ~90ms 从 0 淡到 1(与"画完再显"同一条纪律)✓
-        if windowsOnly {
-            // ★★ 2026-10-27 第三次(上一版按 `alphaValue < 1` 判断 ⇒ 上一局残留 1 时压根不触发 ✗):
-            //   改用**时间闸**:窗口局开局后 140ms 内托盘保持 alpha 0(内容与卡片图这段到齐),
-            //   之后一次性显示 ⇒ 用户永远看不到"只有玻璃没内容"的那一帧 ✓
-            let w = previewPanel
-            let reveal = windowsTrayRevealAt
-            let now = CFAbsoluteTimeGetCurrent()
-            if now < reveal {
-                w.alphaValue = 0
-                DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, reveal - now + 0.01)) {
-                    guard self.isVisible, self.windowsOnly else { return }
-                    w.alphaValue = 1
-                }
-            } else {
+        // ★★★ 2026-10-27 第四次(用户:「⌘Tab 也会闪,闪的那一下是**出现了之前的画面**」):
+        //   托盘窗是**复用**的 ⇒ 上屏那一刻 WindowServer 里还留着**上一局那一帧**的位图 ✗
+        //   SwiftUI 的 `entryFade` 只能盖住"新内容",盖不住"还没被替换掉的旧位图" ✗
+        //   ⇒ **所有会话**统一走时间闸:开局后 `trayRevealAt` 之前保持 alpha 0,
+        //     到点再显示(此时后备存储已经是新内容)✓
+        //     窗口局 140ms(等卡片图),常规会话 60ms(内容本来就到得快)
+        let w = previewPanel
+        let reveal = trayRevealAt
+        let now = CFAbsoluteTimeGetCurrent()
+        if now < reveal {
+            w.alphaValue = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, reveal - now + 0.01)) {
+                guard self.isVisible else { return }
                 w.alphaValue = 1
             }
         } else {
-            previewPanel.alphaValue = 1
+            w.alphaValue = 1
         }
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局

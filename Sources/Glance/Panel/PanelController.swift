@@ -73,7 +73,9 @@ final class PanelController: ObservableObject {
     /// 窗口局托盘的"允许上屏"时刻(CD 时间)。在那之前托盘一律 alpha 0 ——
     /// 因为毛玻璃那一层是**窗口自己的材质**,SwiftUI 的 opacity 管不到它 ⇒
     /// 窗口一上屏就先看见一层浅灰玻璃、内容后到 = 用户看到的闪 ✗
-    var windowsTrayRevealAt: CFAbsoluteTime = 0
+    /// 托盘**允许上屏**的时刻:开局后这段时间内保持 alpha 0 ——
+    /// 否则会先看到"上一局那一帧"(托盘窗复用,后备存储里还是旧画面)✓
+    var trayRevealAt: CFAbsoluteTime = 0
     var heldTrayFrame: NSRect?
 
     /// **冻结托盘窗框** `seconds` 秒(删窗重排那一拍用)。
@@ -333,6 +335,8 @@ final class PanelController: ObservableObject {
     /// · Esc / 点空白 ⇒ 放弃(既有路径)
     @discardableResult
     func beginWindows(reverse: Bool) -> Bool {
+        // 窗口局:托盘要多等一会儿(卡片图到齐)✓
+        trayRevealAt = CFAbsoluteTimeGetCurrent() + 0.14
         // ★★★ 2026-10-27 用户:「焦点不在内键屏也能唤起整个面板,但 ⌘` 唤不起窗口 —— 应该跟面板
         //   保持一样的唤起逻辑:**鼠标在哪就唤起哪个屏幕、台前的第一个应用**,不管它有没有焦点」
         //   上一版错在拿**全局前台 App**(`frontmostApplication`):内键屏上 IDEA 在最前面、
@@ -347,7 +351,6 @@ final class PanelController: ObservableObject {
             return false
         }
         windowsOnly = true
-        windowsTrayRevealAt = CFAbsoluteTimeGetCurrent() + 0.14
         // 没有环 ⇒ 卡片放大,**但比"一倍"收 20%**(用户:「相对屏幕居中, 缩小 20%」)✓
         PanelMetrics.trayZoom = 1.28
         begin(reverse: reverse)
@@ -356,6 +359,8 @@ final class PanelController: ObservableObject {
 
 
     private func begin(reverse: Bool) {
+        // 常规会话:60ms 足够让新内容画进后备存储(窗口局会在 `beginWindows` 里改成 140ms)
+        trayRevealAt = CFAbsoluteTimeGetCurrent() + 0.06
         entryTick &+= 1
         // ★★ 2026-10-26 病例(用户:「切换几次之后, 再重新唤起面板, 芯片跑到下面去了」):
         //   上一局散场时,轨道样式会 `holdTrayFrame(0.5)`(冻住窗框,免得"先缩小再消失")✗
