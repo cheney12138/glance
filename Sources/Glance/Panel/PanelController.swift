@@ -311,12 +311,17 @@ final class PanelController: ObservableObject {
     /// · Esc / 点空白 ⇒ 放弃(既有路径)
     @discardableResult
     func beginWindows(reverse: Bool) -> Bool {
-        // ★ 2026-10-27 用户:「单窗口不唤起卡片, 多窗口 App 才有意义」
-        //   ⇒ 这一发先做一次**廉价**判定(只读 CG 窗口表,不碰 AX):
-        //     前台 App 在屏上的普通窗 < 2 ⇒ 不接(面板不弹,键也放行)✓
-        guard let front = NSWorkspace.shared.frontmostApplication,
-              Self.onscreenWindowCount(pid: front.processIdentifier) >= 2 else {
-            if isTraceEnabled { glog("[窗口局] 前台 App 只有 1 扇窗 ⇒ 不唤起") }
+        // ★★★ 2026-10-27 用户:「焦点不在内键屏也能唤起整个面板,但 ⌘` 唤不起窗口 —— 应该跟面板
+        //   保持一样的唤起逻辑:**鼠标在哪就唤起哪个屏幕、台前的第一个应用**,不管它有没有焦点」
+        //   上一版错在拿**全局前台 App**(`frontmostApplication`):内键屏上 IDEA 在最前面、
+        //   而键盘焦点在别的屏(或别的 App)时,这个全局值不是 IDEA ⇒ 直接被门禁挡掉 ✗
+        //   ⇒ 判据改成和面板**同一个源**:`lastSessionGroups`(已按**光标所在屏**排序)的第一组 ✓
+        //   —— 只有"这份名单确实属于这块屏"时才用它做廉价预检;对不上就放行,
+        //      由 `finishBegin` 拿到真实名单后再判(见那里 `<2 扇窗 ⇒ 整局作废`)
+        if let screen = CursorScreenAnchor.cursorScreen,
+           DisplayOrder.displayID(of: screen) == lastSessionScreenID,
+           let first = lastSessionGroups.first, first.windows.count < 2 {
+            if isTraceEnabled { glog("[窗口局] 这块屏的台前 App \(first.appName) 只有 1 扇窗 ⇒ 不唤起") }
             return false
         }
         windowsOnly = true
@@ -326,19 +331,6 @@ final class PanelController: ObservableObject {
         return true
     }
 
-    /// 前台 App 在屏上的**普通窗**数量(廉价:一次 `CGWindowListCopyWindowInfo`,~1–3ms,
-    /// 不触发 AX)。只用于"值不值得开这一局"的判定 —— 真正的名单仍走后台枚举 ✓
-    private static func onscreenWindowCount(pid: pid_t) -> Int {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                                    kCGNullWindowID) as? [[String: Any]] else { return 0 }
-        return list.filter { info in
-            (info[kCGWindowOwnerPID as String] as? pid_t) == pid
-                && (info[kCGWindowLayer as String] as? Int) == 0
-                && ((info[kCGWindowBounds as String] as? [String: Any])
-                        .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }?
-                        .height ?? 0) > 100
-        }.count
-    }
 
     private func begin(reverse: Bool) {
         entryTick &+= 1
@@ -471,16 +463,14 @@ final class PanelController: ObservableObject {
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
         groups = WindowEnumerator.orderByMRU(raw, on: screen ?? NSScreen.main ?? NSScreen.screens[0])
         if windowsOnly {
-            // 只保留**前台 App**那一组 ⇒ 托盘里就是这个 App 的窗口
-            let frontPID = WindowEnumerator.recentlyActivePID(of: Set(groups.map(\.pid)))
-            if let pid = frontPID, let idx = groups.firstIndex(where: { $0.pid == pid }) {
-                let g = groups[idx]
-                groups = [g]
+            // ★ 2026-10-27:口径改成"**这块屏**台前的第一个 App"(与面板同一个源):
+            //   `groups` 已经是 `orderByMRU(raw, on: screen)` 的结果 ⇒ 第一组就是它 ✓
+            //   (上一版用全局 `recentlyActivePID`,焦点在别的屏时会选错人 ✗)
+            if let first = groups.first {
+                groups = [first]
                 if isTraceEnabled {
-                    glog("[窗口局] 只留前台 App: \(g.appName) · \(g.windows.count) 扇窗")
+                    glog("[窗口局] 只留台前 App: \(first.appName) · \(first.windows.count) 扇窗")
                 }
-            } else if groups.count > 1 {
-                groups = [groups[0]]
             }
         }
         SessionMarks.step("顺序")     // 🔬 细账(2026-10-09):拆"落点"这一段
