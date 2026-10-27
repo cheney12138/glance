@@ -320,6 +320,7 @@ final class PanelController: ObservableObject {
             return false
         }
         windowsOnly = true
+        PanelMetrics.trayZoom = 2      // 没有环 ⇒ 卡片可以放大一倍 ✓
         begin(reverse: reverse)
         return true
     }
@@ -1257,8 +1258,9 @@ final class PanelController: ObservableObject {
 
     func dismiss(reason: String) {
         hintWork?.cancel(); hintWork = nil; hintText = nil
-        // ⌘` 的"只有窗口"会话结束 ⇒ 复位(下一局按常规显示环)✓
+        // ⌘` 的"只有窗口"会话结束 ⇒ 复位(下一局按常规档位)✓
         windowsOnly = false
+        PanelMetrics.trayZoom = 1
         idleWork?.cancel()   // 散场就把表撤掉(免得迟到的那一发对着已关的面板说话)
         idleWork = nil
         // 先把在途的 begin 作废:枚举搬后台之后,"括键比枚举先到"是能发生的 ——

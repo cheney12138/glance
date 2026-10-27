@@ -56,8 +56,13 @@ enum PanelMetrics {
     // ══════════════════════════════════════════════════════════════════════════════
     /// 本会期**托盘**的尺寸上限(由 `PanelController.applySessionScaleCap` 按各组算)
     static var trayCap: CGFloat = .greatestFiniteMagnitude
+    /// 托盘的**额外放大**(2026-10-27 用户:「只有卡片的时候,尺寸可以放大一倍,因为没有环了嘛」)
+    /// 只在 ⌘` 的"只有窗口"那一局里为 2,其余时候为 1 ✓
+    /// 它乘在 `trayScale` 上 ⇒ 卡片、芯片、内边距、托盘窗尺寸、快照请求尺寸**全部同源放大** ✓
+    /// (上屏仍是 2x retina ⇒ 卡片画面按新尺寸重新取图,不是把低位图拉大 ✓)
+    static var trayZoom: CGFloat = 1
     /// 托盘的尺子 —— 与 `scale` 同构,只是上限来源不同
-    static var trayScale: CGFloat { min(fixedScale, trayCap) }
+    static var trayScale: CGFloat { min(fixedScale, trayCap) * trayZoom }
     /// 基准值 → 托盘的实值(**托盘专用**,别与 `k` 混用 ✗)
     private static func kT(_ base: CGFloat) -> CGFloat { base * trayScale }
     /// 给别的模块(如 `PanelMotion`)按基准值取一个跟着缩放走的量。
