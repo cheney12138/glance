@@ -2250,7 +2250,6 @@ struct ChipRailGroup: View {
             VStack(spacing: 0) {
                 ForEach(0..<(windows.count * copies), id: \.self) { idx in
                     chip(logical: idx % windows.count)
-                        .frame(height: PanelMetrics.chipRailStep, alignment: .center)
                 }
             }
             .frame(width: lane, alignment: .topLeading)
@@ -2317,6 +2316,13 @@ struct ChipRailGroup: View {
         .scaleEffect(isOn ? 1 : 0.965)
         // 入场/换组那一拍 scrollMotion 为 nil ⇒ 当拍落(不许从上一组的缩放里长出来)✓
         .animation(scrollMotion, value: isOn)
+        // ★★ 2026-10-26 第二次(用户:「期望是窗口缩小、芯片**整体**左移, 但芯片不是一齐移动的」):
+        //   `.animation(_:value:)` 会把**这枚芯片的布局**(位置)也卷进它自己的事务 ⇒
+        //   换窗那一拍,只有"选中状态变了"的那两枚芯片在 0.22s 里滑过去,其余当拍跳 ⇒
+        //   一列芯片**不同步** ✗
+        //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
+        //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
+        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
