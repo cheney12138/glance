@@ -963,6 +963,15 @@ private struct WindowThumb<Overlay: View>: View {
                 }
             }
         }
+        // ★★★ 2026-10-27(用户连着两轮「没修好」,录屏逐帧:整列芯片左移用了 ~12 帧):
+        //   明暗那两条 `.animation(fadeMotion, value: dim / blurFade)` 挂在 **frame 外面** ——
+        //   注释里写的"布局完全不依赖 dim"在**卡宽恒定**的年代成立;今天卡宽 = 选中窗自己的尺寸,
+        //   于是 `dim` 一变(组内换窗就会变),这两条动画就把 **frame 的尺寸** 一起插值 ✗
+        //   ⇒ 把"明暗/模糊"挪进 frame **里面**(只包住绘制),frame 留在动画之外 ⇒ 几何当拍落 ✓
+        .opacity(dim)
+        .saturation(selected ? 1 : 0.88)
+        .animation(fadeMotion, value: dim)      // 只认 dim(现在它真的只影响绘制 ✓)
+        .animation(fadeMotion, value: blurFade)
         .frame(width: box.width, height: box.height)
         // ★ demo `.win:not(.sel) .thumb{filter:brightness(.72) saturate(.88)}`(2026-10-19)
         //   旧口径是"整卡压到 30% 不透明度"—— 未选中的卡几乎塌成一块灰,用户读作
@@ -975,11 +984,6 @@ private struct WindowThumb<Overlay: View>: View {
         //      (新组的卡位置不同)被一起动画化 ⇒ 卡片从左边滑进来 ✗
         //   ⇒ 现在:只动一个**标量** `dim`(布局完全不依赖它),用 `withAnimation` 单独改它 ✓
         //     几何(缩放/上浮/阴影)继续听 `selMotion`,换组时照样当拍 ✓
-        .opacity(dim)
-        .animation(fadeMotion, value: dim)   // ★ 只认 `dim`(布局完全不依赖它)⇒ 不会带走布局 ✓
-        // 「对焦」:只认 `blurFade`(布局完全不依赖它 ✓)⇒ 0.16s 磨砂淡出/淡入
-        .animation(fadeMotion, value: blurFade)
-        .saturation(selected ? 1 : 0.88)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
@@ -1122,13 +1126,16 @@ private struct WindowThumb<Overlay: View>: View {
             // 而现在的 macOS 早就不用它了(浅色那格当年也没这道唇,它返回的是全透明)。
             // 芯片要的"清透"由**底的半透**承担(透过它看到的是已毛玻璃化的画面),不再由受光边承担。
             // 与卡片同宽(demo:胶囊贴着卡片左右缘),高度仍是 chipH —— 尺寸账一个数没变 ✓
-            .frame(width: box.width, height: PanelMetrics.chipH)
             // demo `.win.sel .chip{transition:... .2s}` —— 圆点换色不再硬切
             // ⚡ 换组那一拍**同样不给动画**(2026-10-19 用户:「芯片从左下角出现」✗):
             //   新组卡宽不同 ⇒ 芯片的 frame 宽度也在那一拍变 ⇒ 被这条动画一吃,
             //   芯片就是从旧宽度/旧位置"长"出来的 ✗
+            // ★ 2026-10-27:同样的道理 —— `selected` 一变就会走这条动画,而**卡宽**
+            //   (`box` = 选中窗自己的尺寸)也在同一拍变 ⇒ 动画会连带把 frame 插值 ✗
+            //   ⇒ 动画写在 frame **里面**(只包绘制:圆点/文字颜色),frame 留到动画外面 ✓
             .animation(motionSuppressed ? nil
                        : ringSelectMotion, value: selected)
+            .frame(width: box.width, height: PanelMetrics.chipH)
     }
 }
 
