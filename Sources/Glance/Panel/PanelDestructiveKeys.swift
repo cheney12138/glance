@@ -116,6 +116,26 @@ extension PanelController {
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
+            // ★★ 2026-10-27(用户:「cmd w 关掉最后一个窗口, 对有的 app 来说也算退出,
+            //    那个(收窄)动效就没覆盖」):
+            //   `optimisticRemoval(.close)` 里组空了**故意不摘**(= 无窗 App 占位),
+            //   判据 `isTerminated == false` —— 但"关末窗就退出"的 App 此刻**还在收尾**,
+            //   于是留下占位、环不收窄;等重枚举真摘它时走的又是 `applyRefreshed`
+            //   (`resizeWindow: true`)**不是** ⌘Q 那条"窗框不动 + SwiftUI 宽度动画"✗
+            //   ⇒ 末窗关闭后补一次退出判定:进程真没了 ⇒ 按 `.quit` 补**同一段**收窄 ✓
+            if g.windows.count <= 1, g.pid != ProcessInfo.processInfo.processIdentifier {
+                let generation = beginGeneration
+                let pid = g.pid, name = g.appName
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, self.beginGeneration == generation, self.isVisible else { return }
+                    guard NSRunningApplication(processIdentifier: pid)?.isTerminated == true else { return }
+                    guard let live = self.groups.first(where: { $0.pid == pid }) else { return }
+                    glog("[T12] 末窗关闭后进程已退出(⌘W = 退出): \(name) → 按退出收窄")
+                    self.quitPIDs.insert(pid)
+                    self.optimisticRemoval(.quit, in: live, resizeWindow: false)
+                    self.refreshAfterAction()
+                }
+            }
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
