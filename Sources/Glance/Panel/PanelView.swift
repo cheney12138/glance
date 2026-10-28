@@ -132,7 +132,10 @@ if sheen {
         .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         // ★ 环变短要**平滑收窄**(用户 2026-10-20:「环的长度缩短没有动画,是直接生硬地缩短」)。
         //   只动 SwiftUI 的 frame(窗框在 fillHole 时故意不动)⇒ 碰不到 AppKit 的窗口 resize ✓
-        .animation(controller.selectionAnimation(PanelMotion.slide), value: controller.groups.count)
+        // ★ 本局名单还在路上时不播"环变长/变短"动画(先上屏的是陈旧名单,真名单一到
+        //   才把新开的 App 加进来 ⇒ 那段形变用户读作"卡在变"✗ 见 `listSettling`)
+        .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.slide),
+                   value: controller.groups.count)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
         // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
         // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),

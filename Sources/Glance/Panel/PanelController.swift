@@ -101,6 +101,11 @@ final class PanelController: ObservableObject {
     /// 视图实例没变、`onAppear` 不再触发;`bundleID` 也没变 ⇒ 动画就"有时播有时不播" ✗
     /// ⇒ 入场统一认这个令牌 ✓
     @Published private(set) var entryTick = 0
+    /// **本局的名单还在路上**(陈旧名单已上屏、真名单未到)——
+    /// 这期间 `groups.count` 的变化不许播"环变长/变短"的动画 ✗
+    /// 病例(2026-10-27,用户):新开一个 App、再 ⌘Tab ⇒ 先上屏的是陈旧名单(没它),
+    /// 真名单到了才把它加进来 ⇒ 环**中途形变**长出来,读起来像"卡在变" ✗
+    @Published private(set) var listSettling = false
     /// **入场进度**(0…1,1 = 到位):芯片 / 轨道那一记"自下而上浮出"由它驱动。
     ///
     /// ★★ 2026-10-26 第三次修(用户:「动效还是时有时没有」):
@@ -388,6 +393,7 @@ final class PanelController: ObservableObject {
         confirmBeforeList = false
         confirmWaitWork?.cancel(); confirmWaitWork = nil
         listReady = false
+        listSettling = true
         // 打卡器开账:一局的环节时间轴从这里起算(见 `SessionMarks`)
         SessionMarks.begin("唤起")
         // **先抢优先级,再干活**:`.latencyCritical` 这条断言要从按键那一刻生效,不能等到 `showPanel`
@@ -541,6 +547,8 @@ final class PanelController: ObservableObject {
         reconcileMinimizedMarks(raw)
         SessionMarks.step("剪枝")     // 🔬 细账
         listReady = true
+        // 名单定稿:本拍渲染仍按 `listSettling = true`(不加动画),下一拍才放开 ✓
+        DispatchQueue.main.async { [weak self] in self?.listSettling = false }
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
