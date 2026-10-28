@@ -677,7 +677,11 @@ private struct LaunchListEditor: View {
     }
 
     private func save() {
-        DockAppsProvider.setList(ids, forKey: kind.defaultsKey)
+        // 兜底去重(保持顺序):历史版本允许过重复添加,别让旧数据一直躺着 ✓
+        var seen = Set<String>()
+        let deduped = ids.filter { seen.insert($0).inserted }
+        ids = deduped
+        DockAppsProvider.setList(deduped, forKey: kind.defaultsKey)
     }
 
     /// 两名单并集(去掉自己这边的)—— 选择器的排除集,互斥的实现点
@@ -753,8 +757,21 @@ private struct AppPicker: View {
         .onAppear { apps = DockAppsProvider.scanInstalledApps() }
     }
 
+    /// ★★ 2026-10-28(用户:「我添加进白名单了, 但是搜索的时候还能搜到, 已经存在了,
+    ///   不应该允许重复添加」):`exclude` 这个参数**从写下去那天起就没有被用过** ✗
+    ///   (声明在、传进来在、`filtered` 里没读它 ⇒ 已在名单里的 App 照样出现在搜索结果里 ✓)
+    ///   ⇒ 过滤里把它并上,并且**现读**两个名单(列表可能在 sheet 打开后被改过)✓
+    private var taken: Set<String> {
+        exclude
+            .union(DockAppsProvider.whitelist)
+            .union(DockAppsProvider.blacklist)
+    }
+
     private var filtered: [DockAppsProvider.InstalledApp] {
-        apps.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        apps.filter {
+            !taken.contains($0.id)
+                && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query))
+        }
     }
 
     private func row(_ app: DockAppsProvider.InstalledApp) -> some View {
