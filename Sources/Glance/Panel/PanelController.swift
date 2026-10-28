@@ -14,6 +14,20 @@ final class PanelController: ObservableObject {
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
         ) { [weak self] _ in Task { @MainActor in self?.dismissForSystemSleep() } }
+        // ★★ 2026-10-28(用户:「设置打开, 按 cmd tab, 环还是有一个伸长的过程, 因为加了一个 app 进来;
+        //   接着第二次唤起, app 的位置还变动了」):
+        //   唤起先用 `lastSessionGroups`(上一局名单)上屏,而它**只在开局那一刻**写过 ⇒
+        //   之后新开的 App 不在里面 ⇒ 真名单一到,环**边长**、位置也**跳** ✗
+        //   ⇒ 面板不在屏上时,利用"App 启动/退出 / 上一局散场"把这份缓存**续鲜** ✓
+        //   (纯后台,面板不在屏上 ⇒ 用户看不到任何跳动;代价是一局一次枚举,~50–190ms,闲时 ✓)
+        for name in [NSWorkspace.didLaunchApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshStaleListSoon() }
+            }
+        }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(
                 forName: name, object: nil, queue: .main
@@ -484,6 +498,30 @@ final class PanelController: ObservableObject {
     /// 名单落地的那一拍过后,才允许"环变长/变短"的动画(本拍必须闭嘴)✓
     private func settleListSoon() {
         DispatchQueue.main.async { [weak self] in self?.listSettling = false }
+    }
+
+    private var staleRefreshWork: DispatchWorkItem?
+    private var didObserveLifecycle = false
+
+    /// 面板**不在屏上**时,把"上一局名单"这份缓存续鲜(见 init 里的病例)✓
+    func refreshStaleListSoon() {
+        guard !isVisible else { return }        // 局中由 `applyRefreshed` 负责,这里不许插嘴 ✗
+        staleRefreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isVisible else { return }
+            guard let screen = CursorScreenAnchor.cursorScreen else { return }
+            Task.detached(priority: .utility) {
+                let raw = WindowEnumerator.rawGroups(on: screen)
+                await MainActor.run {
+                    guard !self.isVisible else { return }
+                    self.lastSessionGroups = WindowEnumerator.orderByMRU(raw, on: screen)
+                    self.lastSessionScreenID = DisplayOrder.displayID(of: screen)
+                }
+            }
+        }
+        staleRefreshWork = work
+        // 0.5s 防抖:启动一坨 App / 关一批窗时只算一次 ✓
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     /// 启动区名单(候选 + 在跑)的**后台刷新**(病例与实测账见 `DockAppsProvider.candidateCache`
@@ -1334,6 +1372,9 @@ final class PanelController: ObservableObject {
         entrySelected = false
         launchIndex = nil
         isVisible = false
+        // 散场后名单会变(MRU 改了顺序 / 刚才处决了谁)⇒ 缓存在后台续鲜,
+        // 下一局唤起才不会"先按旧顺序上屏、真名单一到位置全跳"✗
+        refreshStaleListSoon()
         sessionBaseline = nil
         LivePreviewPool.shared.stopAll(reason: "面板关闭")
         // ★★ 2026-10-25(用户实报「按 ` 切窗口,面板看着缩小了一下」):
