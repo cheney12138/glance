@@ -336,7 +336,10 @@ if sheen {
         .contentShape(Rectangle())
         .onHover { inside in if inside { controller.hoverApp(i) } }
         .onTapGesture { controller.launchAt(i) }
-        .animation(controller.selectionAnimation(PanelMotion.select), value: controller.launchIndex)
+        // ★ 同上:名单还没定稿时,`launchIndex` 会因为"多了一个 App"整体右移一位 ——
+        //   那条 `.animation` 会把**所有路牌**一起平滑挪过去 = 用户看到的"新 App 从环里长出来"✗
+        .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.select),
+                   value: controller.launchIndex)
     }
     
     /// 滑动托底 —— **实现搬去 `PuckView.swift`**(2026-09-22 拆分:它是独立一块,
