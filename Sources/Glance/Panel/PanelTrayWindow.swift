@@ -311,39 +311,31 @@ extension PanelController {
                         entryFadeProgress, trayShownOnce ? "否" : "是"))
         }
         trayShownOnce = true
-        // ★★ 2026-10-27(用户:「有个很明显的闪烁」,60fps 逐帧:卡片亮度 81 → 63 → 48 → 37 → 34,
-        //   而第一帧的画面是**一层浅灰玻璃、没有内容**):窗口先上屏、内容后画 = 老"白光" ✗
-        //   常规会话靠 `entryFade`(SwiftUI 侧渐入)遮住这一拍;窗口局的托盘没走那条 ⇒ 漏了 ✓
-        //   ⇒ 窗口局:托盘自己按 ~90ms 从 0 淡到 1(与"画完再显"同一条纪律)✓
-        // ★★★ 2026-10-27 第五版(用户:「旧帧/白光又回来了」;固定时长会"迟钝且没修复"):
-        //   **内容就绪**才显示托盘,而不是等一个固定时间 ——
-        //   卡片还没拿到图时,那层灰玻璃就是用户看到的"空/旧"画面 ✗
-        //   ⇒ 选中的那扇窗**有图**(静帧缓存 或 已到的实时帧)才 alpha 1;
-        //     没图就继续 alpha 0,并且 ~16ms 后再自检一次,最多等 ~0.4s(防卡死)✓
-        let selWid: CGWindowID? = {
-            guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
-            return g.windows[winIndex].wid
-        }()
-        // ★★ 2026-10-27(用户:「不白了, 但会在上一个画面和 live 之间切换」):
-        //   开直播时,若先显示**静帧**(可能是几分钟前的画面)、再叠化到 live,
-        //   看得到的不是"闪"而是"画面跳了一下" ✗
-        //   ⇒ 开直播时,选中卡**等 live 第一帧**再显示托盘(静帧只在等不到时兜底)✓
-        let liveEnabled = LivePreviewPool.enabled
-        let hasImage: Bool = {
-            guard let wid = selWid else { return true }
-            if liveEnabled, LivePreviewPool.shared.box(for: wid).image != nil { return true }
-            if !liveEnabled, Snapshotter.shared.cache[wid] != nil { return true }
-            return false
-        }()
-        let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
-        if hasImage || waited > 0.4 {
-            previewPanel.alphaValue = 1
-        } else {
-            previewPanel.alphaValue = 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
-                guard let self, self.isVisible else { return }
-                self.updatePreview()
+        // ★★★ 2026-10-27 定稿(用户:「接受不了(延迟), 撤回吧, 只保留对 ⌘` 卡片唤起的处理」):
+        //   "等图才显示"那套**只留给窗口局**;常规 ⌘Tab 恢复**当拍显示**(一个像素的延迟都不加)✓
+        if windowsOnly {
+            let selWid: CGWindowID? = {
+                guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
+                return g.windows[winIndex].wid
+            }()
+            let hasImage: Bool = {
+                guard let wid = selWid else { return true }
+                if Snapshotter.shared.cache[wid] != nil { return true }
+                if LivePreviewPool.shared.box(for: wid).image != nil { return true }
+                return false
+            }()
+            let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
+            if hasImage || waited > 0.4 {
+                previewPanel.alphaValue = 1
+            } else {
+                previewPanel.alphaValue = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                    guard let self, self.isVisible else { return }
+                    self.updatePreview()
+                }
             }
+        } else {
+            previewPanel.alphaValue = 1
         }
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局

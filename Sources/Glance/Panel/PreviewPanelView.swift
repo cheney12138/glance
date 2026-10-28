@@ -903,7 +903,6 @@ private struct WindowThumb<Overlay: View>: View {
                         // ★ S2:实时帧优先(现在**不分选中** —— 见 `liveFrame` 的病例)。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
                         //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
                         Image(decorative: liveFrame, scale: 1).resizable()
-                            .opacity(liveBox.fade)
                             .scaledToFill()
                             .frame(width: box.width + 6, height: box.height + 6)
                             .clipped()
@@ -1264,8 +1263,6 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     private var firstFramesHandled = 0
     /// 每条流已收到的帧数(丢掉起流初期的 2 帧:那两帧亮度会跳 ~8%)
     private var framesSeen: [CGWindowID: Int] = [:]
-    /// 每条流的**亮度增益**(补 snapshot→live 的那点偏暗;按实测比值算,不猜)✓
-    private var gains: [CGWindowID: Double] = [:]
     /// 起流时冻结的**像素规格**。⚠️ 只写不清是不行的(2026-09-21 病例):
     /// 它是按"当时那块屏"的像素尺寸算的 ⇒ 接拔外接屏/改分辨率后**全部过期** ✗
     /// ⇒ 见 `screenConfigChanged()`:显示配置一变,整本作废 ✓
@@ -1631,7 +1628,6 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         activeGens.remove(h.gen)
         handles[wid] = nil; startedAt[wid] = nil; firstFrameLogged.remove(wid); idleSince[wid] = nil
         framesSeen[wid] = nil
-        gains[wid] = nil
         glog("[直播] 停流 wid=\(wid)(\(why))")
     }
 
@@ -1834,60 +1830,27 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   如果帧本来是按 P3 出的像素,贴个 sRGB 标签只会被解释成"更艳/更亮" ✗
         //   ⇒ 现在按 `CardImageCache` 那条老规矩:**真的重绘进 sRGB 位图**(一次色彩转换)✓
         //   成本:536×292 一次 draw ≈1–2ms,跑在池队列上(20fps ⇒ 可忽略)✓
-        // ★★★ 2026-10-27(探针实测,终于有硬数字了):
-        //   实时帧 **α=1.000(不透明)**,但**比静帧暗 12%**(live 0.268 vs 静帧 0.303,比 0.884,
-        //   前 10 帧恒定)⇒ 用户看到的就是"snapshot → live 那一下整体变暗" ✓
-        //   原因:静帧在 `CardImageCache` 里被**重绘进 sRGB**(一次真色彩转换),
-        //   而实时帧只在"带了非 sRGB 标签"时才转换 —— nil 标签的帧直接按器件空间解释 ⇒ 偏暗 ✗
-        //   ⇒ **一律重绘进 sRGB**,与静帧同一把尺子 ✓(536×292 一次 draw ≈1–2ms,20fps 可忽略)
-        // ★ 源色空间:帧有标签就用它;没有则按**显示器**的色空间解释(SCK 的缓冲本就是显示器空间),
-        //   再一路转换到 sRGB —— 与静帧(也是从显示器空间转到 sRGB)同一把尺子 ✓
-        var src = img
-        if img.colorSpace == nil, let displaySpace = NSScreen.main?.colorSpace?.cgColorSpace,
-           let retagged = img.copy(colorSpace: displaySpace) {
-            src = retagged
-        }
         var tagged: CGImage = img
-        if let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
+        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB,
+           let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
             let w = img.width, h = img.height
             if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                    space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
                 ctx.interpolationQuality = .none
-                let rect = CGRect(x: 0, y: 0, width: w, height: h)
-                ctx.draw(src, in: rect)
-                // ★ 增益补偿(2026-10-27):实时帧比静帧暗约 5%(实测比值)——
-                //   "再叠一层同图 + plusLighter"等价于把 RGB 乘一个系数,
-                //   比 CoreImage 便宜,也不用自己写像素循环 ✓
-                if let g = gains[wid], g > 1.002 {
-                    ctx.setBlendMode(.plusLighter)
-                    ctx.setAlpha(CGFloat(min(g - 1, 0.12)))
-                    ctx.draw(src, in: rect)
-                    ctx.setAlpha(1)
-                    ctx.setBlendMode(.normal)
-                }
+                ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
                 if let out = ctx.makeImage() { tagged = out }
             }
             if firstFramesHandled < 3 {
                 firstFramesHandled += 1
-                glog("[直播] 帧色彩空间 = \(img.colorSpace?.name as String? ?? "nil") ⇒ 已重绘进 sRGB wid=\(wid)")
+                glog("[直播] 帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 已转换到 sRGB wid=\(wid)")
             }
         }
+        // ★★ 2026-10-27:**丢掉每条流的前 2 帧**(实测那两帧亮度 +8%、之后立刻回到与静帧一致):
+        //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
         framesSeen[wid, default: 0] += 1
-        if gains[wid] == nil, framesSeen[wid, default: 0] <= 3 {
-            let liveL = Self.meanLuma(img)
-            let snapImg: CGImage? = DispatchQueue.main.sync {
-                Snapshotter.shared.cache[wid]?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            }
-            if let snapImg {
-                let snapL = Self.meanLuma(snapImg)
-                if liveL > 0.005, snapL > 0.005 {
-                    let g = min(max(snapL / liveL, 1.0), 1.12)
-                    gains[wid] = g
-                    glog(String(format: "[直播增益] wid=%u live=%.3f 静帧=%.3f ⇒ 增益 %.3f",
-                                wid, liveL, snapL, g))
-                }
-            }
-        }
+        if framesSeen[wid, default: 0] <= 2 { return }
+        // 🔬 二分开关:`debug.noLive` ⇒ 丢掉所有实时帧(只留静帧)
+        if DebugFlags.noLive { return }
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
@@ -1897,51 +1860,9 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         deliver(tagged, wid: wid)
     }
 
-    /// 平均亮度(0…1):32×32 缩略后按 BT.601 加权 ✓
-    /// 平均 alpha(0…1):用来判断实时帧是不是**半透明**(半透明叠在深色底上会整体变暗)
-    static func meanAlpha(_ img: CGImage) -> Double {
-        let n = 32
-        guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 1 }
-        ctx.draw(img, in: CGRect(x: 0, y: 0, width: n, height: n))
-        guard let buf = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return 1 }
-        var sum = 0.0
-        for i in stride(from: 0, to: n * n * 4, by: 4) { sum += Double(buf[i + 3]) }
-        return sum / Double(n * n) / 255.0
-    }
-
-    static func meanLuma(_ img: CGImage) -> Double {
-        let n = 32
-        guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
-        ctx.interpolationQuality = .low
-        ctx.draw(img, in: CGRect(x: 0, y: 0, width: n, height: n))
-        guard let buf = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return 0 }
-        var sum = 0.0
-        for i in stride(from: 0, to: n * n * 4, by: 4) {
-            sum += 0.299 * Double(buf[i]) + 0.587 * Double(buf[i + 1]) + 0.114 * Double(buf[i + 2])
-        }
-        return sum / Double(n * n) / 255.0
-    }
-
     /// 一张图**上屏**(直播帧与静帧共用 ✓ —— 两条路各写一份必然漂 ✗,这是本仓的老规矩)
     /// ⚠️ 只在**池队列**上调用(账本 `latest`/`latestOrder`/`wanted` 全是池队列状态 ✓)
     fileprivate func deliver(_ img: CGImage, wid: CGWindowID) {
-        // 首次交付 = 这一扇窗从"静帧"切到"实时" ⇒ 让实时层 0→1 淡入(~100ms)、
-        // 静帧永远垫在下面 ⇒ 那一拍不是"整块换源",而是叠化 ✓
-        if framesSeen[wid] == 1 {
-            DispatchQueue.main.async {
-                let box = LivePreviewPool.shared.box(for: wid)
-                box.fade = 0
-                for i in 1...5 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.02) {
-                        box.fade = Double(i) / 5.0
-                    }
-                }
-            }
-        }
         if latest[wid] == nil { latestOrder.append(wid) }
         latest[wid] = img
         gateLock.lock(); cachedFrames[wid] = img; gateLock.unlock()
@@ -1972,9 +1893,6 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
 /// 一扇窗的"最新一帧盒子" —— 卡片 `@ObservedObject` 它,只在自己这扇窗来帧时重绘 ✓
 final class LiveFrameBox: ObservableObject {
     @Published var image: CGImage?
-    /// 实时层的**淡入进度**(0…1):snapshot → live 那一拍做 ~100ms 交叉,
-    /// 免得"整块换源"被读成闪(2026-10-27 用户:「还在闪」)✓
-    @Published var fade: Double = 1
 }
 
 /// 一条流的输出口(自带 wid ⇒ 归属不靠共享标量,病例 A1)。
