@@ -126,15 +126,26 @@ extension PanelController {
             if g.windows.count <= 1, g.pid != ProcessInfo.processInfo.processIdentifier {
                 let generation = beginGeneration
                 let pid = g.pid, name = g.appName
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                    guard let self, self.beginGeneration == generation, self.isVisible else { return }
-                    guard NSRunningApplication(processIdentifier: pid)?.isTerminated == true else { return }
-                    guard let live = self.groups.first(where: { $0.pid == pid }) else { return }
-                    glog("[T12] 末窗关闭后进程已退出(⌘W = 退出): \(name) → 按退出收窄")
-                    self.quitPIDs.insert(pid)
-                    self.optimisticRemoval(.quit, in: live, resizeWindow: false)
-                    self.refreshAfterAction()
+                // ★★ 2026-10-28(用户:「cmd w 关闭窗口之后, app 迟钝个 0.5s 再进动效」):
+                //   上一版只探**一次**(0.15s)—— 目标 App 收尾常常比 150ms 长,
+                //   那一次没探到就再没人管 ⇒ 等 0.9s 那次复核/重枚举才摘 ⇒ 读起来是迟钝 ✗
+                //   ⇒ 每 80ms 探一次、最多 1.5s;**一探到就立刻**走 ⌘Q 那条收窄 ✓
+                func probeQuit(_ attempt: Int) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                        guard let self, self.beginGeneration == generation, self.isVisible else { return }
+                        let dead = (NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true)
+                        if dead {
+                            guard let live = self.groups.first(where: { $0.pid == pid }) else { return }
+                            glog("[T12] 末窗关闭后进程已退出(⌘W = 退出): \(name) → 按退出收窄(第 \(attempt) 次探测, \(attempt * 80)ms)")
+                            self.quitPIDs.insert(pid)
+                            self.optimisticRemoval(.quit, in: live, resizeWindow: false)
+                            self.refreshAfterAction()
+                        } else if attempt < 18 {          // ≈1.5s
+                            probeQuit(attempt + 1)
+                        }
+                    }
                 }
+                probeQuit(1)
             }
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
