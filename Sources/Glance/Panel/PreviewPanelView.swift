@@ -806,7 +806,12 @@ private struct WindowThumb<Overlay: View>: View {
             landDim()
             // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
             //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
-            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
+            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { settleIn(gentle: true) }
+            // ★★ 2026-10-28(用户:「多窗口的时候, 卡片没有落位效果」):
+            //   轨道版式里 `settlesOnSwap`/`settlesOnGroupChange` **都是 false** ⇒ 原来这里
+            //   直接 `entrySettle = 1`(没有落位)。而且换窗时这张卡是**新实例**(onAppear 重跑)
+            //   ⇒ `onChange(of: record.wid)` 根本不会响 ⇒ 两条路都没动作 ✗
+            //   现在:没有专属落位档的卡片(= 轨道卡)在 onAppear 时走**轻放**档 ✓
             // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
         }
         .onChange(of: selected) { _, _ in
