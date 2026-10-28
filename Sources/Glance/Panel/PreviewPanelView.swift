@@ -2226,6 +2226,13 @@ struct ChipRailGroup: View {
     /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
     /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
     @State private var scrollMotion: Animation?
+    /// 每枚芯片的"选中标量"(0…1):放大 / 上浮 / 投影 / 亮度都从它派生
+    /// (见 `chip(logical:)` 里 2026-10-28 的病例)✓
+    @State private var lifts: [Int: CGFloat] = [:]
+
+    private func lift(_ logical: Int, _ isOn: Bool) -> CGFloat {
+        lifts[logical] ?? (isOn ? 1 : 0)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2346,7 +2353,9 @@ struct ChipRailGroup: View {
         // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
         //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
         .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
-        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.10 + 0.06 * lift(logical, isOn)),
+                radius: 3 + 3 * lift(logical, isOn),
+                y: 1 + 1.5 * lift(logical, isOn))
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
         .contentShape(Rectangle())
@@ -2358,7 +2367,17 @@ struct ChipRailGroup: View {
         //   这枚芯片的**位置**也卷进去 ⇒ 换窗那一拍"选中态变了的几枚"慢半拍,
         //   一列芯片被读成"有的动有的不动"(上一轮的病灶)。
         //   ⇒ 尺寸差当作**静态状态**表达,动效只保留"颜色/圆点"这类纯绘制 ✓
-        .scaleEffect(isOn ? 1 : 0.964)
+        // ★★★ 2026-10-28(用户:「芯片轨道选中切换的动画太生硬了, 你只是单纯的放大了而已,
+        //   我想要 app hover 一样的感觉」):
+        //   环上的选中/hover 是**一套动作**:抬起来 + 放大 + 投影浮起 + 打亮,走同一条弹簧;
+        //   芯片这边以前只有"当拍换一个静态 scale" ⇒ 读作生硬 ✗
+        //   ⇒ 给每枚芯片一个**标量** `lifts[logical]`(0…1),由 `onChange(of: isOn)` 驱动,
+        //     放大 / 上浮 / 投影 / 亮度全部从它派生(全是**绘制**属性,不碰布局 ✓)
+        //   ⚠️ 必须用 `onChange` + `withAnimation`,不能用 `.animation(_:value: isOn)` ——
+        //     后者会把**位置**卷进同一条事务(2026-10-27「14 动、23 不动」就是它)✗;
+        //     `onChange` 在**下一拍**、独立事务 ⇒ 布局早已落定,只有这枚芯的标量在动 ✓
+        .scaleEffect(0.964 + 0.036 * lift(logical, isOn))
+        .offset(y: -1.5 * lift(logical, isOn))
         // ★★ 2026-10-27 关键裁定(用户:「你现在 14 动, 23 不动, 是何意味」):
         //   每枚芯片的 `.animation(_:value: isOn)` 会把**这枚芯片自己的位置**卷进它的事务
         //   —— 换窗那一拍,恰好是"选中态变了"的那两枚进入动画事务 ⇒ 它们滞后、其余当拍跳
@@ -2373,6 +2392,13 @@ struct ChipRailGroup: View {
         //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
         //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
+        // 选中态变化 ⇒ 用环上那条弹簧把标量推到 0/1(独立事务,见上面那段病例)✓
+        .onChange(of: isOn) { _, on in
+            withAnimation(MotionPolicy.animation(.spring(response: 0.26, dampingFraction: 0.72))) {
+                lifts[logical] = on ? 1 : 0
+            }
+        }
+        .onAppear { if lifts[logical] == nil { lifts[logical] = isOn ? 1 : 0 } }
         .onHover { inside in if inside { onSelect(logical) } }
         .onTapGesture { onSelect(logical); onTap(logical) }
     }
