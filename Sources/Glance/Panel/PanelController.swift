@@ -435,7 +435,12 @@ final class PanelController: ObservableObject {
         //   账:`[打卡] 唤起 共 85.9ms | 枚举 44.8 · 落点 16.0 · 开窗 17.4 · 首帧 7.7`
         //   ⇒ 枚举占一多半,而且它**挡在面板出现之前** ⇒ 入口那两根弹簧的头 3 帧被等掉 ✓
         //   门槛(`StaleListPolicy` ✓):档位开着 ∧ 有名单 ∧ 有窗 ∧ **同一块屏**(ADR-0008 ✓)
-        let stale = StaleListPolicy.canShowStale(
+        // ★★ 2026-10-28(用户:「打开设置 → 唤起, 设置 app 加到环里有个很明显的形变」,
+        //   60fps 逐帧:托盘**右缘 1396 → 1360,跨 ~130ms 一路收窄**):
+        //   陈旧名单是**上一局的完整名单**(可能 8 个 App),窗口局(⌘`)只留一组 ⇒
+        //   真名单一到,托盘宽度当场从"8 个 App 的版式"缩到"1 个 App 的版式" = 可见形变 ✗
+        //   窗口局本来就短、而且它要等图才上屏 ⇒ **不值得为它走陈旧名单**(省下的 ~50ms 看不出来 ✓)
+        let stale = !windowsOnly && StaleListPolicy.canShowStale(
             enabled: DebugFlags.staleListFirst,
             listCount: lastSessionGroups.count,
             windowCount: lastSessionGroups.reduce(0) { $0 + $1.windows.count },
@@ -466,11 +471,19 @@ final class PanelController: ObservableObject {
                     self.trace(String(format: "[T8] 枚举到达 +%.0fms(上屏用的是陈旧名单,这里只刷新内容)", ms))
                     let keepPID = self.groups.indices.contains(self.appIndex) ? self.groups[self.appIndex].pid : nil
                     self.applyRefreshed(raw, keepPID: keepPID, keepWin: self.winIndex, forceReshoot: false)
+                    // ★ 这一拍**就是**"新开的 App 被加进环里"的那一帧 —— 名单动画要闭嘴:
+                    //   本拍渲染时 `listSettling` 仍为 true(叠加替换不加动画),下一拍才放开 ✓
+                    self.settleListSoon()
                 } else {
                     self.finishBegin(raw, generation: generation, beganAt: beganAt, reverse: reverse)
                 }
             }
         }
+    }
+
+    /// 名单落地的那一拍过后,才允许"环变长/变短"的动画(本拍必须闭嘴)✓
+    private func settleListSoon() {
+        DispatchQueue.main.async { [weak self] in self?.listSettling = false }
     }
 
     /// 启动区名单(候选 + 在跑)的**后台刷新**(病例与实测账见 `DockAppsProvider.candidateCache`
@@ -548,7 +561,7 @@ final class PanelController: ObservableObject {
         SessionMarks.step("剪枝")     // 🔬 细账
         listReady = true
         // 名单定稿:本拍渲染仍按 `listSettling = true`(不加动画),下一拍才放开 ✓
-        DispatchQueue.main.async { [weak self] in self?.listSettling = false }
+        settleListSoon()
         // 启动区(方案 E):Dock 常驻 − 在跑的。**同步取** —— 长条宽度与托盘最大布局都依赖它,
         // 晚到 = 面板中途改尺寸(中途 setFrame 是 T76 之前那条老病,别回来)。
         // CFPreferences 读 + 解析是 1ms 级;图标首局逐个加载(几十 ms,一次性),之后走进程级缓存。
