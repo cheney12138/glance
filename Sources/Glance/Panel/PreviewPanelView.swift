@@ -646,20 +646,22 @@ private struct WindowThumb<Overlay: View>: View {
         }
     }
 
-    private func settleIn() {
-        if isTraceEnabled { glog("[动效] 卡片落位 wid=\(record.wid) 组换=\(settlesOnGroupChange)") }
+    /// - Parameter gentle: 换窗用的**轻放**档(0.97、0.16s);入场/换组仍用原档(0.90、0.20s)✓
+    private func settleIn(gentle: Bool = false) {
+        if isTraceEnabled { glog("[动效] 卡片落位 wid=\(record.wid) 组换=\(settlesOnGroupChange) gentle=\(gentle)") }
         // ★★ 2026-10-23 用户裁定:「只针对默认选中的窗口,再加强幅度」+「时有时没有」。
         //   "时有时没有" = **时序问题**(靠 `async`/16ms 猜帧,猜中才动,没猜中就被合并成一帧)✗
         //   ⇒ 改成**自己按帧推**(与窗口淡入 `fadeInWindow` 同一套):每 8ms 一步,
         //     首帧画起始值、后续每步都是一次真实提交 ⇒ 稳定可见 ✓
         guard selected else { entrySettle = 1; return }
-        let start = (UserDefaults.standard.object(forKey: Keys.debugCardSettleScale) as? NSNumber)?
-            .doubleValue ?? 0.90
+        let start = gentle ? 0.97
+            : ((UserDefaults.standard.object(forKey: Keys.debugCardSettleScale) as? NSNumber)?
+                .doubleValue ?? 0.90)
         entrySettle = CGFloat(start)
         settleToken += 1
         let token = settleToken
         let t0 = CACurrentMediaTime()
-        let dur = 0.20
+        let dur = gentle ? 0.16 : 0.20
         if isTraceEnabled { glog("[落位] wid=\(record.wid) start=\(start)") }
         func step() {
             guard token == settleToken else { return }
@@ -839,7 +841,11 @@ private struct WindowThumb<Overlay: View>: View {
         }
         .onChange(of: record.wid) { _, _ in
             landDim()
-            if settlesOnSwap { settleIn() }   // 轨道版式:false ⇒ 换窗只形变,不落位 ✓
+            // ★★ 2026-10-28(用户:「窗口切换太生硬了, 一点动效没有」/「别疯狂掉帧」):
+            //   轨道版式下 `settlesOnSwap = false` ⇒ 换窗这张卡**一点动作都没有**。
+            //   ⇒ 换窗也"轻放"一下:0.97 → 1、0.16s、easeOut + 1.2% 回弹(纯 scale,不碰布局)
+            //   走的是 `settleIn` 那套**按帧推标量**(不是 SwiftUI 事务)⇒ 不会被合并、也不拖布局 ✓
+            settleIn(gentle: true)
         }
         .onChange(of: visible) { _, v in
         }
@@ -859,6 +865,11 @@ private struct WindowThumb<Overlay: View>: View {
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
+    /// 换窗时卡片"轻放"的标量(1 = 落定;0.992 = 刚放下的那一拍)——
+    /// 2026-10-28 用户:「窗口切换太生硬了, 一点动效没有」/「别疯狂掉帧」
+    /// ⇒ 只做**变换**(scale),不碰布局、不做淡入、不做位移:渲染服务器一手包,最便宜的一种 ✓
+    @State private var land: CGFloat = 1
+
     private var card: some View {
         ZStack {
             // ★ 分支条件必须是"有**任何一种**图":只看 image 会在"有实时帧、还没截图"时掉进静默态 ✗
