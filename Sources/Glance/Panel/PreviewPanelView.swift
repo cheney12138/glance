@@ -2226,6 +2226,10 @@ struct ChipRailGroup: View {
     /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
     /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
     @State private var scrollMotion: Animation?
+    /// **连续化的选中位置**(0…n-1)：换窗时它从旧值滑到新值 ⇒ 高亮是"走过去"的，
+    /// 而不是"两枚芯片同时当拍换色"（2026-10-28 用户:「切换窗口的时候…动效太生硬了」）✓
+    /// 只喂**绘制**属性(缩放/颜色/投影)，不碰布局 ⇒ 不会再出"有的动有的不动" ✓
+    @State private var selF: CGFloat = 0
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2245,13 +2249,18 @@ struct ChipRailGroup: View {
         .transaction { $0.animation = nil }
         .onAppear {
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { selPos = selected; viewPos = selected; clampViewport() }
+            withTransaction(t) { selPos = selected; viewPos = selected; selF = CGFloat(selected); clampViewport() }
             // 浮出(0.26s)落定之后再开滚动动画,免得开场变成"一边浮一边滚" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
             }
         }
-        .onChange(of: selected) { _, new in selPos = new }
+        .onChange(of: selected) { _, new in
+            selPos = new
+            // 高亮"走过去":只改一个标量,动画由**芯片内部那段局部事务**提供
+            //(外层 `.transaction { $0.animation = nil }` 会关掉整棵树的动画,见 `rail` 的注释)✓
+            selF = CGFloat(new)
+        }
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
         .onChange(of: entryTick) { _, _ in
             scrollMotion = nil
@@ -2260,6 +2269,8 @@ struct ChipRailGroup: View {
             }
         }
         .onChange(of: bundleID) { _, _ in
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { selF = CGFloat(selected) }   // 换组:高亮当拍就位,不"从上一组滑过来" ✗
             scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
@@ -2320,6 +2331,9 @@ struct ChipRailGroup: View {
     private func chip(logical: Int) -> some View {
         let w = windows[logical]
         let isOn = logical == selected
+        // 强调度:选中那枚 = 1,相邻 = 0(按 `selF` 连续取值 ⇒ 换窗时是"高亮走过去" ✓)
+        let em = max(0, 1 - min(abs(CGFloat(logical) - selF), 1))
+        let title = PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID))
         return HStack(spacing: 6) {
             if let icon = AppIconCache.icon(pid: w.pid) {
                 Image(nsImage: icon)
@@ -2327,18 +2341,27 @@ struct ChipRailGroup: View {
                     .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
                     .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
                                                 style: .continuous))
-                    .saturation(isOn ? 1 : 0.28)
-                    .opacity(isOn ? 1 : 0.75)
+                    .saturation(0.28 + 0.72 * em)
+                    .opacity(0.75 + 0.25 * em)
             }
-            Text(PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID)))
-                .font(.system(size: PanelMetrics.titleSize, weight: .regular))
-                .foregroundStyle(isOn ? PanelColors.chipFgOn : PanelColors.chipFgOff)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Circle()
-                .fill(isOn ? Color.accentColor : PanelColors.chipDotOff)
-                .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+            // 文字:两层叠着按 `em` 交叉淡 —— Color 不能直接插值,交叉淡是同一件事且更稳 ✓
+            ZStack(alignment: .leading) {
+                Text(title)
+                    .foregroundStyle(PanelColors.chipFgOff)
+                    .opacity(1 - em)
+                Text(title)
+                    .foregroundStyle(PanelColors.chipFgOn)
+                    .opacity(em)
+            }
+            .font(.system(size: PanelMetrics.titleSize, weight: .regular))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            ZStack {
+                Circle().fill(PanelColors.chipDotOff).opacity(1 - em)
+                Circle().fill(Color.accentColor).opacity(em)
+            }
+            .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
         }
         .padding(.leading, 5)
         .padding(.trailing, 8)
@@ -2346,9 +2369,13 @@ struct ChipRailGroup: View {
         // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
         //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
         .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
-        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.10 + 0.05 * em), radius: 3 + 2 * em, y: 1 + 1 * em)
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+        // ★★ 2026-10-28:托盘那一层有全局 `.transaction { animation = nil }`(为了几何当拍落),
+        //   所以这里要**局部**把动画还回来 —— 只包"纯绘制"这一截(缩放/投影/颜色),
+        //   外面那个定尺寸框负责位置 ⇒ 位置永远当拍、颜色/缩放慢慢过渡 ✓
+        .transaction { $0.animation = MotionPolicy.animation(.spring(response: 0.26, dampingFraction: 0.78)) }
         .contentShape(Rectangle())
         // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
         // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
@@ -2358,7 +2385,7 @@ struct ChipRailGroup: View {
         //   这枚芯片的**位置**也卷进去 ⇒ 换窗那一拍"选中态变了的几枚"慢半拍,
         //   一列芯片被读成"有的动有的不动"(上一轮的病灶)。
         //   ⇒ 尺寸差当作**静态状态**表达,动效只保留"颜色/圆点"这类纯绘制 ✓
-        .scaleEffect(isOn ? 1 : 0.964)
+        .scaleEffect(0.964 + 0.036 * em)
         // ★★ 2026-10-27 关键裁定(用户:「你现在 14 动, 23 不动, 是何意味」):
         //   每枚芯片的 `.animation(_:value: isOn)` 会把**这枚芯片自己的位置**卷进它的事务
         //   —— 换窗那一拍,恰好是"选中态变了"的那两枚进入动画事务 ⇒ 它们滞后、其余当拍跳
