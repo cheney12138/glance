@@ -116,6 +116,37 @@ extension PanelController {
             verifyPurged(wid: w.wid, name: g.appName, group: g)
             optimisticRemoval(op, in: g)
             refreshAfterAction()
+            // ★★ 2026-10-27(用户:「cmd w 关掉最后一个窗口, 对有的 app 来说也算退出,
+            //    那个(收窄)动效就没覆盖」):
+            //   `optimisticRemoval(.close)` 里组空了**故意不摘**(= 无窗 App 占位),
+            //   判据 `isTerminated == false` —— 但"关末窗就退出"的 App 此刻**还在收尾**,
+            //   于是留下占位、环不收窄;等重枚举真摘它时走的又是 `applyRefreshed`
+            //   (`resizeWindow: true`)**不是** ⌘Q 那条"窗框不动 + SwiftUI 宽度动画"✗
+            //   ⇒ 末窗关闭后补一次退出判定:进程真没了 ⇒ 按 `.quit` 补**同一段**收窄 ✓
+            if g.windows.count <= 1, g.pid != ProcessInfo.processInfo.processIdentifier {
+                let generation = beginGeneration
+                let pid = g.pid, name = g.appName
+                // ★★ 2026-10-28(用户:「cmd w 关闭窗口之后, app 迟钝个 0.5s 再进动效」):
+                //   上一版只探**一次**(0.15s)—— 目标 App 收尾常常比 150ms 长,
+                //   那一次没探到就再没人管 ⇒ 等 0.9s 那次复核/重枚举才摘 ⇒ 读起来是迟钝 ✗
+                //   ⇒ 每 80ms 探一次、最多 1.5s;**一探到就立刻**走 ⌘Q 那条收窄 ✓
+                func probeQuit(_ attempt: Int) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                        guard let self, self.beginGeneration == generation, self.isVisible else { return }
+                        let dead = (NSRunningApplication(processIdentifier: pid)?.isTerminated ?? true)
+                        if dead {
+                            guard let live = self.groups.first(where: { $0.pid == pid }) else { return }
+                            glog("[T12] 末窗关闭后进程已退出(⌘W = 退出): \(name) → 按退出收窄(第 \(attempt) 次探测, \(attempt * 80)ms)")
+                            self.quitPIDs.insert(pid)
+                            self.optimisticRemoval(.quit, in: live, resizeWindow: false)
+                            self.refreshAfterAction()
+                        } else if attempt < 18 {          // ≈1.5s
+                            probeQuit(attempt + 1)
+                        }
+                    }
+                }
+                probeQuit(1)
+            }
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
@@ -678,5 +709,40 @@ extension PanelController {
         outsideClickMonitor = nil
         if let m = localClickMonitor { NSEvent.removeMonitor(m) }
         localClickMonitor = nil
+    }
+
+    // MARK: - Esc(2026-10-26:历史遗留「Esc 关不掉面板」)
+    //
+    // 为什么不能只靠热键 tap:`HotkeyTap` 里 Esc 走 `.cancel`,但那条路要求 tap **正在接管**
+    // (state != idle / tapEnabled)。面板如果是"用鼠标点托盘"或"手势唤起"开的,tap 可能压根
+    // 没在接管 ⇒ Esc 被前台 App 收下,面板纹丝不动 ✗(用户看到的就是"Esc 没反应")。
+    // ⇒ 面板可见期间另挂一对 NSEvent 监听:全局那条保底(吞不掉,但 Esc 发给 App 无害),
+    //   本地那条能吞(自己窗口是 key 的情况)。两条幂等,重复 dismiss 有 `isVisible` 兜门 ✓
+    func installEscapeMonitor() {
+        removeEscapeMonitor()
+        escGlobal = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            guard e.keyCode == 53 else { return }
+            Task { @MainActor in
+                guard let self, self.isVisible else { return }
+                if isTraceEnabled { glog("[Esc] 全局监听 ⇒ 关面板") }
+                self.dismiss(reason: "Esc(全局)")
+            }
+        }
+        escLocal = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            guard e.keyCode == 53 else { return e }
+            Task { @MainActor in
+                guard let self, self.isVisible else { return }
+                if isTraceEnabled { glog("[Esc] 本地监听 ⇒ 关面板(吞键)") }
+                self.dismiss(reason: "Esc(本地)")
+            }
+            return nil
+        }
+    }
+
+    func removeEscapeMonitor() {
+        if let m = escGlobal { NSEvent.removeMonitor(m) }
+        escGlobal = nil
+        if let m = escLocal { NSEvent.removeMonitor(m) }
+        escLocal = nil
     }
 }

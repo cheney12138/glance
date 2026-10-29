@@ -110,6 +110,12 @@ struct SettingsView: View {
     @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.auto
     /// Tab 是否进未启动区(2026-09-18):默认开;关闭后段只能靠 ↓/↑ 进出
     @AppStorage(Keys.panelTabEntersLaunchSection) private var tabEntersLaunchSection = KeyDefaults.tabEntersLaunchSection
+    /// 组内窗口呈现方式(ADR-0017):`row` = 卡片行(现行)、`rail` = 芯片轨道(新)
+    @AppStorage(Keys.panelWindowLayout) private var windowLayoutRaw = KeyDefaults.windowLayout
+    private var useChipRail: Binding<Bool> {
+        Binding(get: { windowLayoutRaw == WindowLayout.rail.rawValue },
+                set: { windowLayoutRaw = ($0 ? WindowLayout.rail : WindowLayout.row).rawValue })
+    }
     // 手势开关(2026-09-19 入 UI):键已存在于现网(此前只能 defaults write),默认关
     @AppStorage(Keys.pointerThreeFingerTapPanel) private var threeFingerTapPanel = KeyDefaults.threeFingerTapPanel
     @AppStorage(Keys.pointerFourFingerTapLaunchRing) private var fourFingerTapLaunchRing = KeyDefaults.fourFingerTapLaunchRing
@@ -324,6 +330,11 @@ struct SettingsView: View {
                 //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
                 //   档位 = 0(关) / 5 / 10 / 15 / 20 / 25 / 30;选中那一条用这个档位,
                 //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
+                // 组内窗口的呈现方式(ADR-0017)—— 与"看不看实时画面"同一件事的两个面,并在这组里
+                SettingsRow(title: "用「芯片轨道」显示同一 App 的窗口",
+                            desc: "开启后:只有当前选中的窗口显示预览,其余窗口显示成一列标题;窗口多时整列滚动。关闭则沿用现在的多张预览卡。") {
+                    BeamSwitch(isOn: useChipRail)
+                }
                 SettingsRow(title: "实时预览",
                             desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
                     HStack(spacing: 8) {
@@ -407,6 +418,7 @@ struct SettingsView: View {
 
             // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
             // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
+            
             SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
                 // ⚠️ 2026-10-19 撤掉「展示 Dock 常驻应用」这一行(用户:「这是个废配置了,删掉吧,也不起作用」):
                 //   键 `panel.showLaunchables` 全仓**没有任何读取点** —— 只有这一行自己在绑 ⇒ 拨了也不影响行为 ✗
@@ -665,7 +677,11 @@ private struct LaunchListEditor: View {
     }
 
     private func save() {
-        DockAppsProvider.setList(ids, forKey: kind.defaultsKey)
+        // 兜底去重(保持顺序):历史版本允许过重复添加,别让旧数据一直躺着 ✓
+        var seen = Set<String>()
+        let deduped = ids.filter { seen.insert($0).inserted }
+        ids = deduped
+        DockAppsProvider.setList(deduped, forKey: kind.defaultsKey)
     }
 
     /// 两名单并集(去掉自己这边的)—— 选择器的排除集,互斥的实现点
@@ -741,8 +757,21 @@ private struct AppPicker: View {
         .onAppear { apps = DockAppsProvider.scanInstalledApps() }
     }
 
+    /// ★★ 2026-10-28(用户:「我添加进白名单了, 但是搜索的时候还能搜到, 已经存在了,
+    ///   不应该允许重复添加」):`exclude` 这个参数**从写下去那天起就没有被用过** ✗
+    ///   (声明在、传进来在、`filtered` 里没读它 ⇒ 已在名单里的 App 照样出现在搜索结果里 ✓)
+    ///   ⇒ 过滤里把它并上,并且**现读**两个名单(列表可能在 sheet 打开后被改过)✓
+    private var taken: Set<String> {
+        exclude
+            .union(DockAppsProvider.whitelist)
+            .union(DockAppsProvider.blacklist)
+    }
+
     private var filtered: [DockAppsProvider.InstalledApp] {
-        apps.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        apps.filter {
+            !taken.contains($0.id)
+                && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query))
+        }
     }
 
     private func row(_ app: DockAppsProvider.InstalledApp) -> some View {

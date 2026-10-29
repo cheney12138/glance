@@ -27,7 +27,7 @@ final class HotkeyTapCenter {
     /// ⌘` **单独**触发 ⇒ 把预览面板提上来(2026-10-23 用户:「强化一下 ⌘` 的功能,
     /// 单独触发的时候把预览窗口提上来,语义还是当前屏幕下的」)。
     /// 与 `onSameAppScreenCycle` 同一套装配纪律:Trigger 不反向依赖 App 层 ⇒ 走闭包钩子 ✓
-    var onRaisePreview: (() -> Void)?
+    var onRaisePreview: ((Bool) -> Void)?
 
 
     enum State { case idle, armed, navigating }
@@ -158,6 +158,12 @@ final class HotkeyTapCenter {
     /// 代价与 Tab 循环同一条:tap 若被系统停用那一瞬,这一发会漏给系统(见 ADR-0005 的取舍)。
     /// 默认**关**:它动的是系统级快捷键的肌肉记忆,只能用户显式开(与接管 ⌘Tab 同一纪律)。
     private static let keyGrave: Int64 = 0x32
+    /// ⌘` 的**新语义**(2026-10-27 用户口径):触发时直接唤起"只有窗口/轨道的托盘"(没有环),
+    /// 默认先切一扇(预览下一次切换),**松手才真正切窗**;Esc / 点空白 = 放弃。
+    /// (旧语义"当前屏内循环同 App 窗口"由 `onRaisePreview` 那条路保留,开关切换)
+    /// 返回 `true` = 这一发我们接了(进入会话);`false` = **不接**(例如前台 App 只有 1 扇窗,
+    /// 那就没有可切的东西 ⇒ 面板不弹、键也放行给系统)✓
+    var onWindowsSession: ((Bool) -> Bool)?
     /// 接管系统 ⌘` 的开关(opt-in;`object(forKey:)` 区分"没写过"与"写成 false" ✓ —— 同 `Keys` 其它开关)
     private static var graveTakeoverEnabled: Bool {
         UserDefaults.standard.object(forKey: Keys.triggerTakeoverGraveCyclesWindows) as? Bool
@@ -249,7 +255,12 @@ final class HotkeyTapCenter {
     /// 三指点按的入口:没有触发键的按下,所以直接进导航态。
     /// 已在跑就不重开(手势抖动不产生第二局;面板窗口复用,重开只会把状态搅乱)。
     func beginPinnedSession() {
-        guard state == .idle else { return }
+        // ⚠️ 2026-10-26 病例(用户实报「不唤起面板时 ⌘` 失灵」):
+        //   触发键本身就是 ⌘ ⇒ 按下 ⌘` 的**第一拍**状态已经是 `.armed`(修饰键按住的待命态),
+        //   而这里原来只放行 `.idle` ⇒ **什么都不做,但 ⌘` 已经被吞掉** = 完全失灵 ✗
+        //   (日志:`[热键] tap 看见 \` state=armed takeover=true tapEnabled=true` 之后一行都没有)
+        //   ⇒ `.armed` 也是合法起点 ✓
+        guard state == .idle || state == .armed else { return }
         pinnedSession = true
         setState(.navigating)
         emit(.begin)
@@ -475,20 +486,31 @@ final class HotkeyTapCenter {
         //   ⚠️ 回调必须**立刻返回**:tap 回调超时会被系统摘掉 ⇒ 真正的活挪到 async ✓
         //   ⚠️ 这一支必须在**下面那道 `guard state == .navigating` 之前** —— 第一版写在它后面 ⇒
         //      面板没开时永远到不了这里(实机:注入 ⌘` 日志里一行都没有)✗
+        if isTraceEnabled, __kc == Self.keyGrave {
+            glog("[热键] tap 看见 ` state=\(state) takeover=\(Self.graveTakeoverEnabled) mods=\(event.flags.rawValue) tapEnabled=\(navTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false)")
+        }
         if Self.graveTakeoverEnabled, __kc == Self.keyGrave, state != .navigating {
             let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
             if mods == [.maskCommand] || mods == [.maskCommand, .maskShift] {
                 let forward = !event.flags.contains(.maskShift)
                 // ★ 不直接调 App 层的循环器(Trigger 不许反向依赖 ✗ 架构脚本会报 ✓)
                 //   ⇒ 走**闭包钩子**,由 GlanceApp 装配 ✓(输入管线的既有约定:onFire / onScroll 同一套 ✓)
-                // ★★ 2026-10-23 用户裁定:「单独触发的时候,把预览窗口提上来,语义还是当前屏幕下的」
-                //   ⇒ ⌘`(**不带 ⇧**)= 唤起面板(钉住那一局,与三指点按同一个入口 ✓);
-                //     ⌘⇧` 仍走"反向循环窗口"—— 它是另一个动作,不在这次改动里 ✓
-                if mods == [.maskCommand] {
-                    onRaisePreview?()
-                } else {
-                    onSameAppScreenCycle?(forward)
+                // ★★★ 2026-10-27 用户口径(本分支的新功能):
+                //   ⌘` = 直接唤起"只有窗口"(托盘/芯片轨道,**没有环**)的一局;
+                //   默认先切一扇(预览下一次切换),**松手才真正切窗**;
+                //   Esc / 点空白 = 放弃(走既有的 `.cancel` / 面板外点击)
+                //   ⇒ 这是 **hold 语义**(pinnedSession = false):松 ⌘ 时 `handleFlags` 会发 `.confirm` ✓
+                //   连着按 ` 在同一局里继续前后选(见 `handleNavKey` 里的 keyGrave 分支)✓
+                if state == .idle || state == .armed {
+                    // ★ 2026-10-27 用户:「单窗口不唤起卡片, 多窗口 App 才有意义」
+                    //   ⇒ 先问一句"这一发值不值得接"(前台 App 有没有 ≥2 扇窗);
+                    //     不接就**什么都不做**并放行(系统那条 ⌘` 在单窗口时本来也没有行为)✓
+                    pinnedSession = false
+                    guard onWindowsSession?(forward) == true else { return false }
+                    setState(.navigating)
+                    return true          // 吞掉这一发:不再走"当前屏内循环"那条路 ✓
                 }
+                onRaisePreview?(forward)   // (兜底:理论上到不了)
                 return true                                    // 吞掉:系统那条 ⌘` 不再执行 ✓
             }
             return false       // 夹了别的修饰键 ⇒ 别人的快捷键,放行 ✓
@@ -541,6 +563,10 @@ final class HotkeyTapCenter {
         switch keyCode {
         case Self.keyReturn: setState(.idle); emit(.confirm) // 钉住模式的确认键
         case Self.keySpace: setState(.idle); emit(.confirm)  // 空格 = 同一个动作(见 keySpace 的两条边界)
+        case Self.keyGrave:
+            // 会话内再按 `(或 ⇧`)= 在这一局的窗口里前后挪一格(步长 1)✓
+            let back = event.flags.contains(.maskShift)
+            emit(back ? .cycleWindowPrev : .cycleWindowNext)
         case Self.keyEsc: setState(.idle); emit(.cancel)
         case Self.keyQ: emit(.quitApp)
         case Self.keyW: emit(.closeWindow)

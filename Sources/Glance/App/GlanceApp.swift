@@ -104,8 +104,19 @@ struct GlanceApp: App {
                     hotkeys.onSameAppScreenCycle = { forward in
                         Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
                     }
-                    // ⌘`(不带 ⇧)= **把面板提上来**(与三指点按同一个入口:钉住那一局 ✓)
-                    hotkeys.onRaisePreview = { [weak hotkeys] in hotkeys?.beginPinnedSession() }
+                    // ★ 2026-10-26 复原(用户:「去看之前 ⌘` 覆盖系统级是什么语义、怎么实现的」):
+                    //   ⌘` 的接管语义 = **只在当前屏内循环同一个 App 的窗口**,实现就是
+                    //   `SameAppScreenCycler.step`(带屏隔离,见 ScreenScopedSwitching.swift)。
+                    //   我上一版自己造了"开局 + moveWindow + 定时确认"一套 ⇒ 语义跑偏 ✗
+                    //   ⇒ 回到既有实现,⌘` 正向、⌘⇧` 反向,两条都走同一个入口 ✓
+                    hotkeys.onRaisePreview = { forward in
+                        Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+                    }
+                    // ⌘` 新语义(2026-10-27):唤起"只有窗口"的一局(托盘 / 芯片轨道,**没有环**),
+                    // 默认先切一扇;松手才真正切窗(确认由触发层的 `.confirm` 发下来)✓
+                    hotkeys.onWindowsSession = { [weak panelController] forward in
+                        panelController?.beginWindows(reverse: !forward) ?? false
+                    }
                     hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
                     hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
                     // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，

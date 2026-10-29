@@ -56,8 +56,13 @@ enum PanelMetrics {
     // ══════════════════════════════════════════════════════════════════════════════
     /// 本会期**托盘**的尺寸上限(由 `PanelController.applySessionScaleCap` 按各组算)
     static var trayCap: CGFloat = .greatestFiniteMagnitude
+    /// 托盘的**额外放大**(2026-10-27 用户:「只有卡片的时候,尺寸可以放大一倍,因为没有环了嘛」)
+    /// 只在 ⌘` 的"只有窗口"那一局里为 2,其余时候为 1 ✓
+    /// 它乘在 `trayScale` 上 ⇒ 卡片、芯片、内边距、托盘窗尺寸、快照请求尺寸**全部同源放大** ✓
+    /// (上屏仍是 2x retina ⇒ 卡片画面按新尺寸重新取图,不是把低位图拉大 ✓)
+    static var trayZoom: CGFloat = 1
     /// 托盘的尺子 —— 与 `scale` 同构,只是上限来源不同
-    static var trayScale: CGFloat { min(fixedScale, trayCap) }
+    static var trayScale: CGFloat { min(fixedScale, trayCap) * trayZoom }
     /// 基准值 → 托盘的实值(**托盘专用**,别与 `k` 混用 ✗)
     private static func kT(_ base: CGFloat) -> CGFloat { base * trayScale }
     /// 给别的模块(如 `PanelMotion`)按基准值取一个跟着缩放走的量。
@@ -174,11 +179,16 @@ enum PanelMetrics {
     ///   · **反之(大)就不行** ⇒ 上限永远管着 ✓。
     /// 推论:一行里的卡片可以**大小不一**(用户接受"参差不齐" ⇒ 换来"所见即真窗大小");
     ///       因此托盘的行高、内容高度、命中判定都必须按**每张卡的实际高度**算,不能再当常量 ✗。
-    static func thumbSize(real: CGSize, aspect: CGFloat) -> CGSize {
+    /// 单窗口时把卡宽上限放宽一档(2026-10-25 用户:「现在只有单个窗口了,可以把预览卡片的尺寸
+    /// 再稍微放宽一点」)—— 组里只有一张卡时,不必为"并排多张"留余量 ✓
+    static let soloWiden: CGFloat = 1.35
+    static func thumbSize(real: CGSize, aspect: CGFloat, widen: CGFloat = 1) -> CGSize {
         // 算式在 `GlanceCore.CardSizing`(可单测);这里只负责**喂参数**:
         // 两个帽都是"已经缩过"的(见 CardSizing.size 的注释:帽必须在外面乘 k,
         // 否则会和原来的"先夹限后缩放"差一个 k)
-        CardSizing.size(real: real, capWidth: thumbWidth(aspect: aspect), capHeight: shotH)
+        CardSizing.size(real: real,
+                        capWidth: thumbWidth(aspect: aspect) * widen,
+                        capHeight: shotH)
     }
 
     static func thumbWidth(aspect: CGFloat) -> CGFloat {
@@ -236,6 +246,11 @@ enum PanelMetrics {
     static var chipDot: CGFloat { kT(6) }
     /// 卡片与芯片之间的缝:两者解耦的分界(芯片不在卡片的环/影/浮起里)
     static var chipGap: CGFloat { kT(6) }
+    /// **芯片轨道**(ADR-0017)的三个数(2026-10-25 实验台定稿,直接对照 Swift):
+    /// 轨道宽 164 · 一枚芯片的步长 = chipH + railGap = 24 + 6 = 30 · 轨道与卡片的间距 = 14
+    static var chipRailWidth: CGFloat { kT(164) }
+    static var chipRailGap: CGFloat { kT(6) }
+    static var chipRailStep: CGFloat { chipH + chipRailGap }
     static var thumbH: CGFloat { shotH + chipGap + chipH }
     static var thumbGap: CGFloat { kT(14) }
     /// 卡片**换行**后的行间距(与卡间距不同档:行与行之间要能读成两排,不能糊成一片)
@@ -571,6 +586,11 @@ enum PanelColors {
     static let chipDotOn = Color.accentColor
     /// 深色 .26 → **.32**:芯片底变透(浅底上从 L45 抬到 L113)之后,同一颗灰点的可见度掉了一档,补回来
     static let chipDotOff = dynamic(ink(0.18), white(0.32))
+    /// 轨道里的芯片文字:选中 = 常色,未选中 = 灰调(ADR-0017:选中原色 / 未选中包一层灰)
+    static let chipFgOn = dynamic(ink(0.86), white(0.94))
+    static let chipFgOff = dynamic(ink(0.52), white(0.60))
+    /// 轨道里选中那枚的胶囊底(极淡,无边框 —— 用户:「芯片不要给我框起来」)
+    static let chipRailOnBg = dynamic(white(0.92), white(0.16))
     /// 窗口名芯片的底。
     /// 2026-09-14 用户实评"显示效果上感觉有点重了,芯片可以再轻盈一些" —— 浅色那一格往下压过:
     /// 从"近白实底"改成**半透**(和玻璃同呼吸,而不是贴在上面的一张标签),边从 .10 压到 .06。
@@ -978,7 +998,10 @@ struct TrayGeometry {
     ///   - maxContentSize: 本局所有托盘内容里的**最大**尺寸(整局恒定 ⇒ 窗口整局只落位一次)
     ///   - panelFrame: 主面板窗框(托盘与它同轴、并贴在它下沿)
     ///   - screenArea: 面板所在屏的可用区(用来保证托盘不出屏)
-    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect) {
+    /// - Parameter centeredOnScreen: true = 与环无关,直接在屏上居中
+    ///   (⌘` 的"只有窗口"那一局没有环 ⇒ 没有可贴的目标 ✓,用户口径:「相对屏幕居中」)
+    init(maxContentSize: NSSize, panelFrame: NSRect, screenArea: NSRect,
+         centeredOnScreen: Bool = false) {
         let pad = PanelMetrics.shadowPadPop * 2
         // ★★ 2026-10-13 定稿(用户:「不管有多少窗口, 我都要卡片距离环边距是一样的」✓):
         //   高 = **内容 + 底部那一段内缩**,顶上不留透明呼吸 ✗
@@ -986,7 +1009,7 @@ struct TrayGeometry {
         //     (先前留了两份 pad ⇒ 内容贴顶时"矮内容离环更远" ✗ = 用户看到的"单窗太宽" ✓)
         var size = NSSize(width: (maxContentSize.width + pad).rounded(.up),
                           height: (maxContentSize.height + PanelMetrics.shadowPadPop).rounded(.up))
-        var x = panelFrame.midX - size.width / 2          // 窗口居中 ⇒ 内容随之居中(与长条同轴)
+        var x = (centeredOnScreen ? screenArea.midX : panelFrame.midX) - size.width / 2
         let margin = PanelMetrics.screenMargin
         if size.width <= screenArea.width - margin * 2 {
             x = min(max(x, screenArea.minX + margin), screenArea.maxX - margin - size.width)
@@ -1033,13 +1056,32 @@ struct TrayGeometry {
         // ⚠️ 2026-10-13 最后一处符号错(用户设 4 却看到 ≈33 ✗):上面那 14 我**加了两遍** ✗
         //   实测:内容框底 ≈ 窗底(+1) · 芯片底 = 内容框底 + trayPadBottom(14) ⇒ 芯片底 = y + 15
         //   要"芯片底 = 玻璃顶 + gap" ⇒ **y = 玻璃顶 + gap − trayPadBottom** ✓(不是 + ✗)
-        let y = panelFrame.maxY - PanelMetrics.shadowPadStrip
+        var y = panelFrame.maxY - PanelMetrics.shadowPadStrip
             + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
+        if centeredOnScreen {
+            // ⌘` 的"只有窗口"那一局:**没有环可贴** ⇒ 托盘在屏上居中 ✓
+            // ⚠️ 2026-10-27 病例(用户:「上下左右居中,做的对吗,视觉上不对」):
+            //   窗高 = **内容 + 底部那段 `shadowPadPop`**(阴影呼吸只在下边)⇒ 直接对**窗**居中,
+            //   内容会整体**偏上半个 pad**(≈48pt),眼睛一眼就看出来 ✗
+            //   ⇒ 要对齐的是**内容**的中心:y = 屏中 − 窗高/2 − pad/2 ✓
+            // ★★★ 2026-10-27 第三次修正(实测反解,不再猜):
+            //   截图 + 日志对出来的事实(`[托] 窗=832x333@-1280,355` / 卡片 299x187):
+            //   窗高 = 内容高 + `shadowPadPop`(≈97),而内容在窗里是**贴底**的
+            //   (卡片底边距窗底只有 ≈20 = 内边距;窗顶空着 126)✗
+            //   ⇒ 对**窗**居中会让内容整体**偏低**半个 pad,视觉一眼看出 ✗
+            //   ⇒ 正确式子:**窗底 = 屏中 − 内容高/2**(内容贴底 ⇒ 内容中心正好落在屏中)✓
+            y = screenArea.midY - maxContentSize.height / 2
+        }
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗
         //   ⇒ 贴底失效 ⇒ 内容从中往下溢 ⇒ 最后一排卡片钻到环的玻璃底下 ✓
         //   ⇒ 下限必须 = 内容 + `shadowPadPop`(底部那段内缩 ✓):
         //     宁可让窗**顶**伸出屏幕(那是透明区,看不见 ✓),也不许挤内容 ✗
+        if centeredOnScreen {
+            self.windowSize = size
+            self.windowOrigin = NSPoint(x: x.rounded(.down), y: y.rounded(.down))
+            return
+        }
         let minHeight = maxContentSize.height + PanelMetrics.shadowPadPop
         let topLimit = screenArea.maxY - margin          // ← 被上一版的正则误删 ✗,补回 ✓
         if y + size.height > topLimit {

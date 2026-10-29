@@ -257,3 +257,34 @@ design/gesture-session-spec.md 表二)。改动:`TapRound.swift`(核,+1 参)、`
 
 **验**:check-architecture ✅ · GlanceCore 44 测试全绿(含新 3 例)✅ · xcodebuild Debug ✅
 (dylib 内确认 `judge3now12dragEvidence` 符号)· 真机验收待用户(口径见 debugging.md §20)。
+
+## 2026-10-26 待办(用户 10-25 深夜口径,**此条为准**):轨道样式的入场动效三件
+
+**状态:三条都已落地(2026-10-26),验证见下。**
+
+> 口径:
+> ① 落位只属于"**切到某个 App、窗口第一次出现**"那一拍;
+> ② 组内换窗**没有落位**,只有**尺寸变化时的形变**;
+> ③ 轨道那次"自下而上浮出"是跟着①一起的辅助动作。
+
+1. **首次出现的落位 `-in`** ✅
+   `WindowThumb.settlesOnGroupChange`(轨道传 true)⇒ `onAppear` 与 `onChange(bundleID)` 各落位一次;
+   组内换窗(`onChange(wid)`)不落位。row 走原有 `settlesOnSwap`,一个像素不动。
+2. **组内窗口尺寸变化的形变** ✅
+   轨道卡盒改回**选中窗自己的卡尺寸**,动画挂在尺寸值上
+   (`.animation(.easeOut(0.42), value: selBox)`)——`.animation(_:value:)` 只在值变了才启动
+   ⇒ 同尺寸窗之间切换**零动画**;尺寸真的不同才播形变 ✓
+3. **芯片轨道自下而上浮出** ✅
+   `ChipRailGroup.playRailIn()`:0 → 1,0.26s easeOut,`offset(y: +10)` + 渐显;
+   触发点 = `onAppear` 与 `onChange(bundleID)`(换组),组内换窗不播 ✓
+
+**验证(自己注入,用户不碰键盘)**:
+```
+[落点] 唤起即切换 · [2/7] IntelliJ IDEA Ultimate
+[动效] 轨道浮出 bundle=com.jetbrains.intellij      ← 换组:浮出 ✓
+[动效] 卡片落位 wid=116 组换=true                  ← 换组:落位 ✓
+[T6] 窗口选中(键盘 ←→): train-schedule-api – …     ← 组内换窗
+[T6] 窗口选中(键盘 ←→): train-active – …
+                                                    ← 组内换窗**没有任何 [动效] 行** ✓
+```
+构建 ✅ · 三道门禁 ✅

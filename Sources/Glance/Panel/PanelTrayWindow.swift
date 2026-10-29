@@ -33,6 +33,21 @@ extension PanelController {
     /// T88:卡宽随窗比例,尺寸按每张卡的实际宽算(不再有 count × 定尺的省事)
     func previewContentSize(for group: AppGroup?) -> NSSize {
         guard let group, !group.windows.isEmpty else { return .zero }
+        // ★ 轨道版式(ADR-0017)有自己的尺寸账 —— 此前只有行算术 ⇒ 玻璃只包住卡,
+        //   轨道悬在玻璃外;且窗框追内容连跳数帧 = 「小→大」阶梯(用户录屏逐帧实锤)✗
+        if WindowLayout.current == .rail, group.windows.count > 1 {
+            let sizes = Self.cardSizes(group.windows)
+            // ★ 与视图同源:槽宽 = **选中卡宽**(2026-10-26,消掉卡与轨道之间那道缝 ✓)
+            //   选中项不在这一组里(换组那一拍)⇒ 退回组内最宽卡(当拍的过渡值)
+            let selIdx = min(max(winIndex, 0), max(group.windows.count - 1, 0))
+            let selectedGroup = (currentGroup?.bundleID == group.bundleID)
+            let slotW = (selectedGroup ? (sizes[selIdx].width) : (sizes.map(\.width).max() ?? 0))
+            let cardH = (selectedGroup ? sizes[selIdx].height : (sizes.map(\.height).max() ?? 0))
+            return NSSize(
+                width: slotW + PanelMetrics.thumbGap + PanelMetrics.chipRailWidth + PanelMetrics.trayPadX * 2,
+                height: PanelMetrics.trayPadTop + cardH + PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath
+            )
+        }
         let sizes = Self.cardSizes(group.windows)
         // 一行里的卡**按各自的真实宽**(形状随窗,ADR-0014)⇒ 尺寸账/排布/命中是同一把尺子
         let widths = sizes.map(\.width)
@@ -171,10 +186,23 @@ extension PanelController {
         //   卡片这时还画在旧位置上,窗一收就会把它们裁掉;而"按新内容重算"还会连带改位置/比例 ✗
         if CFAbsoluteTimeGetCurrent() < trayFrameHoldUntil, let held = heldTrayFrame { return held }
         let maxContent = previewContentSize()
-        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: area)
+        // 居中时按**整块屏幕**算(用户口径「相对整个屏幕」);常规会话仍用可见区 ✓
+        let areaForTray = (windowsOnly ? (contextScreen?.frame ?? area) : area)
+        let geo = TrayGeometry(maxContentSize: maxContent, panelFrame: panel.frame, screenArea: areaForTray,
+                               centeredOnScreen: windowsOnly)
         if maxContent.width > area.width - PanelMetrics.screenMargin * 2, !trayOverflowLogged {
             trayOverflowLogged = true
             glog("[尺寸] 托盘玻璃 \(Int(maxContent.width))pt > 可用 \(Int(area.width - PanelMetrics.screenMargin * 2))pt,已居中(两端会被切)")
+        }
+        if windowsOnly, isTraceEnabled {
+            let f = geo.frame
+            let cf = areaForTray
+            let pad = PanelMetrics.shadowPadPop
+            // 只印**内容中心 vs 屏幕中心**(窗里含透明阴影 pad,那个不该参与视觉判断)
+            let contentCenterY = f.minY + pad + maxContent.height / 2
+            glog(String(format: "[居中] 屏=%.0fx%.0f@%.0f,%.0f 中心=(%.0f,%.0f) · 窗心=(%.0f,%.0f) · 差=(%.0f,%.0f)",
+                        cf.width, cf.height, cf.minX, cf.minY, cf.midX, cf.midY,
+                        f.midX, f.midY, f.midX - cf.midX, f.midY - cf.midY))
         }
         return geo.frame
     }
@@ -240,7 +268,16 @@ extension PanelController {
                 // 选中的那一扇按用户档位,其余 5fps(成本 = 1×档位 + (N-1)×5fps)
             let sel = currentGroup?.windows.indices.contains(winIndex) == true
                 ? currentGroup?.windows[winIndex].wid : nil
-            LivePreviewPool.shared.sync(items, selected: sel)
+            // ★★ 2026-10-27(用户:「做了这个功能之后 snapshot → live 的闪动更明显了」):
+            //   ⌘` 的"只有窗口"那一局**只用静帧、不起直播流** ——
+            //   二分已证明闪来自实时层(关掉实时帧 ⇒ 闪消失),
+            //   而这种局只活几百毫秒、用户就是瞄一眼再松手选窗,直播的收益为 0 ✓
+            //   Q:为什么不在全局关掉?—— ⌘Tab 那一局时间长、看着像"活窗口",那边保留直播 ✓
+            if windowsOnly {
+                LivePreviewPool.shared.stopAll(reason: "窗口局只用静帧")
+            } else {
+                LivePreviewPool.shared.sync(items, selected: sel)
+            }
             }
         } else {
             LivePreviewPool.shared.stopAll(reason: "入口槽选中(启停生活动)")
@@ -274,7 +311,32 @@ extension PanelController {
                         entryFadeProgress, trayShownOnce ? "否" : "是"))
         }
         trayShownOnce = true
-        previewPanel.alphaValue = 1
+        // ★★★ 2026-10-27 定稿(用户:「接受不了(延迟), 撤回吧, 只保留对 ⌘` 卡片唤起的处理」):
+        //   "等图才显示"那套**只留给窗口局**;常规 ⌘Tab 恢复**当拍显示**(一个像素的延迟都不加)✓
+        if windowsOnly {
+            let selWid: CGWindowID? = {
+                guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
+                return g.windows[winIndex].wid
+            }()
+            let hasImage: Bool = {
+                guard let wid = selWid else { return true }
+                if Snapshotter.shared.cache[wid] != nil { return true }
+                if LivePreviewPool.shared.box(for: wid).image != nil { return true }
+                return false
+            }()
+            let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
+            if hasImage || waited > 0.4 {
+                previewPanel.alphaValue = 1
+            } else {
+                previewPanel.alphaValue = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                    guard let self, self.isVisible else { return }
+                    self.updatePreview()
+                }
+            }
+        } else {
+            previewPanel.alphaValue = 1
+        }
         let before = previewPanel.frame
         // 单独记账:换选中时托盘的**卡片数**变了 → 窗口尺寸跟着变 → `setFrame` 是**同步**的窗口布局
         // (整块 tray 内容重排 + 后备存储重分配)。实机日志里 `[工] 键盘换选中 主线程 13–26ms`
@@ -295,6 +357,19 @@ extension PanelController {
             }
         }
         __mark("setFrame")
+        // ★★ 2026-10-26 换组残帧(用户实报的"坏电视色块"):换到另一个 App 的那一拍,
+        //   窗口的 backing store 里还留着上一组的像素 ⇒ 闪一块彩色的乱码 ✗
+        //   ⇒ 换组就**强制整窗重绘**(影子和内容一起):这是最便宜、且不依赖"猜是哪一层的"做法 ✓
+        let thisBundle = currentGroup?.bundleID
+        if thisBundle != lastPreviewBundleID {
+            lastPreviewBundleID = thisBundle
+            previewPanel.invalidateShadow()
+            previewPanel.contentView?.needsDisplay = true
+            if isTraceEnabled {
+                glog("[残帧] 换组 ⇒ 整窗重绘 bundle=\(thisBundle ?? "-") "
+                     + "窗=\(Int(previewPanel.frame.width))x\(Int(previewPanel.frame.height))")
+            }
+        }
         // ★★ 2026-09-21 真凶(分段计时抓到):`orderFrontRegardless()` 在**每次 hover 更新**都被调用 ✗
         //   ⇒ AppKit 窗口排序 4–35ms/次 ✗(日志:[工] 托盘分段 … **orderFront 34.8**)。
         //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套

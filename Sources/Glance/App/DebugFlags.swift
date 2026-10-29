@@ -64,6 +64,11 @@ enum DebugFlags {
     /// 无论是否隐藏托盘（排查"托盘没被收走"这类收场问题时用）。
     static var hideTray: Bool { UserDefaults.standard.bool(forKey: Keys.debugHideTray) }
 
+    /// **只画静帧,不吃实时帧**(二分用:2026-10-27「snapshot → live 的 2 帧闪」)
+    ///   `defaults write com.glance.app debug.noLive -bool true` ⇒ 若闪消失 = 实时层是元凶;
+    ///   若照旧 ⇒ 问题在"卡片本身被重画/重拍"(与直播无关)✓
+    static var noLive: Bool { UserDefaults.standard.bool(forKey: "debug.noLive") }
+
     /// **关面板预拍推迟多少毫秒**(默认 500)。
     ///
     /// 病例(2026-09-22 用户「体感上有掉帧, 抓下日志」):那次 `max 652ms` 的长帧,与

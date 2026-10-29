@@ -143,6 +143,11 @@ enum Keys {
     static let panelSlideFromLastApp = "panel.slideFromLastApp"
     /// `panel.tabEntersLaunchSection`
     static let panelTabEntersLaunchSection = "panel.tabEntersLaunchSection"
+    /// `panel.windowLayout` —— 组内窗口的**呈现方式**(2026-10-25,ADR-0017):
+    ///   · `row`  = **卡片行**(现行):每扇窗一张卡,多窗口时换行
+    ///   · `rail` = **芯片轨道**(新):只有选中那扇窗有卡,其余窗口是一列芯片(ADR 全文见 docs/adr/0017)
+    /// ★ 两套实现**完全隔离**(`PanelTrayWindow` 里二选一),互不影响 ✓
+    static let panelWindowLayout = "panel.windowLayout"
 
     // MARK: pointer —— 指针手势
 
@@ -210,12 +215,35 @@ extension Keys {
     }
 }
 
+/// 组内窗口的呈现方式(键名见 `Keys.panelWindowLayout`)
+enum WindowLayout: String, CaseIterable {
+    /// 卡片行:每扇窗一张卡(现行)
+    case row
+    /// 芯片轨道:一张卡 + 右侧一列芯片(ADR-0017)
+    case rail
+
+    var label: String {
+        switch self {
+        case .row:  return "卡片行"
+        case .rail: return "芯片轨道"
+        }
+    }
+
+    static var current: WindowLayout {
+        WindowLayout(rawValue: UserDefaults.standard.string(forKey: Keys.panelWindowLayout) ?? "")
+            ?? .row
+    }
+}
+
 enum KeyDefaults {
     /// 高光效果。**开**:首次打开就显得讲究 ✓(视觉打磨,不是功能开关)
     static let sheen = true
     static let summonPop = true
     /// Tab 进入未启动区。**开**(原判):关闭后 Tab 两个方向都不跨段,进出口交给 ↓/↑ ✓
     static let tabEntersLaunchSection = true
+    /// 组内窗口呈现方式。**row**(现行)为出厂默认 —— 新方案还没经过实机验收,
+    /// 不许默默改掉老用户看到的样子 ✓(验收通过再翻默认值,那是另一次提交)
+    static let windowLayout = WindowLayout.row.rawValue
     /// 面板里滚动/双指滑动换选中。**开**(原判)
     static let scrollMovesSelection = true
     /// 唤起即切换(与系统 ⌘Tab 行为对齐)。**开**(原判)
@@ -244,5 +272,8 @@ enum KeyDefaults {
     static let moveFillMinRatio: Double = 50
     /// 接管系统 ⌘Tab / ⌘`。**关**:抢系统快捷键必须先问(ADR-0005)⇒ 出厂不许默认抢 ✓
     static let takeoverSystemSwitcher = false
-    static let takeoverGraveCyclesWindows = false
+    /// ⌘` —— **开**(2026-10-27 用户裁定:把它改成"唤起只有窗口的一局",不再保留系统那条)。
+    /// 语义:按 ⌘` ⇒ 托盘/芯片轨道出现(没有环)、默认先切一扇;松手才真正切窗;
+    ///       Esc / 点空白 = 放弃。⇧⌘` 反向。
+    static let takeoverGraveCyclesWindows = true
 }

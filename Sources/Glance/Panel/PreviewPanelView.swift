@@ -85,10 +85,18 @@ struct PreviewPanelView: View {
             // 芯片由面板那一扇窗承担,见 PanelView / PanelController.contentSize。
             if controller.entrySelected { launchGrid } else { thumbGrid }
         }
+        // ★〔2026-10-25 撤〕换组落位(面板 .95→1):用户终审「把窗口上的动效全部去掉」✗
+        //   无动效版本先在实机上认可,再按需往回加。
         .padding(.top, PanelMetrics.trayPadTop)
         .padding(.horizontal, PanelMetrics.trayPadX)
         .padding(.bottom, PanelMetrics.trayPadBottom + PanelMetrics.trayBottomBreath)
         .frame(width: controller.previewContentSize().width, height: controller.previewContentSize().height)
+        // ★★ 2026-10-26(用户:「卡片变化的时候芯片轨道的移动有点怪, 好像有先后顺序」):
+        //   换窗时控制器在同一轮里跑的 `withAnimation`(环/翻牌)是**全局事务** ——
+        //   托盘这块 hosting 也会吃到 ⇒ 卡当拍跳、芯片列却被插值 0.2s,读作"卡先到、轨道后到" ✗
+        //   ⇒ 托盘整棵子树**断掉继承的动画**;需要动的地方一律用显式 `.animation(_:value:)`
+        //     (轨道的滚动就是这么写的 ⇒ 不受影响 ✓)
+        .transaction { $0.animation = nil }
         // ★★ 2026-10-13 病例(用户两张对比图 + 他的方案:「是不是要给一个容器, 固定这个容器跟环的边距,
         //   然后 resize 在这个容器里做会比较好呀」—— **他这套是对的** ✓):
         //   探针量到的事实(同一局内):
@@ -172,6 +180,13 @@ struct PreviewPanelView: View {
     private func handleCardFrames(_ new: [CGWindowID: CGRect]) {
         let old = cardFrames
         cardFrames = new
+        // ★★ 2026-10-25(用户实报「按 ` 切组内窗口,面板缩小了一下,像退到台后」):
+        //   轨迹逐帧 + `[框变]` 探针双向确认 —— **窗框恒定**,缩的是内容层:
+        //   这套重排里有两段纯表演给"删窗"看的动效 ——
+        //     ① `GhostCard` = 被摘掉那张 `scaleEffect(0.92)` + 淡出 = 用户看到的"内缩"✗
+        //     ② 换位卡从右 +64pt 滑入 = "退到台后再展示下一个窗口"✗
+        //   轨道样式里一次选中切换根本不该有它们(卡的几何是恒定的)⇒ 整段跳过 ✓
+        guard WindowLayout.current != .rail else { return }
         guard !old.isEmpty, !new.isEmpty else { return }
         // 换组 / 换环那一拍:整块换内容,不是"少了一张" ⇒ 不参与(否则整排卡会飞)✗
         guard !controller.isContentSwapInFlight, !controller.isRingSwapInFlight else { return }
@@ -208,7 +223,94 @@ struct PreviewPanelView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { ghosts = [] }
     }
 
+    /// 组内窗口的**呈现方式**(ADR-0017):`row` = 卡片行(现行)、`rail` = 芯片轨道(新)。
+    /// ★ 两条路径**完全隔离**:rail 只复用"卡片本身"(`thumb(at:showsChip:)`),排布/芯片/滚动全在新文件里 ✓
+    /// ★ 开关默认 `row` ⇒ 关掉时走的还是原来的 `cardRowGrid`,一个字都不变 ✓
     private var thumbGrid: some View {
+        contentGrid
+            .coordinateSpace(name: "glance.tray")
+            .onPreferenceChange(CardFrameKey.self) { handleCardFrames($0) }
+            .overlay(alignment: .topLeading) {
+                ForEach(ghosts) { ghost in
+                    GhostThumb(ghost: ghost)
+                        .position(x: ghost.rect.midX, y: ghost.rect.midY)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+
+    /// 本组是否用「芯片轨道」版式(单一判据 —— 两个分支不许各写一份 ✗)
+    private var useRail: Bool { WindowLayout.current == .rail && windows.count > 1 }
+
+    @ViewBuilder private var contentGrid: some View {
+        if useRail {
+            // ★ 卡宽随真窗变,但**轨道的位置不许跟着动**(用户口径)⇒
+            //   卡放进一个**固定宽度的槽**(= 本组最宽卡),槽内居中;轨道永远贴着槽的右缘 ⇒ 一个像素都不动 ✓
+            // ★★ 2026-10-26 终审第二轮(用户:「间隙怎么又变大了」):
+            //   槽宽原来取**组内最宽卡** ⇒ 窄窗时那一块差值就成了卡与轨道之间的大缝 ✗
+            //   ⇒ 槽宽 = **选中卡自己的宽度**:卡与轨道恒为 thumbGap,没有缝 ✓
+            //   代价(照实说):换到不同宽度的窗时,托盘窗会跟着变宽/变窄
+            let slotW = windows.indices.contains(selIndex)
+                ? PanelMetrics.thumbWidth(aspect: windows[selIndex].aspect)
+                : (windows.map { PanelMetrics.thumbWidth(aspect: $0.aspect) }.max() ?? 0)
+            // ★ 卡盒恒定 = 本组最大卡(2026-10-25 日志铁证):IDEA 的"4 窗同尺寸"实为
+            //   1728x1084 / 920x492 / 1204x1084 / 1728x1050(有一扇是弹窗)⇒ 卡跟选中走 =
+            //   每次组内换选中卡都变尺寸 = 用户说的"落位"✗ ⇒ 卡盒 = 组内最大卡,恒定;
+            //   换选中只剩内容直换;小窗内容在盒内 aspect-fit ✓
+            let slotH = windows.map { PanelMetrics.thumbSize(real: $0.bounds.size,
+                                                            aspect: $0.aspect).height }.max() ?? 0
+            // ★★ 2026-10-26 待办第 2 条(用户口径):「组内换窗**没有落位**,只有窗口尺寸
+            //   变化时的形变」⇒ 卡盒 = **选中窗自己的卡尺寸**,并且把动画挂在"尺寸"这个值上:
+            //   `.animation(_:value:)` 只在值**变了**才启动 ⇒ 同尺寸窗之间切换 = 零动画 ✓,
+            //   尺寸真的不同时才播 0.42s 形变 ✓(这正是用户要的那条区分)
+            let selBox = PanelMetrics.thumbSize(real: windows[selIndex].bounds.size,
+                                                aspect: windows[selIndex].aspect)
+            ChipRailGroup(windows: windows,
+                          selected: selIndex,
+                          bundleID: controller.currentGroup?.bundleID,
+                          card: AnyView(thumb(at: selIndex, showsChip: false, face: selBox)
+                              // ★★ 2026-10-26 **撤回贴右**(用户:「怎么多窗口的位置跑偏了」):
+                              //   贴右把"槽宽 − 卡宽"那一坨全甩到左边 ⇒ 整块内容在**定宽的托盘窗**里
+                              //   重心右移 = 看起来跑偏 ✗(环溢出那一版还会把长条撑宽、右侧被切)
+                              //   ⇒ 回到**居中**(已知良好状态);中间那道缝属于"槽宽按组内最宽卡"的
+                              //      固有代价 —— 想彻底消掉,只能让**托盘宽跟选中卡走**(宽度会随换窗跳)
+                              .frame(width: slotW, alignment: .center)
+                              // 同一条纪律:槽宽的布局也不许被外层动画带走 ✓
+                              .transaction { $0.animation = nil }
+                              // ★〔2026-10-25 撤〕曾在此挂 .animation(value: wid) 做卡形变:
+                              //   它包住**整张卡**,内容三层降级(图标→静帧→live)的换源也被裹进
+                              //   同一事务 ⇒ 同尺寸窗口(IDEA)也"先缩后放"(用户录屏逐帧实锤)✗
+                              //   ⇒ 摘掉:换窗 = 内容一帧直换、无任何动画;尺寸形变等"只对几何
+                              //      生效的窄动画"(face 驱动)验证后再上,不再让动效沾内容 ✓
+                              // ★★ 2026-10-26 病例(用户:「从 Sublime 切到 IDEA 时会形变,然后从
+                              //   左下角出来」):`.animation(value: selBox)` 在**换组**那一拍也生效 ——
+                              //   换组时卡的位置/槽宽/图片全都变了 ⇒ 整张卡从上一组的几何**插值过去**
+                              //   = "从角落长出来" ✗。形变只属于**组内换窗**(尺寸真的不同那一拍);
+                              //   换组有自己的落位(`settlesOnGroupChange`),不许叠形变 ✓
+                              // ★★ 2026-10-26 三连失败后的定论(用户:「白边更明显了,内容没有跟随尺寸变化」):
+                              //   卡片形变期间**内容层追不上框**,试过的三条路都不成 ——
+                              //     ① 每层图给显式尺寸 ② scaledToFill+clipped ③ 按旧尺寸排+scaleEffect 拉伸
+                              //   ⇒ 关掉尺寸动画本身:卡与内容**同一帧**换到新尺寸,
+                              //     没有中间帧 = 物理上不可能露白边 ✓(代价:尺寸切换是硬切,不做形变)
+                              .animation(nil, value: selBox)
+                              .onTapGesture { controller.cardTapped(localX: 0) }),
+                          // 轨道高 = 组内最大卡高(与卡盒同源,恒定)✓
+                          railHeight: slotH,
+                          onSelect: { controller.hoverWindow($0) },
+                          // ★★ 2026-10-26 病例(用户:「芯片 hover 有动效, 但点击之后不会打开对应窗口」):
+                          //   原来点芯片走 `cardTapped(localX: 0)` —— 它按**卡片的 localX** 重新算命中,
+                          //   `0` 永远落在**第 1 张卡** ⇒ 点第 3 枚也去开第 1 扇窗 ✗
+                          //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
+                          onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
+                          entryTick: controller.entryTick,
+                          entryFloat: controller.entryFloat,
+                          visible: controller.isVisible)
+        } else {
+            cardRowGrid
+        }
+    }
+
+    private var cardRowGrid: some View {
         // 卡宽随窗比例(T88):布局按每张卡的实际宽算,不再假定定尺
         // ★ 方案 A:布局一律走槽宽(本局最宽卡)⇒ 与控制器尺寸账/命中同源
         // ★★ 2026-09-21 最终裁定(用户):**保留卡片形状,接受换组时的位移**。
@@ -224,7 +326,14 @@ struct PreviewPanelView: View {
             ForEach(0..<rowsSafe, id: \.self) { r in
                 HStack(spacing: PanelMetrics.thumbGap) {
                     ForEach(r * colsSafe..<min(r * colsSafe + colsSafe, windows.count), id: \.self) { i in
-                        thumb(at: i)   // 紧排(卡宽随真窗 ⇒ 用户要的形状 ✓)
+                        // 单窗口放宽一档(见 `PanelMetrics.soloWiden`)
+                        // ★ 放宽**只属于芯片轨道样式**(用户口径:「普通窗口还是原来的尺寸」)——
+                        //   两套版式的度量必须完全隔离,row 一个像素都不许跟着变 ✓
+                        thumb(at: i, face: (useRail && windows.count == 1)
+                              ? PanelMetrics.thumbSize(real: windows[i].bounds.size,
+                                                       aspect: windows[i].aspect,
+                                                       widen: PanelMetrics.soloWiden)
+                              : nil)
                     }
                 }
                 // ★ **行级点击**(2026-09-19,用户实报「第二张卡要点两遍」):卡片之间的
@@ -234,20 +343,6 @@ struct PreviewPanelView: View {
                 .gesture(SpatialTapGesture().onEnded { value in
                     controller.cardTapped(localX: value.location.x)
                 })
-            }
-        }
-        // ⚠️ 这里曾经用 `.id(currentGroup.pid)` 强制"换组 = 换视图身份"来治红绿灯掉下来:
-        //   灯掉下来的真因是 `hovered` 那条动画没守(已补 ✓),而换身份会**先拆旧视图再建新视图**
-        //   ⇒ 中间那一帧旧卡还留在屏上,露出一条边(2026-10-19 用户实报:「切 app 时右边闪一条白线」✗,
-        //   字面复核:那条线不在选中卡上、只有 2px 宽、比环更白)⇒ 换身份这招撤掉 ✓
-        .coordinateSpace(name: "glance.tray")
-        .onPreferenceChange(CardFrameKey.self) { handleCardFrames($0) }
-        // 退场影子画在最上层(原位置),0.12s 缩+淡出后自己摘掉 ✓
-        .overlay(alignment: .topLeading) {
-            ForEach(ghosts) { ghost in
-                GhostThumb(ghost: ghost)
-                    .position(x: ghost.rect.midX, y: ghost.rect.midY)
-                    .allowsHitTesting(false)
             }
         }
         // **帧拍兜底**(与 launchGrid 同一套、同一哲学):Tab 换组后托盘整块换内容、
@@ -269,7 +364,8 @@ struct PreviewPanelView: View {
         return min(max(controller.winIndex, 0), windows.count - 1)
     }
 
-    private func thumb(at i: Int) -> some View {
+    private func thumb(at i: Int, showsChip: Bool = true, face: CGSize? = nil,
+                       settlesOnGroupChange: Bool = false) -> some View {
         let w = windows[i]
         // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
         let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
@@ -323,7 +419,8 @@ struct PreviewPanelView: View {
             //     但**宁可一次小闪,也不要一张空卡** ✓
             image: snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
-            face: nil,
+            // 单窗口时由调用方给一张"放宽过的脸"(见 `PanelMetrics.soloWiden`)✓
+            face: face,
             liveBox: LivePreviewPool.shared.box(for: w.wid),
             // ★★ 2026-10-20 病例(用户:「切换到 app 之后卡片出现,闪烁就跟着来了」):
             //   换组那一拍 `winIndex` 可能还停在旧组的值上(比如旧组有 2 窗、选的是第 2 窗,
@@ -331,6 +428,18 @@ struct PreviewPanelView: View {
             //   画了一帧**,下一刻又补上选中 ⇒ 一次亮度突变 = 闪 ✗
             //   ⇒ **结构上**掐死这一类:`selIndex` 永远夹在窗口数之内 ⇒ 任何一帧都恰好有一张是选中的 ✓
             selected: i == selIndex, // 换窗即接力:弹簧打断保速
+            // 落位 = **row 版式专属**(按版式判,不按卡判):
+            // 轨道模式下连单窗特例(卡+底芯片,走 row 网格)也不落位 ——
+            // 用户实报(2026-10-25):「IDEA 窗口一样大也有先缩后放的动效」✗
+            // 病根:单窗组走 row 网格,onAppear 每次换组都落位 ✗
+            // ★ 2026-10-26 用户:「多窗口的时候, 卡片还有落位动效. 不要了」⇒
+            //   卡片落位只留给**单窗口**(多窗口那局的入场交给芯片/轨道的浮出)✓
+            settlesOnSwap: WindowLayout.current == .row && windows.count == 1,
+            settlesOnGroupChange: settlesOnGroupChange,
+            chipEntersFromRight: windows.count == 1,
+            entryTick: controller.entryTick,
+            entryFloat: controller.entryFloat,
+            showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
             ringSelectMotion: controller.selectionAnimation(PanelMotion.select),
@@ -474,6 +583,24 @@ private struct WindowThumb<Overlay: View>: View {
     /// 这一扇窗的**帧盒子**(只观察它自己 ⇒ 别的窗口来帧不会重绘本卡 ✓)
     @ObservedObject var liveBox: LiveFrameBox
     let selected: Bool
+    /// 同一格子换成另一扇窗时,要不要"落位"一次(实验台 v4 定稿:轨道版式**不落位** ——
+    /// 换窗唯一的动作 = 卡形变;落位只属于唤起那一刻的默认窗)。row 版式保持 true ✓
+    var settlesOnSwap: Bool = true
+    /// ★ 2026-10-26 待办第 1 条(用户口径):「所有 App 只有在切换到它、窗口**第一次出现**时,
+    ///   才有落位动画;组内换窗没有任何落位」⇒ 轨道版式传 true(只认 bundleID 变化),
+    ///   row 版式保持 false(它走 `settlesOnSwap` 那条既有路径)✓
+    var settlesOnGroupChange: Bool = false
+    /// ★ 2026-10-26 用户:「多窗口的时候芯片有渐入登场的效果,单窗口没有 ⇒ 单窗口也从右边入场」
+    ///   —— 只给**单窗口**那一局(那时芯片是卡片底下唯一的一枚,入场才看得出来)✓
+    var chipEntersFromRight: Bool = false
+    /// 入场令牌(每开一局 +1;见 `PanelController.entryTick`)—— 入场动效**只认它** ✓
+    var entryTick: Int = 0
+    /// 入场进度(独立小对象 ⇒ 每拍只重绘用到它的小块,不再拖整块面板)✓
+    @ObservedObject var entryFloat: EntryFloatModel
+    /// 面板是否可见(同轨道那条理由:常驻视图不会 onAppear)✓
+    var visible: Bool = false
+    /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
+    var showsChip: Bool = true
     /// 卡片的浮层(红绿灯):泛型入参,免得把面板控制器的依赖引进来
     /// **换组那一拍为 true** ⇒ 卡片自己的选中动画一律不给(见下面 `selMotion` 的病例)
     let motionSuppressed: Bool
@@ -495,7 +622,9 @@ private struct WindowThumb<Overlay: View>: View {
     ///   托盘层早就有这条守卫(`.transaction { if isRingSwapInFlight { t.animation = nil } }`),
     ///   但 `.animation(_:value:)` 会**自己造一个事务**,把外层的 nil 覆盖掉 ⇒ 必须在卡片自己也守一道 ✓
     /// 卡片的"明暗"过渡:**永远有**(不受换组抑制) —— 见 `opacity` 那条的病例。
-    private var fadeMotion: Animation { .easeOut(duration: 0.16) }
+    private var fadeMotion: Animation? {
+        WindowLayout.current == .rail ? nil : .easeOut(duration: 0.16)
+    }
     /// "落位"的缩放(平时恒为 1)。见 `settleIn` 的病例。
     @State private var entrySettle: CGFloat = 1
     /// 落位动画的令牌(新的一次开始 ⇒ 上一次的步进自己退出 ✓)
@@ -505,19 +634,34 @@ private struct WindowThumb<Overlay: View>: View {
     /// 「app 切换也算入场 —— 只要卡片窗口是从 0 出现在这个屏幕上」)。
     /// 触发点只有两个:① 视图首次出现 ② 这个格子里换成了**另一扇窗**(`record.wid` 变了)。
     /// 同一组内只换选中(winIndex 变)⇒ 不动 —— 那才叫"效率" ✓
-    private func settleIn() {
+    /// 明暗/糊化**当拍落**,且走禁动画事务 —— 祖先任何 `.animation(value: wid)`
+    /// 都带不动它(2026-10-25 用户实报「换窗还有闪动」:dim 修正被形变动画播成
+    /// 0.16s 渐变 = 闪 ✗)。明暗是"状态落定",不是动效 ✓
+    private func landDim() {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            dim = dimTarget
+            blurFade = blurFadeTarget
+        }
+    }
+
+    /// - Parameter gentle: 换窗用的**轻放**档(0.97、0.16s);入场/换组仍用原档(0.90、0.20s)✓
+    private func settleIn(gentle: Bool = false) {
+        if isTraceEnabled { glog("[动效] 卡片落位 wid=\(record.wid) 组换=\(settlesOnGroupChange) gentle=\(gentle)") }
         // ★★ 2026-10-23 用户裁定:「只针对默认选中的窗口,再加强幅度」+「时有时没有」。
         //   "时有时没有" = **时序问题**(靠 `async`/16ms 猜帧,猜中才动,没猜中就被合并成一帧)✗
         //   ⇒ 改成**自己按帧推**(与窗口淡入 `fadeInWindow` 同一套):每 8ms 一步,
         //     首帧画起始值、后续每步都是一次真实提交 ⇒ 稳定可见 ✓
         guard selected else { entrySettle = 1; return }
-        let start = (UserDefaults.standard.object(forKey: Keys.debugCardSettleScale) as? NSNumber)?
-            .doubleValue ?? 0.90
+        let start = gentle ? 0.97
+            : ((UserDefaults.standard.object(forKey: Keys.debugCardSettleScale) as? NSNumber)?
+                .doubleValue ?? 0.90)
         entrySettle = CGFloat(start)
         settleToken += 1
         let token = settleToken
         let t0 = CACurrentMediaTime()
-        let dur = 0.20
+        let dur = gentle ? 0.16 : 0.20
         if isTraceEnabled { glog("[落位] wid=\(record.wid) start=\(start)") }
         func step() {
             guard token == settleToken else { return }
@@ -579,8 +723,12 @@ private struct WindowThumb<Overlay: View>: View {
     private var dimTargetIsOn: Bool { selected }
 
     private var selMotion: Animation? {
+        // ★ 2026-10-25 用户口径:「针对这个样式,把现在窗口上的动效全部先去掉」
+        //   ⇒ 轨道样式**一律无动画**(选中缩放/上浮/阴影/明暗全部当拍落)。
+        //   等"无动效版本"先在实机上认可,再逐个往回加。
+        if WindowLayout.current == .rail { return nil }
         // 🧪 2026-10-20 A/B 结论:把这条动画关掉后**照样闪** ⇒ 与动画无关,已恢复。
-        motionSuppressed ? nil : ringSelectMotion
+        return motionSuppressed ? nil : ringSelectMotion
     }
 
     /// 芯片上那一行字:编辑器家族抽工程名,其余原样;宽度不够时先截文字再截宽度
@@ -606,8 +754,9 @@ private struct WindowThumb<Overlay: View>: View {
     }
 
     private var imageBox: CGSize {
-        // 卡片尺寸 = min(真窗, 上限)(见 PanelMetrics.thumbSize 的用户口径)
-        PanelMetrics.thumbSize(real: record.bounds.size, aspect: record.aspect)
+        // 卡片尺寸 = min(真窗, 上限)(见 PanelMetrics.thumbSize 的用户口径);
+        // 给了 `face`(单窗口放宽 / 统一卡面)时以它为准 —— 否则图会按旧上限缩、卡里留边 ✗
+        face ?? PanelMetrics.thumbSize(real: record.bounds.size, aspect: record.aspect)
     }
 
     private var cardW: CGFloat {
@@ -634,18 +783,36 @@ private struct WindowThumb<Overlay: View>: View {
         // (用户口径:"不跟预览窗耦合" —— 所以选中态的各种形变不会拖着芯片一起动)
         VStack(spacing: PanelMetrics.chipGap) {
             card
-            chip
+            if showsChip {
+                chip
+            }
         }
         // 卡片 + 芯片的总高 = 卡片实际高 + 芯片那一段(芯片段高度 = thumbH − shotH,是本局的常量)
+        // ★★ 2026-10-26 病例(用户:「是不是没相对居中呀,卡片」):轨道版式 `showsChip = false`,
+        //   但这里**仍然预留了芯片那一段高** ⇒ 卡片内容被顶到框的上半截,和右侧轨道(按卡高居中)
+        //   一比就是"卡偏上"✗ ⇒ 没有芯片就不留那一段 ✓
         .frame(width: box.width,
-               height: box.height + (PanelMetrics.thumbH - PanelMetrics.shotH))
+               height: box.height + (showsChip ? (PanelMetrics.thumbH - PanelMetrics.shotH) : 0))
+        // ★★ 2026-10-26 逐帧实锤的元凶(录屏 203→213 帧:卡宽用 10 帧缩了 37pt、芯片列跟着挪 13pt):
+        //   卡宽 `box` = **选中那扇窗自己的尺寸**(今天才这么改的),而本视图外层的
+        //   `.animation(fadeMotion, value: dim)` 会**自己造一个事务** ⇒ 同一拍里 `box` 的
+        //   **布局**也被它带走 ⇒ 卡片"长/缩"成了 0.2s 的插值,轨道跟着滑 = 用户说的"有先后顺序" ✗
+        //   ⇒ 在这条 frame 之内先断一次事务:几何一律当拍落(opacity/明暗不受影响)✓
+        .transaction { $0.animation = nil }
         // demo `.win:hover` 的唯一作用:**点灯**(三粒灯浮现),几何一动不动 ✓
         .onHover { hovered = $0 }
         // 明暗:换组那一拍当拍落(与几何一致),其余时候 0.16s 过渡
         .onAppear {
-            dim = dimTarget
-            blurFade = blurFadeTarget
-            settleIn()
+            landDim()
+            // 轨道卡:settlesOnSwap=false ⇒ 永不落位 —— 换窗在 SwiftUI 侧是"新实例"
+            //(onAppear 会重跑),只堵 onChange 堵不住;落位是 row 专属 ✓
+            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { settleIn(gentle: true) }
+            // ★★ 2026-10-28(用户:「多窗口的时候, 卡片没有落位效果」):
+            //   轨道版式里 `settlesOnSwap`/`settlesOnGroupChange` **都是 false** ⇒ 原来这里
+            //   直接 `entrySettle = 1`(没有落位)。而且换窗时这张卡是**新实例**(onAppear 重跑)
+            //   ⇒ `onChange(of: record.wid)` 根本不会响 ⇒ 两条路都没动作 ✗
+            //   现在:没有专属落位档的卡片(= 轨道卡)在 onAppear 时走**轻放**档 ✓
+            // 单窗口:芯片从右边滑进来(0.24s)✓ —— 多窗口那局由轨道/卡片自己的入场交代
         }
         .onChange(of: selected) { _, _ in
             // ★ 换组那一拍:当拍落(与几何一致)。
@@ -653,8 +820,7 @@ private struct WindowThumb<Overlay: View>: View {
             //   踩过的两次:① `.animation(v, value: selected)` 把同一拍的布局一起动画化 ⇒ 左滑入场 ✗
             //            ② `withAnimation { dim = … }` 和布局更新挤在同一拍 ⇒ 同样左滑 ✗
             if motionSuppressed {
-                dim = dimTarget
-                blurFade = blurFadeTarget
+                landDim()
             } else {
                 DispatchQueue.main.async {
                     // 这一拍里选中又变了(连按 Tab)⇒ 以最新的为准,别把旧值写回去
@@ -679,13 +845,36 @@ private struct WindowThumb<Overlay: View>: View {
             if !nowSel { lastBlurAt = 0; refreshBlurredLive() }
         }
         .onChange(of: record.wid) { _, _ in
-            dim = dimTarget
-            blurFade = blurFadeTarget
-            settleIn()
+            landDim()
+            // ★★ 2026-10-28(用户:「窗口切换太生硬了, 一点动效没有」/「别疯狂掉帧」):
+            //   轨道版式下 `settlesOnSwap = false` ⇒ 换窗这张卡**一点动作都没有**。
+            //   ⇒ 换窗也"轻放"一下:0.97 → 1、0.16s、easeOut + 1.2% 回弹(纯 scale,不碰布局)
+            //   走的是 `settleIn` 那套**按帧推标量**(不是 SwiftUI 事务)⇒ 不会被合并、也不拖布局 ✓
+            settleIn(gentle: true)
+        }
+        .onChange(of: visible) { _, v in
+        }
+        // 每开一局(令牌 +1):重播"落位 + 单窗芯片上浮" —— **只认它**,
+        // 因为面板窗口常驻,同一个组再次唤起时 onAppear / bundleID 都不会响 ✗
+        .onChange(of: entryTick) { _, _ in
+            if settlesOnSwap || settlesOnGroupChange { settleIn() } else { entrySettle = 1 }
+        }
+        // 换到另一个 App 的组 = "窗口第一次出现"⇒ 落位一次(轨道专用;组内换窗不触发)✓
+        .onChange(of: bundleID) { _, _ in
+            landDim()
+            if settlesOnGroupChange { settleIn() }
+            // ★ 2026-10-26 用户:「不是第一次唤起才有, 是**每次切换 App** 都要有;
+            //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
+            //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
         }
     }
 
     /// 预览卡本体:**只有截图**(顶边毛玻璃 + 红绿灯 + 选中环都长在它身上)
+    /// 换窗时卡片"轻放"的标量(1 = 落定;0.992 = 刚放下的那一拍)——
+    /// 2026-10-28 用户:「窗口切换太生硬了, 一点动效没有」/「别疯狂掉帧」
+    /// ⇒ 只做**变换**(scale),不碰布局、不做淡入、不做位移:渲染服务器一手包,最便宜的一种 ✓
+    @State private var land: CGFloat = 1
+
     private var card: some View {
         ZStack {
             // ★ 分支条件必须是"有**任何一种**图":只看 image 会在"有实时帧、还没截图"时掉进静默态 ✗
@@ -713,8 +902,14 @@ private struct WindowThumb<Overlay: View>: View {
                        let prepared = CardImageCache.shared.image(wid: record.wid, source: image,
                                                                  target: imageBox) {
                         Image(decorative: prepared.cg, scale: prepared.scale).resizable()
+                            .scaledToFill()
+                            .frame(width: box.width + 6, height: box.height + 6)
+                            .clipped()
                     } else if let image {
                         Image(nsImage: image).resizable()
+                            .scaledToFill()
+                            .frame(width: box.width + 6, height: box.height + 6)
+                            .clipped()
                     }
                     // ★★★ 2026-10-25:非选中卡盖一层**烘焙好的磨砂**(见 `CardImageCache.blurredImage`)。
                     //   ① 让"有流/没流"在视觉上不存在 ⇒ 只给选中那张起流(22 条 → 1 条)✓
@@ -724,18 +919,28 @@ private struct WindowThumb<Overlay: View>: View {
                         // ★ S2:实时帧优先(现在**不分选中** —— 见 `liveFrame` 的病例)。池的缓冲按"卡片上限高 × 窗口比例"出图 ⇒ 与 imageBox 同比例
                         //   ⇒ 既不放大也不裁边(与截图那条**同一把尺子**)✓
                         Image(decorative: liveFrame, scale: 1).resizable()
+                            .scaledToFill()
+                            .frame(width: box.width + 6, height: box.height + 6)
+                            .clipped()
                     }
                     // ★★★ 磨砂层**盖在最上面**(它必须糊住"最新的那一帧"):
                     //   · 优先用**实时帧的磨砂版**(选中期间一直在后台按 ≤5fps 重算)⇒ 内容是新的 ✓
                     //   · 还没有过任何实时帧(本次运行从没选中过它)⇒ 退回**快照的磨砂版** ✓
                     if !selected {
                         if let b = blurredLive {
-                            Image(decorative: b, scale: 1).resizable().opacity(blurFade)
+                            Image(decorative: b, scale: 1).resizable()
+                                .scaledToFill()
+                                .frame(width: box.width + 6, height: box.height + 6)
+                                .clipped()
+                                .opacity(blurFade)
                         } else if let image,
                                   let blurred = CardImageCache.shared.blurredImage(
                                     wid: record.wid, source: image, target: imageBox,
                                     radius: PanelColors.cardBlur) {
                             Image(decorative: blurred.cg, scale: blurred.scale).resizable()
+                                .scaledToFill()
+                                .frame(width: box.width + 6, height: box.height + 6)
+                                .clipped()
                                 .opacity(blurFade)
                         }
                     }
@@ -772,6 +977,15 @@ private struct WindowThumb<Overlay: View>: View {
                 }
             }
         }
+        // ★★★ 2026-10-27(用户连着两轮「没修好」,录屏逐帧:整列芯片左移用了 ~12 帧):
+        //   明暗那两条 `.animation(fadeMotion, value: dim / blurFade)` 挂在 **frame 外面** ——
+        //   注释里写的"布局完全不依赖 dim"在**卡宽恒定**的年代成立;今天卡宽 = 选中窗自己的尺寸,
+        //   于是 `dim` 一变(组内换窗就会变),这两条动画就把 **frame 的尺寸** 一起插值 ✗
+        //   ⇒ 把"明暗/模糊"挪进 frame **里面**(只包住绘制),frame 留在动画之外 ⇒ 几何当拍落 ✓
+        .opacity(dim)
+        .saturation(selected ? 1 : 0.88)
+        .animation(fadeMotion, value: dim)      // 只认 dim(现在它真的只影响绘制 ✓)
+        .animation(fadeMotion, value: blurFade)
         .frame(width: box.width, height: box.height)
         // ★ demo `.win:not(.sel) .thumb{filter:brightness(.72) saturate(.88)}`(2026-10-19)
         //   旧口径是"整卡压到 30% 不透明度"—— 未选中的卡几乎塌成一块灰,用户读作
@@ -784,11 +998,6 @@ private struct WindowThumb<Overlay: View>: View {
         //      (新组的卡位置不同)被一起动画化 ⇒ 卡片从左边滑进来 ✗
         //   ⇒ 现在:只动一个**标量** `dim`(布局完全不依赖它),用 `withAnimation` 单独改它 ✓
         //     几何(缩放/上浮/阴影)继续听 `selMotion`,换组时照样当拍 ✓
-        .opacity(dim)
-        .animation(fadeMotion, value: dim)   // ★ 只认 `dim`(布局完全不依赖它)⇒ 不会带走布局 ✓
-        // 「对焦」:只认 `blurFade`(布局完全不依赖它 ✓)⇒ 0.16s 磨砂淡出/淡入
-        .animation(fadeMotion, value: blurFade)
-        .saturation(selected ? 1 : 0.88)
         .clipped()
         // ★★ 雾檐(2026-09-24 深夜,用户拍板「遮罩改到容器顶部,不坐在画面上」):
         //   原来的「座」= 把这扇窗的画面自己糊一份叠上去 —— **图像派生** ⇒ 要等图、要后台算、
@@ -931,13 +1140,16 @@ private struct WindowThumb<Overlay: View>: View {
             // 而现在的 macOS 早就不用它了(浅色那格当年也没这道唇,它返回的是全透明)。
             // 芯片要的"清透"由**底的半透**承担(透过它看到的是已毛玻璃化的画面),不再由受光边承担。
             // 与卡片同宽(demo:胶囊贴着卡片左右缘),高度仍是 chipH —— 尺寸账一个数没变 ✓
-            .frame(width: box.width, height: PanelMetrics.chipH)
             // demo `.win.sel .chip{transition:... .2s}` —— 圆点换色不再硬切
             // ⚡ 换组那一拍**同样不给动画**(2026-10-19 用户:「芯片从左下角出现」✗):
             //   新组卡宽不同 ⇒ 芯片的 frame 宽度也在那一拍变 ⇒ 被这条动画一吃,
             //   芯片就是从旧宽度/旧位置"长"出来的 ✗
+            // ★ 2026-10-27:同样的道理 —— `selected` 一变就会走这条动画,而**卡宽**
+            //   (`box` = 选中窗自己的尺寸)也在同一拍变 ⇒ 动画会连带把 frame 插值 ✗
+            //   ⇒ 动画写在 frame **里面**(只包绘制:圆点/文字颜色),frame 留到动画外面 ✓
             .animation(motionSuppressed ? nil
                        : ringSelectMotion, value: selected)
+            .frame(width: box.width, height: PanelMetrics.chipH)
     }
 }
 
@@ -1063,6 +1275,10 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     private var gen = 0
     private var startedAt: [CGWindowID: CFAbsoluteTime] = [:]
     private var firstFrameLogged: Set<CGWindowID> = []
+    /// 只为"首帧色彩空间"那条日志限次(避免每帧刷屏)✓
+    private var firstFramesHandled = 0
+    /// 每条流已收到的帧数(丢掉起流初期的 2 帧:那两帧亮度会跳 ~8%)
+    private var framesSeen: [CGWindowID: Int] = [:]
     /// 起流时冻结的**像素规格**。⚠️ 只写不清是不行的(2026-09-21 病例):
     /// 它是按"当时那块屏"的像素尺寸算的 ⇒ 接拔外接屏/改分辨率后**全部过期** ✗
     /// ⇒ 见 `screenConfigChanged()`:显示配置一变,整本作废 ✓
@@ -1254,7 +1470,12 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             let coldOpen = items.allSatisfy {
                 self.handles[$0.wid] == nil && !self.pending.contains($0.wid)
             }
-            self.queue.asyncAfter(deadline: .now() + (coldOpen ? 0.01 : 0.15), execute: work)
+            // ★ 轨道版式:整池只有 1 条流(选中那张)⇒ 换选中**立即起流**,
+            //   不付 150ms 推迟的代价 —— 那 150ms 里卡在图标兜底,
+            //   live 首帧(134-177ms 实测)一到就"小图标→满卡"跳一下 = 用户说的落位形变 ✗
+            //   row 版式维持 150ms(2026-09-21 hover 丢帧病例没变)✓
+            let startDelay = (coldOpen || WindowLayout.current == .rail) ? 0.01 : 0.15
+            self.queue.asyncAfter(deadline: .now() + startDelay, execute: work)
         }
     }
 
@@ -1422,6 +1643,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         Task { try? await h.stream.stopCapture() }
         activeGens.remove(h.gen)
         handles[wid] = nil; startedAt[wid] = nil; firstFrameLogged.remove(wid); idleSince[wid] = nil
+        framesSeen[wid] = nil
         glog("[直播] 停流 wid=\(wid)(\(why))")
     }
 
@@ -1613,9 +1835,38 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         //   SCK 的帧**有时带 sRGB 标签、有时不带**(日志里两种都出现过)⇒ 不带的那条会被
         //   合成器按显示器空间直出,与静帧/带标签的帧都不一样 ⇒ 切源时亮度跳。
         //   这里给**没标签的**补上 sRGB(只改标签、不动像素;SCK 的缓冲本来就是 sRGB ✓)
-        let tagged: CGImage = img.colorSpace == nil
-            ? (CGColorSpace(name: CGColorSpace.sRGB).flatMap { img.copy(colorSpace: $0) } ?? img)
-            : img
+        // ★★ 2026-10-27(用户:「snapshot → live 的闪动更明显了」,60fps 逐帧量:
+        //   卡片同一行亮度 30.3 → **32.7(整整 2 帧)** → 30.2 ⇒ 一次 ~8% 的 33ms 闪):
+        //   上一版只给"**没有**色彩空间标签"的帧补 sRGB;而这批帧**有时带 P3、有时带 sRGB**
+        //   (SCK 输出不稳定) ⇒ 带 P3 标签的那一两帧被按 P3 解释 ⇒ 亮度/颜色偏 ⇒ 闪 ✗
+        //   ⇒ **一律统一到 sRGB**(只改标签,不动像素;我们的缓冲本来就是 sRGB),
+        //     顺便把前 3 帧实际带的色彩空间打进日志,便于复核 ✓
+        // ★★ 2026-10-27 第二版(用户:「还是一样的闪」):
+        //   上一版只是 `copy(colorSpace:)` —— 那是**改标签**而不是转换像素 ✗
+        //   如果帧本来是按 P3 出的像素,贴个 sRGB 标签只会被解释成"更艳/更亮" ✗
+        //   ⇒ 现在按 `CardImageCache` 那条老规矩:**真的重绘进 sRGB 位图**(一次色彩转换)✓
+        //   成本:536×292 一次 draw ≈1–2ms,跑在池队列上(20fps ⇒ 可忽略)✓
+        var tagged: CGImage = img
+        if let cs = img.colorSpace, cs.name != CGColorSpace.sRGB,
+           let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
+            let w = img.width, h = img.height
+            if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) {
+                ctx.interpolationQuality = .none
+                ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+                if let out = ctx.makeImage() { tagged = out }
+            }
+            if firstFramesHandled < 3 {
+                firstFramesHandled += 1
+                glog("[直播] 帧色彩空间 = \(cs.name as String? ?? "?") ⇒ 已转换到 sRGB wid=\(wid)")
+            }
+        }
+        // ★★ 2026-10-27:**丢掉每条流的前 2 帧**(实测那两帧亮度 +8%、之后立刻回到与静帧一致):
+        //   起流初期的帧还没稳定(曝光/合成/首帧解码都可能不同)⇒ 先用静帧顶着,稳定后再接 ✓
+        framesSeen[wid, default: 0] += 1
+        if framesSeen[wid, default: 0] <= 2 { return }
+        // 🔬 二分开关:`debug.noLive` ⇒ 丢掉所有实时帧(只留静帧)
+        if DebugFlags.noLive { return }
         let now = CFAbsoluteTimeGetCurrent()
         // ★ 账本更新**就地在池队列上做**(不碰主线程状态 ⇒ 不会再和主线程抢 Dictionary ✓)
         if let t0 = startedAt[wid], !firstFrameLogged.contains(wid) {
@@ -1931,5 +2182,280 @@ final class CardImageCache {
     func prewarm(_ items: [(wid: CGWindowID, source: NSImage, target: CGSize)]) {
         for it in items { _ = image(wid: it.wid, source: it.source, target: it.target) }
     }
+
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 芯片轨道(ADR-0017)—— 与上面的「卡片行」完全隔离的一支
+// ═══════════════════════════════════════════════════════════════════
+
+/// **芯片轨道**(ADR-0017)—— 与现行「卡片行」完全隔离的第二套组内呈现。
+///
+/// 什么时候用:设置里 `panel.windowLayout == .rail`,且这一组**多于 1 扇窗**
+/// (单窗口仍走老路,那是特例,用户明确"以后再优化")。
+///
+/// 版式(参数全部来自实验台定稿,见 ADR-0017):
+/// ```
+/// [ 预览卡(只有选中那扇) ]  14pt  [ 轨道:全部窗口的芯片,一列 ]
+///                                      宽 164 · 高 = 卡高 · 无底无框
+/// ```
+/// 规则:
+///   · 选中那枚芯片是**原色**(彩色 App 图标 + 淡胶囊 + 强调色圆点),其余**灰调**(去饱和、无底)
+///   · 滚动只为"选中出视口"服务:一次一枚,0.42s easeOut;**选中本身永不滚动**
+///   · **无极**:芯片渲染三份、视口停在中间那份 ⇒ 走到最后继续走就是接着滚第一枚,
+///     不会反向跳(用户:「第 6 个再滚一次就回到第 1 个」)
+///   · 遮罩**有方向**:上面还有内容才渐隐顶部,下面还有内容才渐隐底部;装得下 ⇒ 两侧都不糊
+struct ChipRailGroup: View {
+    let windows: [WindowRecord]
+    let selected: Int
+    let bundleID: String?
+    let card: AnyView
+    /// 轨道高度 = **这张卡的实际高度**(不是上限 shotH)——
+    /// 宽窗的卡比 shotH 矮,若按 shotH 排芯片就会顶出卡的上下边(用户实报「芯片位置怎么能比窗口高」)✗
+    let railHeight: CGFloat
+    /// 选中变化(hover 芯片)
+    let onSelect: (Int) -> Void
+    /// 点芯片 = 选中并确认
+    let onTap: (Int) -> Void
+    /// 入场令牌(每开一局 +1)⇒ 同一个 App 组再次唤起也重播浮出 ✓
+    var entryTick: Int = 0
+    /// 入场进度(独立小对象,见 `EntryFloatModel`)✓
+    @ObservedObject var entryFloat: EntryFloatModel
+    /// 面板是否可见 —— **常驻视图不会 `onAppear`**,而隐藏期间的 `entryTick` 变化可能根本没被求值
+    /// ⇒ 入场浮出也要认"从隐藏变可见"这一拍 ✓
+    var visible: Bool = false
+
+    /// 一屏放几枚(按卡高算,见 `slotCount`)
+    private var slotCount: Int {
+        max(1, Int((railHeight + PanelMetrics.chipRailGap) / PanelMetrics.chipRailStep))
+    }
+    /// 首尾**断开**(用户实测:莫比乌斯环会"一直滚下去,有点搞笑"✗)——
+    /// Tab 越界时由选中跳变(尾→头/头→尾),视口老老实实夹在 [0, count-slot] ✓
+    private var copies: Int { 1 }
+
+    /// 连续坐标:选中在第几枚(可正可负 ⇒ 首尾靠它环绕)
+    @State private var selPos: Int = 0
+    /// 视口顶端的连续坐标
+    @State private var viewPos: Int = 0
+
+    /// 轨道滚动的动效(2026-10-26 用户:「把芯片轨道的动效也加一下,选中滚动的步长是 1」)
+    /// **入场那一拍必须为 nil**:`onAppear` 会把 viewPos 从 0 设到 selected,
+    /// 若此时已有动画 ⇒ 一打开就"滚过去"✗(开场只该有浮出)。落位结束后再启用 ✓
+    @State private var scrollMotion: Animation?
+    /// **连续化的选中位置**(0…n-1)：换窗时它从旧值滑到新值 ⇒ 高亮是"走过去"的，
+    /// 而不是"两枚芯片同时当拍换色"（2026-10-28 用户:「切换窗口的时候…动效太生硬了」）✓
+    /// 只喂**绘制**属性(缩放/颜色/投影)，不碰布局 ⇒ 不会再出"有的动有的不动" ✓
+    @State private var selF: CGFloat = 0
+
+    var body: some View {
+        HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
+            card
+            rail
+                // ★★ 2026-10-27 定论(用户:「还是掉帧, 去掉芯片动画吧」):
+                //   入场浮出**整条删掉**。四轮尝试(定时器推值 / TimelineView / 纯 transform)都
+                //   无法在这台机器上做到顺畅 —— 判定为"托盘这一帧的渲染成本已经吃满",
+                //   再往上叠任何逐帧动画都会掉 ✗。芯片到位即显示,不做位移、不做渐显 ✓
+        }
+        // ★★ 2026-10-26 病例(用户:「卡片变化的时候, 芯片轨道的移动有点怪, 好像有先后顺序」,
+        //   60fps 逐帧实锤:卡在**一帧内**跳到新尺寸,而芯片列宽从 116pt 一路长到 184pt 用了 ~12 帧 ✗):
+        //   换窗时控制器会在同一轮里跑环/翻牌的 `withAnimation` —— SwiftUI 的事务是**全局的**,
+        //   托盘那块 hosting 也跟着吃到这条动画 ⇒ 卡与轨道的**几何**被拉成 0.2s 的插值 ⇒ 看着"有先后" ✗
+        //   ⇒ 托盘内容**断掉继承的动画事务**(几何一律当拍落);轨道自己的滚动仍由
+        //     `.animation(scrollMotion, value: viewPos)` 显式发起 ⇒ 不受影响 ✓
+        .transaction { $0.animation = nil }
+        .onAppear {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { selPos = selected; viewPos = selected; selF = CGFloat(selected); clampViewport() }
+            // 浮出(0.26s)落定之后再开滚动动画,免得开场变成"一边浮一边滚" ✗
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
+        }
+        .onChange(of: selected) { _, new in
+            selPos = new
+            // 高亮"走过去":只改一个标量,动画由**芯片内部那段局部事务**提供
+            //(外层 `.transaction { $0.animation = nil }` 会关掉整棵树的动画,见 `rail` 的注释)✓
+            selF = CGFloat(new)
+        }
+        // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
+        .onChange(of: entryTick) { _, _ in
+            scrollMotion = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
+        }
+        .onChange(of: bundleID) { _, _ in
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { selF = CGFloat(selected) }   // 换组:高亮当拍就位,不"从上一组滑过来" ✗
+            scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                scrollMotion = .easeOut(duration: 0.22)
+            }
+        }
+    }
+
+    /// 装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 才有滚动这回事
+    private var fits: Bool {
+        CGFloat(windows.count) * PanelMetrics.chipRailStep <= railHeight
+    }
+
+    private var rail: some View {
+        let lane = PanelMetrics.chipRailWidth
+        let height = railHeight
+        let step = PanelMetrics.chipRailStep
+
+        // 视口:装得下 ⇒ 整列垂直居中、不滚;装不下 ⇒ 把选中留在视口内(越界才滚一枚 = 一步)
+        let oneSet = CGFloat(windows.count) * step      // 每枚占一个 step ⇒ 与上面的 frame 同一把尺子 ✓
+        let fits = self.fits
+        let offsetY: CGFloat = fits
+            ? (height - oneSet) / 2
+            : -CGFloat(viewPos) * step
+        let showTop = !fits && viewPos > 0
+        let showBottom = !fits && viewPos + slotCount < windows.count
+
+        return ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(0..<(windows.count * copies), id: \.self) { idx in
+                    chip(logical: idx % windows.count)
+                }
+            }
+            .frame(width: lane, alignment: .topLeading)
+            .offset(y: offsetY)
+        }
+        .frame(width: lane, height: height, alignment: .topLeading)
+        .clipped()
+        .mask(
+            LinearGradient(stops: [
+                .init(color: showTop ? .clear : .black, location: 0),
+                .init(color: .black, location: showTop ? 0.13 : 0),
+                .init(color: .black, location: showBottom ? 0.87 : 1),
+                .init(color: showBottom ? .clear : .black, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        )
+        .overlay(alignment: .top) { edgeBand(up: false) }
+        .overlay(alignment: .bottom) { edgeBand(up: true) }
+        // ★★ 2026-10-27 逐帧实锤(录屏 181→193 帧:整列芯片左移用了 ~12 帧、卡片却当拍到位):
+        //   `.animation(_:value:)` 会把**这棵子树的布局(含位置)**卷进它自己的事务 ⇒
+        //   换窗那一拍 `clampViewport` 顺手挪了 `viewPos`,于是整列芯片的位置被插值 ✗
+        //   ⇒ 删掉这条隐式动画;**滚动的平滑改在"真正要滚"的那两处显式发起**
+        //     (边缘感应带 / clampViewport 里选择越界时)✓
+        .animation(nil, value: railHeight)
+        .onChange(of: selPos) { _, _ in clampViewport() }
+        .onAppear { clampViewport() }
+    }
+
+    private func chip(logical: Int) -> some View {
+        let w = windows[logical]
+        let isOn = logical == selected
+        // 强调度:选中那枚 = 1,相邻 = 0(按 `selF` 连续取值 ⇒ 换窗时是"高亮走过去" ✓)
+        let em = max(0, 1 - min(abs(CGFloat(logical) - selF), 1))
+        let title = PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID))
+        return HStack(spacing: 6) {
+            if let icon = AppIconCache.icon(pid: w.pid) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
+                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
+                                                style: .continuous))
+                    .saturation(0.28 + 0.72 * em)
+                    .opacity(0.75 + 0.25 * em)
+            }
+            // 文字:两层叠着按 `em` 交叉淡 —— Color 不能直接插值,交叉淡是同一件事且更稳 ✓
+            ZStack(alignment: .leading) {
+                Text(title)
+                    .foregroundStyle(PanelColors.chipFgOff)
+                    .opacity(1 - em)
+                Text(title)
+                    .foregroundStyle(PanelColors.chipFgOn)
+                    .opacity(em)
+            }
+            .font(.system(size: PanelMetrics.titleSize, weight: .regular))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            ZStack {
+                Circle().fill(PanelColors.chipDotOff).opacity(1 - em)
+                Circle().fill(Color.accentColor).opacity(em)
+            }
+            .frame(width: PanelMetrics.chipDot, height: PanelMetrics.chipDot)
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 8)
+        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH, alignment: .center)
+        // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
+        //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
+        .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
+        .shadow(color: .black.opacity(0.10 + 0.05 * em), radius: 3 + 2 * em, y: 1 + 1 * em)
+        .overlay(Capsule(style: .continuous)
+            .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+        // ★★ 2026-10-28:托盘那一层有全局 `.transaction { animation = nil }`(为了几何当拍落),
+        //   所以这里要**局部**把动画还回来 —— 只包"纯绘制"这一截(缩放/投影/颜色),
+        //   外面那个定尺寸框负责位置 ⇒ 位置永远当拍、颜色/缩放慢慢过渡 ✓
+        .transaction { $0.animation = MotionPolicy.animation(.spring(response: 0.26, dampingFraction: 0.78)) }
+        .contentShape(Rectangle())
+        // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
+        // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
+        // ★ 2026-10-27(用户:「轨道的切换窗口的芯片浮动动效也没了」):
+        //   选中那枚**满格**、其余缩 3.6% —— 但**不做过渡动画**,当拍落:
+        //   一过渡就必须给每枚芯片一条动画事务,而 `.animation(_:value:)` 会把
+        //   这枚芯片的**位置**也卷进去 ⇒ 换窗那一拍"选中态变了的几枚"慢半拍,
+        //   一列芯片被读成"有的动有的不动"(上一轮的病灶)。
+        //   ⇒ 尺寸差当作**静态状态**表达,动效只保留"颜色/圆点"这类纯绘制 ✓
+        .scaleEffect(0.964 + 0.036 * em)
+        // ★★ 2026-10-27 关键裁定(用户:「你现在 14 动, 23 不动, 是何意味」):
+        //   每枚芯片的 `.animation(_:value: isOn)` 会把**这枚芯片自己的位置**卷进它的事务
+        //   —— 换窗那一拍,恰好是"选中态变了"的那两枚进入动画事务 ⇒ 它们滞后、其余当拍跳
+        //   ⇒ 一列芯片被读成"有的动有的不动" ✗(这就是连修四轮都没治对的根)
+        //   ⇒ **芯片不再持有任何自己的动画**:尺寸恒定(不再做 0.965 缩放),
+        //     选中只靠颜色/圆点区分 ⇒ 整列永远一起走 ✓
+        //   (要把"选中放大"加回来,必须像 `entryProgress` 那样由控制器按帧推标量,不许用事务)
+        // ★★ 2026-10-26 第二次(用户:「期望是窗口缩小、芯片**整体**左移, 但芯片不是一齐移动的」):
+        //   `.animation(_:value:)` 会把**这枚芯片的布局**(位置)也卷进它自己的事务 ⇒
+        //   换窗那一拍,只有"选中状态变了"的那两枚芯片在 0.22s 里滑过去,其余当拍跳 ⇒
+        //   一列芯片**不同步** ✗
+        //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
+        //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
+        .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
+        .onHover { inside in if inside { onSelect(logical) } }
+        .onTapGesture { onSelect(logical); onTap(logical) }
+    }
+
+    /// 边缘感应带:鼠标进顶/底 12pt ⇒ 轨道滚**一枚**;
+    /// **只滚视口,不动选中**(用户口径:「我只是想让轨道滚动起来,而不是代替移动」)✓
+    @ViewBuilder private func edgeBand(up: Bool) -> some View {
+        if !fits && windows.count > slotCount {
+            Color.clear
+                .frame(height: 12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    guard inside else { return }
+                    let hi = windows.count - slotCount
+                    let next = min(max(viewPos + (up ? 1 : -1), 0), hi)
+                    if next == viewPos { return }
+                    if let anim = scrollMotion {
+                        withAnimation(anim) { viewPos = next }
+                    } else {
+                        viewPos = next
+                    }
+                }
+        }
+    }
+
+    /// 视口只为"选中出视口"服务 —— **一次一枚**,不按像素算最小距离 ✓
+    private func clampViewport() {
+        var target = viewPos
+        if selPos - viewPos < 0 { target = selPos }
+        if selPos - viewPos > slotCount - 1 { target = selPos - slotCount + 1 }
+        guard target != viewPos else { return }
+        // 只有"选中走出视口"才滚,而且这一步是**平滑**的(用户口径:选中滚动,步长 1)✓
+        // ⚠️ 换窗那一拍若同时也变了尺寸,几何本身已经当拍落 ⇒ 这里只影响纵向滚动 ✓
+        if let anim = scrollMotion {
+            withAnimation(anim) { viewPos = target }
+        } else {
+            viewPos = target
+        }
+    }
+
 
 }
