@@ -119,6 +119,12 @@ enum Keys {
     /// `launch.whitelist`
     static let launchWhitelist = "launch.whitelist"
 
+    // MARK: ring —— 切换器主环(运行中的 App)
+
+    /// `ring.blacklist` —— 切换器黑名单:在运行的 App 只要在这里,即使有窗也不进切换器。
+    /// 与 `launch.blacklist`(未启动环)互相独立:一个管"没开的 App 展不展示",一个管"开着的 App 展不展示"。
+    static let ringBlacklist = "ring.blacklist"
+
     // MARK: live —— 实时预览
 
     /// `live.previewTier`

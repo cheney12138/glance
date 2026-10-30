@@ -360,6 +360,10 @@ struct SettingsView: View {
                 SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
+                SettingsRow(title: "黑名单",
+                            desc: "在运行的 App 只要在这里,即使有窗也不进切换器。") {
+                    listCountButton(.ringBlacklist)
+                }
                 SettingsRow(title: "保持面板打开",
                             desc: "关闭后松开按键即确认,面板随之关闭。",
                             hairline: false) {
@@ -566,15 +570,39 @@ private struct ScrollElasticityHook: NSViewRepresentable {
 private struct LaunchListEditor: View {
     enum Kind: String, Identifiable {
         case whitelist, blacklist
+        /// 切换器黑名单(2026-10-28):管的是**运行中**的 App 进不进切换器,
+        /// 与上面两个(未启动环)互相独立 —— 不参与互斥,选择器只排除它自己 ✓
+        case ringBlacklist
         var id: String { rawValue }
-        var title: String { self == .whitelist ? "白名单" : "黑名单" }
-        var desc: String {
-            self == .whitelist ? "这些 App 不在 Dock 常驻也会进未启动环。"
-                               : "这些 App 即使 Dock 常驻也不进未启动环。"
+        var title: String {
+            switch self {
+            case .whitelist: "白名单"
+            case .blacklist, .ringBlacklist: "黑名单"
+            }
         }
-        var defaultsKey: String { "launch.\(rawValue)" }
-        /// 对方名单的 key:选择器的排除集 = 两名单并集
-        var otherKey: String { self == .whitelist ? "launch.blacklist" : "launch.whitelist" }
+        var desc: String {
+            switch self {
+            case .whitelist: "这些 App 不在 Dock 常驻也会进未启动环。"
+            case .blacklist: "这些 App 即使 Dock 常驻也不进未启动环。"
+            case .ringBlacklist: "在运行的 App 只要在这里,即使有窗也不进切换器。"
+            }
+        }
+        var defaultsKey: String {
+            switch self {
+            case .whitelist: "launch.whitelist"
+            case .blacklist: "launch.blacklist"
+            case .ringBlacklist: Keys.ringBlacklist
+            }
+        }
+        /// 对方名单的 key:选择器的排除集 = 两名单并集。
+        /// `ringBlacklist` 没有对方(与未启动环两名单独立)⇒ 给自己 = 排除集就是它自己 ✓
+        var otherKey: String {
+            switch self {
+            case .whitelist: "launch.blacklist"
+            case .blacklist: "launch.whitelist"
+            case .ringBlacklist: Keys.ringBlacklist
+            }
+        }
     }
 
     let kind: Kind
@@ -638,7 +666,8 @@ private struct LaunchListEditor: View {
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // ★ sheet 根   // 内容从左上起,不再垂直居中悬着
         .onAppear { ids = UserDefaults.standard.stringArray(forKey: kind.defaultsKey) ?? [] }
         .sheet(isPresented: $showingPicker) {
-            AppPicker(exclude: Self.combinedIDs(except: kind)) { id in
+            AppPicker(exclude: Self.combinedIDs(except: kind),
+                      includeLaunchLists: kind != .ringBlacklist) { id in
                 ids.append(id)
                 save()
             }
@@ -696,6 +725,9 @@ private struct LaunchListEditor: View {
 /// 已在任一名单里的 App 不出现(互斥);本 App 自己也不出现(把自己加进未启动环没有意义)。
 private struct AppPicker: View {
     let exclude: Set<String>
+    /// 未启动环两名单沿用"互斥"语义:选择器还要**现读** Dock 白/黑名单(2026-10-28 e8ffb7b);
+    /// 切换器黑名单与它们独立 ⇒ 不并,否则"已在未启动黑名单的 App 加不进切换器黑名单" ✗
+    var includeLaunchLists: Bool = true
     let onAdd: (String) -> Void
     @State private var query = ""
     @State private var apps: [DockAppsProvider.InstalledApp] = []
@@ -762,7 +794,8 @@ private struct AppPicker: View {
     ///   (声明在、传进来在、`filtered` 里没读它 ⇒ 已在名单里的 App 照样出现在搜索结果里 ✓)
     ///   ⇒ 过滤里把它并上,并且**现读**两个名单(列表可能在 sheet 打开后被改过)✓
     private var taken: Set<String> {
-        exclude
+        guard includeLaunchLists else { return exclude }
+        return exclude
             .union(DockAppsProvider.whitelist)
             .union(DockAppsProvider.blacklist)
     }

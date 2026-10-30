@@ -47,6 +47,14 @@ enum DockAppsProvider {
         invalidateCandidates()
     }
 
+    /// **切换器黑名单**(2026-10-28):在运行的 App 只要在名单里,也不进切换器。
+    /// 与上面的黑名单互相独立 —— 一个管未启动环,一个管切换器主环(各自的编辑入口在设置里)✓
+    /// 过滤点在 `WindowEnumerator.rawGroups` 的总口(环/托盘/陈旧名单全走那一份)✓
+    nonisolated static var ringBlacklist: [String] { UserDefaults.standard.stringArray(forKey: Keys.ringBlacklist) ?? [] }
+    static func setRingBlacklist(_ ids: [String]) {
+        UserDefaults.standard.set(ids, forKey: Keys.ringBlacklist)
+    }
+
     /// 名单条目(bundle id)在盘上解析出的展示信息。找不到(已卸载)= path 空串,调用方灰显
     struct InstalledApp: Identifiable {
         let id: String

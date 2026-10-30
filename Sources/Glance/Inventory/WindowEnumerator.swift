@@ -265,7 +265,15 @@ enum WindowEnumerator {
             )
         }
 
-        return Array(byPID.values)
+        // **切换器黑名单**(2026-10-28):名单里的 App 即使在运行、有窗,也不进切换器。
+        // 放在枚举**总口**:环/托盘/陈旧名单/⌘` 窗口局全走 `rawGroups` ⇒ 一处过滤,处处生效 ✓
+        // (bundleID 取不到时按"不在名单"算 —— 名单存的是 bundle id,对不上就不冤枉人 ✓)
+        let hidden = Set(DockAppsProvider.ringBlacklist)
+        if hidden.isEmpty { return Array(byPID.values) }
+        return byPID.values.filter { group in
+            guard let bid = group.bundleID else { return true }
+            return !hidden.contains(bid)
+        }
     }
 
     /// **已知的系统提示框宿主**。
