@@ -2252,6 +2252,11 @@ struct ChipRailGroup: View {
     /// 高亮动画的闸门:**只有用户换窗那一拍**为 true(async 隔离拍里置位后立刻复位)。
     /// 入场/换组的 `selF` 直接赋值时闸门是关的 ⇒ 绝不发起动画(入场乱跑的教训 ✓)
     @State private var selAnimGate = false
+    /// hover 选中的驻留计时器:指针**扫过**的芯片不再当场选中
+    /// (2026-10-28 用户:「从3回到1的时候, 2会被波及, 有涟漪感觉」——
+    ///  根因不是 em 数学,是 onHover 路过即 onSelect:3→1 的路径正好穿过 2,
+    ///  2 被选中一瞬再交出去 = 涟漪 ✗)。停下 60ms 才算"指";点击永远即时 ✓
+    @State private var hoverWork: DispatchWorkItem?
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2442,8 +2447,17 @@ struct ChipRailGroup: View {
         //   ⇒ 在最外层再套一个**定尺寸**的框:动画只包住"视觉"(缩放/颜色),
         //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
-        .onHover { inside in if inside { onSelect(logical) } }
-        .onTapGesture { onSelect(logical); onTap(logical) }
+        .onHover { inside in
+            hoverWork?.cancel()
+            guard inside else { return }
+            let work = DispatchWorkItem { onSelect(logical) }
+            hoverWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        }
+        .onTapGesture {
+            hoverWork?.cancel()
+            onSelect(logical); onTap(logical)
+        }
     }
 
     /// 边缘感应带:鼠标进顶/底 12pt ⇒ 轨道滚**一枚**;
