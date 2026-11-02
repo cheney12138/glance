@@ -2284,11 +2284,15 @@ struct ChipRailGroup: View {
         }
         .onChange(of: selected) { old, new in
             selPos = new
+            // ★★ 起点标签**必须同拍就位**(2026-10-28 五轮,用户:「为什么回到1的时候
+            //   一定要经过2呢」):selFrom 若也挪去下一拍,同拍渲染里它还是**上一次移动**
+            //   的起点 ⇒ 3→1 时 p 恰好算出"窗口 2 = 满亮" ⇒ 2 被点亮一帧再纠正 = 涟漪 ✗
+            //   同拍写好后,同拍渲染 = (selF 仍在旧位, selFrom=旧选中) ⇒ p=0,恰为移动前 ✓
+            selFrom = old
             // selF 挪到**下一个 runloop**再改:名单内容若同拍替换(陈旧→枚举到达),
             // 不会被卷进同一条动画(入场乱跑的根);滚动(viewPos)也留在当拍当拍落 ✓
             DispatchQueue.main.async {
                 selAnimGate = true
-                selFrom = old
                 selF = CGFloat(new)
                 DispatchQueue.main.async { selAnimGate = false }
             }
