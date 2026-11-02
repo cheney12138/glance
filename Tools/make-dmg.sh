@@ -16,13 +16,14 @@ SCHEME="Glance"
 CONFIG="Release"
 
 echo "== 1/4 Release 构建"
-# -destination generic/platform=macOS:不加的话 xcodebuild 会挑"第一个匹配的目标"(= 本机架构),
-# 出包只有 arm64 —— 正式包要 universal(Apple silicon + Intel)
+# -destination generic/platform=macOS:不加的话 xcodebuild 会挑"第一个匹配的目标"(= 本机架构)。
+# ★ ARCHS=arm64(2026-11-02 用户裁定:「不管 Intel」)⇒ 不再出 universal:
+#   二进制 7.9MB → ~4MB、DMG 5.0MB → ~3MB;代价 = Intel 机器不能跑(用户明说不要了 ✓)
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
-  -destination 'generic/platform=macOS' build | tail -3
+  -destination 'generic/platform=macOS' ARCHS=arm64 build | tail -3
 
 SETTINGS=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
-  -destination 'generic/platform=macOS' -showBuildSettings 2>/dev/null)
+  -destination 'generic/platform=macOS' ARCHS=arm64 -showBuildSettings 2>/dev/null)
 BUILT_DIR=$(echo "$SETTINGS" | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{print $2; exit}')
 PRODUCT=$(echo "$SETTINGS" | awk -F' = ' '/ FULL_PRODUCT_NAME = /{print $2; exit}')
 APP="$BUILT_DIR/$PRODUCT"

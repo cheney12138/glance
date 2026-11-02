@@ -1,5 +1,6 @@
 #!/bin/bash
-# 发版:构建 universal DMG → EdDSA 签名 → 生成 appcast.xml → 打印上传步骤。
+# 发版:构建 arm64 DMG(2026-11-02 用户裁定「不管 Intel」,不再 universal)
+#   → EdDSA 签名 → 生成 appcast.xml → 打印上传步骤。
 #
 #   bash Tools/release.sh 0.2.0
 #
