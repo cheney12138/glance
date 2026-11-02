@@ -2246,6 +2246,34 @@ struct ChipRailGroup: View {
     /// 而不是"两枚芯片同时当拍换色"（2026-10-28 用户:「切换窗口的时候…动效太生硬了」）✓
     /// 只喂**绘制**属性(缩放/颜色/投影)，不碰布局 ⇒ 不会再出"有的动有的不动" ✓
     @State private var selF: CGFloat = 0
+    /// 在途滑动的令牌:入场/换组时 +1 作废(高亮当拍就位,不"从上一组滑过来")✓
+    @State private var selToken = 0
+
+    /// 高亮滑动:**按帧推标量**(每 8ms 一步,easeOut,0.22s,无过冲)。
+    /// 为什么不用 SwiftUI 事务 —— 2026-10-28 三轮病例:局部 `.transaction` 一挂,
+    /// 入场时名单替换/选中索引调整引发的**内容变化**全被卷进弹簧 ⇒ 芯片乱跑 ✗
+    /// (同一口井栽了三次:b5e18e7 布局被带走 / 91a31c8 有的动有的不动 / 45818f9 入场乱跑)
+    /// `settleIn`(卡片落位)同款套路,早已实证稳定 ✓
+    private func slideSel(to target: CGFloat) {
+        selToken += 1
+        let token = selToken
+        let start = selF
+        guard start != target else { return }
+        let t0 = CACurrentMediaTime()
+        let dur = 0.22
+        func step() {
+            guard token == selToken else { return }
+            let t = min(1, (CACurrentMediaTime() - t0) / dur)
+            let e = 1 - pow(1 - t, 3)                     // easeOut
+            selF = start + (target - start) * e
+            if t < 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: step)
+            } else {
+                selF = target
+            }
+        }
+        step()
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2273,9 +2301,7 @@ struct ChipRailGroup: View {
         }
         .onChange(of: selected) { _, new in
             selPos = new
-            // 高亮"走过去":只改一个标量,动画由**芯片内部那段局部事务**提供
-            //(外层 `.transaction { $0.animation = nil }` 会关掉整棵树的动画,见 `rail` 的注释)✓
-            selF = CGFloat(new)
+            slideSel(to: CGFloat(new))   // 高亮"走过去"(按帧推,见 `slideSel` 注释)✓
         }
         // 换组 = 新的一局 ⇒ 轨道重新浮上一次;组内换窗不播(onChange 只认 bundleID)✓
         .onChange(of: entryTick) { _, _ in
@@ -2285,8 +2311,9 @@ struct ChipRailGroup: View {
             }
         }
         .onChange(of: bundleID) { _, _ in
+            selToken += 1                       // 在途的高亮滑动作废:不"从上一组滑过来" ✗
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { selF = CGFloat(selected) }   // 换组:高亮当拍就位,不"从上一组滑过来" ✗
+            withTransaction(t) { selF = CGFloat(selected) }   // 换组:高亮当拍就位 ✗
             scrollMotion = nil            // 换组:视口当拍落到新位置,不许"从上一组的坐标滚过去" ✗
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 scrollMotion = .easeOut(duration: 0.22)
@@ -2388,15 +2415,12 @@ struct ChipRailGroup: View {
         .shadow(color: .black.opacity(0.10 + 0.05 * em), radius: 3 + 2 * em, y: 1 + 1 * em)
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
-        // ★ 缩放也要在**事务作用域之内**:2026-10-28 二轮(用户:「想像滑块一样丝滑,
-        //   现在只有一个放大, 有点生硬」)—— 上一版把 `.scaleEffect` 挂在了下面那条
-        //   `.transaction` 的**下游**(作用域之外)⇒ 缩放当拍硬切、只有颜色交叉淡在动 ✗
+        // ★★ 2026-10-28 三轮(用户:「入场开始乱跑了… 我想要的只是切换动效」):
+        //   **局部事务这条路彻底废弃** —— 挂上后入场时名单替换/索引调整的内容变化
+        //   全被卷进弹簧,芯片乱跑 ✗(这条路上 b5e18e7/91a31c8/45818f9 已栽三次)
+        //   ⇒ 高亮改走**按帧推标量**(`slideSel`,与卡片落位 settleIn 同一套),
+        //     芯片不再持有任何 `.transaction`;缩放/交叉淡全部由 `selF` 连续取值 ✓
         .scaleEffect(0.964 + 0.036 * em)
-        // ★★ 2026-10-28:托盘那一层有全局 `.transaction { animation = nil }`(为了几何当拍落),
-        //   所以这里要**局部**把动画还回来 —— 只包"纯绘制"这一截(缩放/投影/颜色),
-        //   外面那个定尺寸框负责位置 ⇒ 位置永远当拍、颜色/缩放慢慢过渡 ✓
-        //   曲线 = 临界阻尼(damping 1.0):无过冲、走就走到,滑块手感 ✓
-        .transaction { $0.animation = MotionPolicy.animation(.spring(response: 0.30, dampingFraction: 1.0)) }
         .contentShape(Rectangle())
         // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
         // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
