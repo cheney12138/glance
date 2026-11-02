@@ -2388,10 +2388,15 @@ struct ChipRailGroup: View {
         .shadow(color: .black.opacity(0.10 + 0.05 * em), radius: 3 + 2 * em, y: 1 + 1 * em)
         .overlay(Capsule(style: .continuous)
             .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+        // ★ 缩放也要在**事务作用域之内**:2026-10-28 二轮(用户:「想像滑块一样丝滑,
+        //   现在只有一个放大, 有点生硬」)—— 上一版把 `.scaleEffect` 挂在了下面那条
+        //   `.transaction` 的**下游**(作用域之外)⇒ 缩放当拍硬切、只有颜色交叉淡在动 ✗
+        .scaleEffect(0.964 + 0.036 * em)
         // ★★ 2026-10-28:托盘那一层有全局 `.transaction { animation = nil }`(为了几何当拍落),
         //   所以这里要**局部**把动画还回来 —— 只包"纯绘制"这一截(缩放/投影/颜色),
         //   外面那个定尺寸框负责位置 ⇒ 位置永远当拍、颜色/缩放慢慢过渡 ✓
-        .transaction { $0.animation = MotionPolicy.animation(.spring(response: 0.26, dampingFraction: 0.78)) }
+        //   曲线 = 临界阻尼(damping 1.0):无过冲、走就走到,滑块手感 ✓
+        .transaction { $0.animation = MotionPolicy.animation(.spring(response: 0.30, dampingFraction: 1.0)) }
         .contentShape(Rectangle())
         // hover 选中**保留**(用户实测「鼠标不选中有点怪」✗);
         // 唯独顶/底感应带触发滚动的那一下不许换选中 —— 那里没有 onSelect,天然隔离 ✓
@@ -2401,7 +2406,7 @@ struct ChipRailGroup: View {
         //   这枚芯片的**位置**也卷进去 ⇒ 换窗那一拍"选中态变了的几枚"慢半拍,
         //   一列芯片被读成"有的动有的不动"(上一轮的病灶)。
         //   ⇒ 尺寸差当作**静态状态**表达,动效只保留"颜色/圆点"这类纯绘制 ✓
-        .scaleEffect(0.964 + 0.036 * em)
+        //   (10-28 二轮:scaleEffect 已挪到上面的事务作用域之内,见那条注释 ✓)
         // ★★ 2026-10-27 关键裁定(用户:「你现在 14 动, 23 不动, 是何意味」):
         //   每枚芯片的 `.animation(_:value: isOn)` 会把**这枚芯片自己的位置**卷进它的事务
         //   —— 换窗那一拍,恰好是"选中态变了"的那两枚进入动画事务 ⇒ 它们滞后、其余当拍跳
