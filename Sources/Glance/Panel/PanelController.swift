@@ -70,6 +70,15 @@ final class PanelController: ObservableObject {
                 //   直接从 `appIndex` 过账 ⇒ 少了一次浮出 ✗ ⇒ 统一放到这里(所有换组路径的唯一出口)
                 startEntryFloat()
                 updatePreview()
+                // ★★ 2026-11-09(用户:「从大象切到 terminal, 整个面板范围内的环 + 窗口内容
+                //   都是大象的对应帧」):托盘 2026-10-26 就有了换组整窗重绘兑底,
+                //   **主面板(环窗)没有同款** ⇒ 换组那一拍环窗 backing 里还是上一组的像素,
+                //   合成器多送一拍 = 用户看到的残帧。对齐托盘同款:换组拍强制整窗重绘。
+                //   (SwiftUI 的 body 重算是下一拍的事 —— 这一行就是要抢在它前面把重绘拍下去 ✓)
+                if let panel {
+                    panel.invalidateShadow()
+                    panel.contentView?.needsDisplay = true
+                }
             }
         }
     }
@@ -166,6 +175,9 @@ final class PanelController: ObservableObject {
     /// 只挂托底会读成"两个动作各走各的";整行一起升又太重("全部图标一起弹出来")。
     /// 这一档正是"正常 Tab 切换"的范围 —— 切换时动的永远只有托底与新选中的那个图标
     @Published private(set) var contentEntryRise: CGFloat = 0
+    /// 玻璃世代(残帧对策,2026-11-09):每局递增,SwiftUI 侧 `.id(glassEpoch)` ⇒
+    /// 每局都是全新的 NSGlassEffectView(新视图 = 重新采样身后的画面,不吐旧快照 ✓)
+    @Published private(set) var glassEpoch = 0
     /// 确认涟漪的令牌(demo .ripple):每次确认 +1,`PanelView` 靠它的变化重挂涟漪视图重播一遍
 
     var panel: NSPanel?
@@ -1103,6 +1115,12 @@ final class PanelController: ObservableObject {
             : ""))
 
         // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
+        // ★★ 残帧对策(2026-11-09 用户实拍:唤起那一拍,**面板矩形内是上一个 App 身后的像素**
+        //   —— 玻璃材质的背景采样跨会话没失效:两扇窗进程级复用,NSGlassEffectView 的
+        //   backdrop 快照还停在上一局。对策:换一块新玻璃(新视图 = 新采样),
+        //   玻璃在 SwiftUI 侧挂 .id(glassEpoch),这里递增 ⇒ 本局装配全新的玻璃视图 ✓
+        //   ⚠️ 必须在 alpha=0 那一拍之前递增(新玻璃的第一帧被 alpha 0 门挡住,不会白闪)
+        glassEpoch &+= 1
         // ★★ 白光对策(不依赖"找出凶手",见 docs/白光排查记录.md):
         // 窗口先以 **alpha 0** 上屏 ⇒ 合成器会把这一帧**真的合成一次**(含材质),
         // 下一拍再拉到 1 ⇒ 用户看到的**第一帧**就是画好的内容,而不是"玻璃已上屏、内容还没到"。

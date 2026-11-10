@@ -58,6 +58,10 @@ struct PanelView: View {
             GlassBackground(cornerRadius: controller.hintText == nil
                             ? PanelMetrics.rPanel
                             : PanelMetrics.hintContentSize.height / 2)
+                // ★ 残帧对策(2026-11-09):玻璃每局重建(新视图 = 重新采样身后的画面,
+                //   不吐上一局的 backdrop 快照);世代号在 showPanel 里递增,
+                //   alpha=0 门挡住新玻璃的第一帧 ⇒ 不白闪
+                .id(controller.glassEpoch)
             // ★ **玻璃纱**(2026-10-08):浅色一道很淡的中性灰(深色透明),铺在**玻璃之上、图标之下** ✓
             //   目的:把基色从 0.89 压到 ≈0.84,贴住原生的两点反解(见 PanelColors.glassVeil 的推导 ✓)
             //   ⚠️ 必须挂在玻璃**之后**、内容**之前** —— 否则要么压到图标,要么盖在玻璃底下看不见 ✓
