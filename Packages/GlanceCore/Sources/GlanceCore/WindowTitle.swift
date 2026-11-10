@@ -53,12 +53,37 @@ public enum WindowTitle {
             .filter { !$0.isEmpty }
         guard parts.count >= 2 else { return raw }
 
-        // 多段都不像文件名时取**最后一段**:VSCode 系把工程放在最后,而 Xcode/JetBrains 的文件段
-        // 带扩展名、已被自然排掉,剩下的就是工程
-        let projectLike = parts.filter { !looksLikeFileName($0) }
-        guard let picked = projectLike.last else { return raw }
+        // ★ JetBrains 家族:工程名**必然在前**(2026-11-09 用户实报「像 idea 这种我也区分不出来」):
+        //   新 UI 的文件段是 `NativeInfoServiceImpl [train-order-api]` —— **不带扩展名**,looksLikeFileName
+        //   排不掉它 ⇒ 「取最后一段不像文件的」会选中文件 ✗(用户看到的就是文件,工程名被截没)
+        //   工程在前是它的固定排版,直接取首段。Xcode 同理(工程在前),一并走这条。
+        //   VSCode 系(工程在后)保持「取最后一段不像文件的」现状 —— 那边的文件段天然带扩展名 ✓
+        let id = bundleID?.lowercased() ?? ""
+        if id.hasPrefix("com.jetbrains.") || id.hasPrefix("com.apple.dt.xcode") {
+            return parts[0]
+        }
+
+        // 多段都不像文件名时取**最后一段**:VSCode 系把工程放在最后,文件段带扩展名被自然排掉。
+        // ★★ 2026-11-09(用户实报「CatPaw 显示文件名」):VSCode 2.0+ 的标题带 git 状态尾巴
+        //   `… — train_mrn_app_main — Modified` ⇒ 旧规则选中 `Modified` ✗(比文件名更没用)。
+        //   修:从后往前找**第一个像工程的段** —— 排掉 git 状态词(纯单词的已知状态集合);
+        //   括号段 `(Working Tree)` 同理是状态标记,不是工程。
+        //   实测:`InsuranceUtil.ts (Working Tree) (InsuranceUtil.ts) — train_mrn_app_main — Modified`
+        //   ⇒ projectLike 候选从后往前 = Modified(状态词,跳过)→ train_mrn_app_main ✓
+        let projectLike = parts.reversed().first { seg in
+            !looksLikeFileName(seg) && !Self.gitStatusWords.contains(seg)
+        }
+        guard let picked = projectLike else { return raw }
         return picked
     }
+
+    /// VSCode 2.0+ 标题尾部的 git 状态词(2026-11-09):它们是状态标记不是工程名,
+    /// 排掉后「从后往前第一个像工程的段」才能命中真正的工程。
+    /// 括号形态 `(Working Tree)` 由同一集合的带括号变体覆盖。
+    private static let gitStatusWords: Set<String> = [
+        "Modified", "Untracked", "Deleted", "Added", "Renamed", "Conflict",
+        "(Working Tree)", "(Working tree)",
+    ]
 
     /// **中段截断**(借鉴 AltTab 的 `titleTruncation`:end/middle/start,默认 end)。
     ///
