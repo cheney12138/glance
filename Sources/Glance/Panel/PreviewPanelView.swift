@@ -85,6 +85,10 @@ struct PreviewPanelView: View {
             // 芯片由面板那一扇窗承担,见 PanelView / PanelController.contentSize。
             if controller.entrySelected { launchGrid } else { thumbGrid }
         }
+        // ★ 残帧对策(2026-11-09,与 PanelView 的 GlassBackground 同款):每局重建内容树 ——
+        //   复用窗的 backing store 在重新上屏的第一拍还留着上一局的像素,合成器先吐旧帧;
+        //   树重建 ⇒ 旧 backing 无效。世代号在 showPanel 里递增,alpha=0 门挡住首帧
+        .id(controller.glassEpoch)
         // ★〔2026-10-25 撤〕换组落位(面板 .95→1):用户终审「把窗口上的动效全部去掉」✗
         //   无动效版本先在实机上认可,再按需往回加。
         .padding(.top, PanelMetrics.trayPadTop)
@@ -304,7 +308,8 @@ struct PreviewPanelView: View {
                           onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
                           entryTick: controller.entryTick,
                           entryFloat: controller.entryFloat,
-                          visible: controller.isVisible)
+                          visible: controller.isVisible,
+                          suppressExitAnimation: controller.isContentSwapInFlight || controller.isRingSwapInFlight)
         } else {
             cardRowGrid
         }
@@ -2224,6 +2229,9 @@ struct ChipRailGroup: View {
     /// 面板是否可见 —— **常驻视图不会 `onAppear`**,而隐藏期间的 `entryTick` 变化可能根本没被求值
     /// ⇒ 入场浮出也要认"从隐藏变可见"这一拍 ✓
     var visible: Bool = false
+    /// 内容交换窗口期(换组/换环后的第一小段):此间芯片的增删**不播**过渡动画 ——
+    /// 稳定 id 下换组时旧 wid 全部消失,不抑制的话整列芯片都会播退场 ✗
+    var suppressExitAnimation: Bool = false
 
     /// 一屏放几枚(按卡高算,见 `slotCount`)
     private var slotCount: Int {
@@ -2256,7 +2264,13 @@ struct ChipRailGroup: View {
     /// (2026-10-28 用户:「从3回到1的时候, 2会被波及, 有涟漪感觉」——
     ///  根因不是 em 数学,是 onHover 路过即 onSelect:3→1 的路径正好穿过 2,
     ///  2 被选中一瞬再交出去 = 涟漪 ✗)。停下 60ms 才算"指";点击永远即时 ✓
-    @State private var hoverWork: DispatchWorkItem?
+    /// 计时器放在**引用盒子**里,不放在 `@State` 直存:
+    /// 病例(2026-11-03,用户「app hover 过去有掉帧,稳定复现」):`@State` 直存
+    /// DispatchWorkItem ⇒ 指针每进/出一枚芯片写两次状态 ⇒ **整个轨道组(含卡片大图)
+    /// 跟着重算两遍**;扫一列 = 十几次全量重算 = 掉帧 ✗。
+    /// 计时器是纯调度细节,不该有渲染语义 ⇒ 引用盒子的属性变更不触发失效 ✓
+    private final class HoverWorkBox { var work: DispatchWorkItem? }
+    @State private var hoverBox = HoverWorkBox()
 
     var body: some View {
         HStack(alignment: .center, spacing: PanelMetrics.thumbGap) {
@@ -2336,9 +2350,26 @@ struct ChipRailGroup: View {
 
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
-                ForEach(0..<(windows.count * copies), id: \.self) { idx in
-                    chip(logical: idx % windows.count)
+                // ★ ForEach 改用**窗口稳定 id**(2026-11-09):索引 id 下 ⌘W 删中间一枚 =
+                //   SwiftUI 认为"最后一行被删" ⇒ 视图实例错位复用,退场动画没法播正确的那一枚。
+                //   wid 稳定 id 下,被删那枚的视图身份消失 ⇒ transition 正确播它的退场 ✓
+                //   (ChipRailGroup 的滚动状态 selPos/viewPos/selF 都按逻辑序自算,与 id 无关 ✓)
+                ForEach(windows, id: \.wid) { w in
+                    chip(of: w, index: windows.firstIndex(where: { $0.wid == w.wid }) ?? 0)
+                        // ★ 退场动画(⌘W):缩一点 + 淡出。**换组/换环那一拍用 identity 不播** ——
+                        //   稳定 id 下换组时旧 wid 全部消失,若不抑制整列芯片都会播退场 ✗
+                        //   (内容交换窗口期 = 换组/换环后的第一小段,与 FLIP 守卫同源 ✓)
+                        .transition(suppressExitAnimation
+                                    ? .identity
+                                    : .opacity.combined(with: .scale(scale: 0.90)))
                 }
+            }
+            // ★ removal 动画的发条(transition 只是定义,真正动起来需要这一拍处在动画事务里):
+            //   窗口 wid 集合变化(⌘W 删窗)时启动 0.18s 动画 ⇒ 被删芯片的退场真的播出来;
+            //   换组/换环那一拍由下面的 transaction 守卫把动画置 nil ⇒ 不播 ✓
+            .animation(.easeOut(duration: 0.18), value: windows.map(\.wid))
+            .transaction { t in
+                if suppressExitAnimation { t.animation = nil }
             }
             .frame(width: lane, alignment: .topLeading)
             .offset(y: offsetY)
@@ -2365,8 +2396,7 @@ struct ChipRailGroup: View {
         .onAppear { clampViewport() }
     }
 
-    private func chip(logical: Int) -> some View {
-        let w = windows[logical]
+    private func chip(of w: WindowRecord, index logical: Int) -> some View {
         let isOn = logical == selected
         // 强调度:**只淡起点/终点两枚**(`selF` 从起点滑到终点的线性进度)。
         // 三角形 em(1-|i-selF|)会让中间芯片"路过点亮"= 涟漪 ✗(2026-10-28 用户实报)
@@ -2452,14 +2482,14 @@ struct ChipRailGroup: View {
         //     位置由外面这个框负责 ⇒ 整列一起当拍左移 ✓
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipRailStep)
         .onHover { inside in
-            hoverWork?.cancel()
+            hoverBox.work?.cancel()
             guard inside else { return }
             let work = DispatchWorkItem { onSelect(logical) }
-            hoverWork = work
+            hoverBox.work = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
         }
         .onTapGesture {
-            hoverWork?.cancel()
+            hoverBox.work?.cancel()
             onSelect(logical); onTap(logical)
         }
     }
