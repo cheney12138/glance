@@ -449,6 +449,10 @@ public enum TapRound {
         public func judge(now: Double, dragEvidence: Bool = false, postDragGrace: Bool = false) -> Outcome {
             if fired { return .rejected("") }
             let snap = snapshot(now: now)
+            // ★ 空轮静默(2026-11-03):这台触控板几乎每帧都有幽灵触点 ⇒ 整轮 0 指 ∧ 最重 0.0
+            //   的空帧也走完整判卷并打出"触点过轻"——trace.log 里这一条刷了 55 万行 ✗
+            //   (每行都是一次磁盘写)。没有任何真实触点的轮次,连理由都不该有 ⇒ 静默拒绝 ✓
+            if snap.fingerCount == 0, snap.maxSize == 0 { return .rejected("") }
             // 拖后宽限是否适用于本轮:刚拖完 ∧ 系统本轮真的又来抢(有证据)⇒ 换宽门
             let wide = dragEvidence && postDragGrace
             // ★★ 2026-10-08 病例(用户「三指误触稳定复现」,日志 55.0/55.4/58.4s):
@@ -462,6 +466,10 @@ public enum TapRound {
             let heldCeiling = wide ? policy.maxDuration + 0.03 : policy.maxDuration
             // ② 重量门:一轮里最重的触点都太轻 ⇒ 不是有意点按(见 minContactSize 的病例 ✓)
             guard snap.maxSize >= policy.minContactSize else {
+                // ★ 1 指连发静默(2026-11-05,对账实测):现存洪水 98% 是 1 指(size 0.3–0.6,
+                //   <10s 内成串)—— 搭着/掠着本来就不可能成功(只认 3/4 指),理由对排查零信息量。
+                //   0 指空轮的静默(上面那条)只是小头;这行才是主药。≥2 指的过轻仍留理由 ✓
+                guard snap.fingerCount >= 2 else { return .rejected("") }
                 return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
                                         snap.maxSize, policy.minContactSize, snap.fingerCount))
             }
