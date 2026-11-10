@@ -51,6 +51,7 @@ struct GlanceApp: App {
 
     @StateObject private var permissions = PermissionMonitor()
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     private let hotkeys = HotkeyTapCenter()
     private let panelController = PanelController()
 
@@ -93,7 +94,8 @@ struct GlanceApp: App {
                     NativeHotkeyGuards.install()
                     NativeHotkeys.restoreAll()
                     permissions.refresh()
-                    if !permissions.allGranted { showPermissions() }
+                    // ★ 弹窗决策帄到 onChange(见权限 Window 的注释):这里只记读数供对账
+                    glog("[权限] 启动读数 AX=\(permissions.accessibilityGranted) 录屏=\(permissions.screenCaptureGranted)")
                     MruEvidence.shared.start()
                     // ★ 按屏的"最近用过"账簿(2026-09-22 用户实报后加:落点被全局 MRU 跨屏污染 ✗)
                     ScreenRecency.shared.start()
@@ -142,7 +144,11 @@ struct GlanceApp: App {
                         hotkeys.beginPinnedSession()
                         panelController?.requestLaunchRing()   // ⚠️ 只记意图:此刻 launchables 还是上一局的
                     }
-                    ThreeFingerTap.shared.start()
+                    // ★ 门禁(2026-11-09 用户实报「没给权限三指也能唤起」):三指/四指走
+                    //   MultitouchSupport,**不需要辅助功能权限** —— 启动就缺权时不能装它。
+                    //   Trigger 禁引 PermissionMonitor ⇒ 由 App 层在这里决定装不装。
+                    //   权限齐了之后的重装走下面 onChange 的 granted 分支 ✓
+                    if permissions.allGranted { ThreeFingerTap.shared.start() }
                     hotkeys.onScroll = { [weak panelController] e in panelController?.handleScrollEvent(e) }
                     // T91 表一 ⑤:别处的键盘输入 ⇒ 钉住的那一局自己收("牛皮糖")
                     hotkeys.onElsewhereInput = { [weak panelController] in
@@ -153,7 +159,14 @@ struct GlanceApp: App {
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
                 .onChange(of: permissions.allGranted) { _, granted in
-                    if granted { hotkeys.start(); scheduleWarmup() }
+                    if granted {
+                        hotkeys.start(); scheduleWarmup()
+                        // 门禁关过 = MT 通道被拆过(started 已复位)⇒ 重新装配(start 幂等 ✓)
+                        ThreeFingerTap.shared.start()
+                    }
+                    // ★ 权限被删(2026-11-05 死机病例):拆 tap + 拒重开,否则吞键 tap 的
+                    //   「系统停 → 我们重开」循环会冻死全系统事件(能点状态栏但哪都点不了)
+                    else { hotkeys.closePermissionGate() }
                 }
         }
         .menuBarExtraStyle(.menu)
@@ -162,6 +175,26 @@ struct GlanceApp: App {
             PermissionGuideView(monitor: permissions)
         }
         .windowResizability(.contentSize)
+        // 权限窗与设置窗同一张纸(纸色当窗口底,红绿灯浮在左上角) —— 两窗一个语言 ✓
+        .windowStyle(.hiddenTitleBar)
+        // ★ 缺权自动弹引导。⚠️ 三条路径,各自的坑都有病例:
+        //   · initial:true 读未刷新的初值 false ⇒ 权限齐着也弹「全部就绪」的窗
+        //     (2026-11-09 用户实报「每次启动都弹,烦死了」)⇒ 已废,initial 去掉 ✓
+        //   · 冷启动真缺权:false→false 无变化,onChange 不触发 ⇒ 由 launchGuideNeeded
+        //     (首次 refresh 缺权时 false→true)驱动,见下 ✓
+        //   · 运行中删权:allGranted true→false ⇒ 本 onChange 的 else 分支 ✓
+        .onChange(of: permissions.allGranted) { _, granted in
+            if granted {
+                // 权限齐了:引导窗没有存在意义,收掉(上一版只弹不收 ⇒ 权限齐了窗还挂着)
+                if self.permissionWindowShown { dismissWindow(id: "permissions"); self.permissionWindowShown = false }
+            } else if permissions.hasCheckedSinceLaunch {
+                showPermissions()   // 运行中删权(已真正查过权限,不是初值)
+            }
+        }
+        // 冷启动缺权:首次 refresh 后 launchGuideNeeded 翻 true ⇒ 这里弹
+        .onChange(of: permissions.launchGuideNeeded) { _, needed in
+            if needed { showPermissions() }
+        }
 
         Window("Glance 设置", id: "settings") {
             SettingsView(store: SettingsStore.shared, permissions: permissions)
@@ -189,8 +222,11 @@ struct GlanceApp: App {
 
     private func showPermissions() {
         showWindow(id: "permissions")
+        permissionWindowShown = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Snapshotter.shared.precaptureOwnWindows() }
     }
+    /// 权限窗当前是否由我们弹出(收窗判断用;用户手动关了窗也无妨 —— dismissWindow 对不存在的窗是安全的)
+    @State private var permissionWindowShown = false
     private func showSettings() {
         showWindow(id: "settings")
         // 设置窗是**打开时才建**的,冷启动预热拍不到它 —— 它入环后的第一眼不该是「截图中…」

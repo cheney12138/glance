@@ -197,7 +197,19 @@ final class HotkeyTapCenter {
     // MARK: - 生命周期
 
     func start() {
+        // 权限恢复后重装:门禁关过 = tap refs 还在但全部被禁 ⇒ 先拆干净再走标准装配
+        // (不复用旧 tap:授权状态变化后旧 tap 的合法性不可信,重建最稳)
+        if flagsTap != nil, !permissionGateOpen {
+            teardownTaps()
+        }
         guard flagsTap == nil else { return }
+        permissionGateOpen = true   // 门禁重开(权限恢复后重装触发层时走这里)
+        // ★ 重装 = 新生命周期:状态机可能还卡在上次门禁关闭前的 navigating
+        //   (那时 flagsTap 已死,没有事件能把它拉回 idle)⇒ 先复位再对账 navTap,
+        //   否则 updateNavTap 会按旧状态把吞键 tap 无条件拉起来 ✗
+        pinnedSession = false
+        state = .idle
+        selfDisabledNavTap = false   // 旧 tap 的回显不再来,旗标复位
         // 启动自愈:上一次运行如果被 SIGKILL(谁也拦不住的那种),原生 ⌘Tab 会一直死着 —— 先全恢复。
         // 标记文件还在 = 上次确实是被强杀带走的(见 `NativeHotkeys` 的"脏退出标记"):明说一句,
         // 否则"⌘Tab 死了"这件事在日志里完全不可见,只能靠猜。
@@ -212,6 +224,7 @@ final class HotkeyTapCenter {
         // leftMouseUp 也在:拖后宽限要"鼠标刚抬起"的时刻(见 ThreeFingerTap 拖后宽限段 ✓)
         mouseTap = makeTap(at: .cgSessionEventTap, options: .listenOnly, types: [.leftMouseDown, .leftMouseUp])
         navTap = makeTap(at: .cghidEventTap, options: .defaultTap, types: [.keyDown, .scrollWheel])
+        navTapFreshlyCreated = true
         guard flagsTap != nil else {
             print("[Glance] 触发层创建失败——辅助功能权限未就绪,触发层不工作")
             return
@@ -219,6 +232,13 @@ final class HotkeyTapCenter {
         registerTrigger(TriggerConfig.load())
         NativeHotkeys.apply(trigger: TriggerConfig.load(), takeover: TriggerConfig.takeoverEnabled)
         observeTriggerChanges()
+        // ★ 2026-11-09 病例(用户实报「赋权之后 ⌘Tab 能唤起但 Tab 不能移动」):
+        //   门禁重装后 navTap 是 **disabled 创建的**(makeTap 里 enable: options == .listenOnly,
+        //   navTap 是 defaultTap ⇒ false),而开它的唯一入口是 setState 变化 ——
+        //   重装时状态可能已经在 navigating(或 ⌘` 接管要求常开)⇒ 没人调 updateNavTap
+        //   ⇒ navTap 永远不亮,Tab 键没人吞。重装完必须立刻对账一次。
+        //   ⚠️ 此时 permissionGateOpen 已在 start() 开头置回 true ✓
+        updateNavTap()
         print("[Glance] 触发层上线(Carbon 热键 + 3 tap;只有会话期的 navTap 有吞键权)")
     }
 
@@ -240,7 +260,53 @@ final class HotkeyTapCenter {
         }
     }
 
+    /// 拆掉全部 tap 并清空 refs(权限门禁关闭后重装前用:旧 tap 在授权变化后不可信)
+    private func teardownTaps() {
+        // ★ 2026-11-09 病例:授权被删后 tapEnable(含 disable)可能同步挂死主线程
+        //   ⇒ 一律不调,直接 invalidate(本地,含停用语义)+ 摘 runLoop source ✓
+        if let tap = flagsTap { CFMachPortInvalidate(tap) }
+        if let tap = mouseTap { CFMachPortInvalidate(tap) }
+        if let tap = navTap { CFMachPortInvalidate(tap) }
+        for source in tapSources {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        tapSources = []
+        flagsTap = nil
+        mouseTap = nil
+        navTap = nil
+    }
+
+    /// 权限门禁(2026-11-05 病例):辅助功能授权被删后,吞键 tap 的重开循环会冻死全系统事件。
+    /// PermissionMonitor 权限从齐变缺时调用:拆掉全部 tap + 拒绝一切重开。
+    /// 修复后 GlanceApp onChange 会走 start() 重装(权限恢复时)。
+    private(set) var permissionGateOpen = true
+
+    /// 权限门禁:关上 = 拆 tap + 任何重开调用都被拒
+    func closePermissionGate() {
+        permissionGateOpen = false
+        // ★ 不 tapEnable(false) —— 2026-11-09 病例:授权被删后 tapEnable 可能同步 XPC
+        //   挂死主线程(enable:true 铁证;false 是同一把锁的另一面,不赌)。直接 invalidate:
+        //   本地操作,不走对账,且 invalidate 本身就含停用语义 ✓
+        for tap in [flagsTap, mouseTap, navTap].compactMap({ $0 }) {
+            CFMachPortInvalidate(tap)
+        }
+        teardownTaps()
+        // 复位会话状态(reviewer M1):门禁关后 flagsTap 死了,没有任何事件能把
+        // 状态机拉回 idle ⇒ 卡死在 navigating 到下一次 start()。先置门禁再 setState
+        // (C2 修后 setState→updateNavTap 已被守卫挡住,顺序只是防御性保险)
+        pinnedSession = false
+        setState(.idle)
+        glog("[T13] 权限门禁关闭:全部 tap 已拆(授权被删,继续重开会冻死全系统事件)")
+        // 另一半(2026-11-09 用户实报「没给权限三指还能唤起」):三指/四指走 MultitouchSupport
+        // 私有框架,**不需要辅助功能权限** —— 门禁只拆 CGEvent tap 拆不到它。同层直呼,全拆。
+        ThreeFingerTap.shared.stop()
+    }
+
     func resume() {
+        guard permissionGateOpen else {
+            trace("[T13] resume 被门禁拒绝(权限未齐)")
+            return
+        }
         for tap in [flagsTap, mouseTap].compactMap({ $0 }) {
             CGEvent.tapEnable(tap: tap, enable: true)
         }
@@ -376,25 +442,68 @@ final class HotkeyTapCenter {
         ) else { return nil }
         let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        // 存下 source(reviewer H2:teardown 只 invalidate port 不摘 source ⇒ 每次拆装泄一个)
+        tapSources.append(source!)
         // navTap 是唯一有吞键权的那个:**创建后立刻禁用**,只在导航态打开
         CGEvent.tapEnable(tap: tap, enable: options == .listenOnly)
+        // 存下 source(2026-11-05 reviewer H2:teardown 只 invalidate port 不摘 source
+        // ⇒ 丢权→复权每个循环泄 3 个 source,永远挂在主 runloop 上)
+        tapSources.append(source!)
         return tap
     }
+
+    /// 与 taps 一一对应的 runLoop source(拆 tap 时要一并摘掉,见 teardownTaps)
+    private var tapSources: [CFRunLoopSource] = []
 
     /// 唯一有吞键权的 tap 的开/关。参考实现 `updateEscapeAbsorptionTap` 同一手法:
     /// 先对账"系统说它开着没有",再决定要不要动 —— 盲目 enable 会让日志失去可信度。
     private func updateNavTap() {
+        // ★ 权限门禁守卫(reviewer C2,2026-11-05 死机病例的另一半):Carbon 热键**不需要**
+        //   辅助功能权限 ⇒ 门禁关着时按 ⌥Tab → setState(.navigating) → 这里会把吞键 tap
+        //   重新拉起来 —— 无权 tap 吞导航键 = 用户按键凭空消失。门禁关 = 这里只许说不。
+        guard permissionGateOpen else { return }
         guard let navTap else { return }
         // ⚠️ 开了"接管 ⌘`"之后,这个 tap 要**常开** —— 否则面板没开的时候收不到那颗键 ✗。
         //   代价诚实说:从此每个 keyDown 都要过一遍 `handleNavKey`,所以那里面**先判状态与键码**、
         //   不匹配立刻 return false(放行)✓;真正耗时的聚焦动作挪到 async(见上面那条分支)✓
+        // ★★ 2026-11-09 第二次死机病例:**CGEvent.tapEnable 本身在授权被删后会挂死主线程**。
+        //   证据:日志停在『导航吞键 tap:开』(tapEnable 调用没返回),此后主线程看门狗/全系统
+        //   事件派发全死。铁律:**运行期不许对系统停掉的 tap 重开** —— enable 只允许两种:
+        //   ① makeTap 创建时的初装;② 自己主动关之后的重开(updateSelfDisabledNavTap)。
+        //   系统停的(权限出问题签名)一律走 closePermissionGate,不走 tapEnable。
         let shouldEnable = state == .navigating || Self.graveTakeoverEnabled
         if CGEvent.tapIsEnabled(tap: navTap) != shouldEnable {
-            CGEvent.tapEnable(tap: navTap, enable: shouldEnable)
-            // 每局开关各一条,是常态而非事件 —— 收进 trace(要看纪律是否守住时再开)
+            if !shouldEnable {
+                selfDisabledNavTap = true   // 自己关的:下文回显不算警报
+                CGEvent.tapEnable(tap: navTap, enable: false)
+            } else if selfDisabledNavTap {
+                selfDisabledNavTap = false
+                CGEvent.tapEnable(tap: navTap, enable: true)
+            } else if navTapFreshlyCreated {
+                // ★ 初装 enable(start()/重装后第一次):tap 刚由 makeTap 建好(disabled),
+                //   这次 enable 不是「重开系统停的 tap」,不触发关门 —— 否则启动即自杀
+                //   (2026-11-09 病例:重装后 191ms 被自己的关门逻辑误杀 ✗)
+                navTapFreshlyCreated = false
+                CGEvent.tapEnable(tap: navTap, enable: true)
+            }
+            // !shouldEnable == false 且旗标都不在 = **系统停的 tap 要重开**
+            //   ⇒ 权限缺 = 不许 tapEnable(第二次死机的挂点),走关门路径;
+            //     权限在 = 常态超时,安全重开(见 reEnableTapIfNeeded 的分叉注释)
+            else if !AXIsProcessTrusted() {
+                glog("[T13] 系统 tap 停用 + AX 已无权 ⇒ 关门(不 tapEnable)")
+                closePermissionGate()
+                return
+            } else {
+                CGEvent.tapEnable(tap: navTap, enable: true)
+            }
             trace("[T13] 导航吞键 tap:\(shouldEnable ? "开" : "关")")
         }
     }
+
+    /// 我们自己关 navTap 的旗标(会话结束的停用回显是常态噪音,不算警报)
+    private var selfDisabledNavTap = false
+    /// navTap 刚创建(初装 enable 用,见 updateNavTap 的 freshlyCreated 分支)
+    private var navTapFreshlyCreated = true
 
     private func setState(_ new: State) {
         guard state != new else { return }
@@ -628,24 +737,38 @@ final class HotkeyTapCenter {
     /// 原样放行,只把状态说清楚,免得日志引发误判。
     fileprivate func handleTapDisabled(_ type: CGEventType) -> Bool {
         let byTimeout = type == .tapDisabledByTimeout
-        // 措辞要准:这里只重开**只读**两个 tap;navTap 的生死由会话状态管(见 `updateNavTap`)。
-        // 上一版写"→ 重开"会读成"吞键 tap 又回来了",把人和诊断都带偏(2026-09-15 我自己先中了一次)。
-        // 常态不打扰:**会话结束后我们自己关 navTap,系统会把这条"禁用"回显给我们**
-        // (实测每局必来一条,导航中:false)—— 它没有信息量,却占了日志里很大一块。
-        // 只有"会话进行中"被停用才值得说话:那才是 ADR-0005 说的"这一发可能漏给系统"。
+        // ★★ 2026-11-09:区分"自己关的"与"系统停的" ——
+        //   会话结束我们主动关 navTap,系统会回显一条禁用(实测每局必来,**常态噪音**);
+        //   除此之外的停用回显 = 权限异常签名 ⇒ 关门拆 tap(绝不重开 —— tapEnable 会挂死,
+        //   见 reEnableTapIfNeeded 的病例注释)。
+        if selfDisabledNavTap {
+            selfDisabledNavTap = false
+            trace("[T13] tap 停用回显(自己关的,常态,已忽略)")
+            return false
+        }
         if state == .navigating {
-            print("[T13] ⚠️ 导航中 tap 被系统停用(\(byTimeout ? "超时" : "用户输入")) → 只读 tap 重开(navTap 按会话开关)")
-        } else {
-            trace("[T13] tap 停用回显(常态,已忽略)")
+            print("[T13] ⚠️ 导航中 tap 被系统停用(\(byTimeout ? "超时" : "用户输入")) → 关门")
         }
         reEnableTapIfNeeded()
         return false
     }
 
     fileprivate func reEnableTapIfNeeded() {
+        // ★★ 2026-11-09 两连病例后的最终分叉:
+        //   ① 授权被删后 **CGEvent.tapEnable 重开会同步挂死主线程**(铁证:日志停在
+        //      『导航吞键 tap:开』后全死)⇒ 权限缺 = 关门拆 tap,永不重开;
+        //   ② **权限好时 tapDisabledByTimeout 是常态**(启动 200ms 内主线程忙,回调超时
+        //      被系统停 —— 与权限无关;上一版把它当权限异常 = 启动即自杀误杀 ✗)
+        //      ⇒ 权限在 = 安全重开(tapEnable 挂死只发生在权限被删后)。
+        //   分叉判据 = AXIsProcessTrusted(本地查询,便宜且准):先查再动 ✓
+        if !AXIsProcessTrusted() {
+            glog("[T13] tap 被停用 + AX 已无权 ⇒ 关门拆 tap(不重开 —— tapEnable 会挂死)")
+            closePermissionGate()
+            return
+        }
         for tap in [flagsTap, mouseTap].compactMap({ $0 }) where !CGEvent.tapIsEnabled(tap: tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
-            print("[T13] 只读 tap 已重新启用")
+            print("[T13] 只读 tap 已重新启用(权限在,常态超时重开)")
         }
         updateNavTap()
     }

@@ -438,6 +438,28 @@ final class ThreeFingerTap {
         observeWakeAndScreenChanges()
     }
 
+    /// 权限门禁的另一半(2026-11-09):三指/四指走 MultitouchSupport 私有框架回调,
+    /// **不需要辅助功能权限** ⇒ HotkeyTapCenter 的门禁拆不到它。缺权状态下唤起也是残的
+    /// (面板能上屏 —— 录屏权限还在 —— 但聚焦全被拒,用户实报「能唤起但打不开窗」)。
+    /// 全拆:注销回调 + 停设备 + 标记未启动(权限恢复后 start() 重新幂等装配)。
+    /// ⚠️ 本机 MTDeviceStop 永不返回的病例(2026-10-13):拆设备要挪到后台队列,
+    /// 不能堵主线程;unregister 回调本身是安全的。
+    func stop() {
+        guard started else { return }
+        started = false
+        glog("[指点按] 权限门禁:拆 Multitouch 通道(授权被删,唤起也是残的)")
+        let devices = attachedDevices
+        attachedDevices = []
+        let unregister = Self.symbols?.unregister
+        let stopDevice = Self.symbols?.stop
+        DispatchQueue.global(qos: .utility).async {
+            for p in devices {
+                unregister?(p, Self.contactFrame)
+                stopDevice?(p)   // 可能不返回:后台队列里慢慢等,不堵主线程 ✓
+            }
+        }
+    }
+
     /// 载 MultitouchSupport 并把三个符号拿好(只做一次 ✓;拿不到就永久降级 ✓)
     /// MultitouchSupport 的四个函数类型(类型作用域 ✓ —— 属性要用到它们,不能留在函数里 ✗)
     private typealias CreateList = @convention(c) () -> CFMutableArray?
