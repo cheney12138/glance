@@ -1110,21 +1110,18 @@ struct TrayGeometry {
         // ⚠️ 2026-10-13 最后一处符号错(用户设 4 却看到 ≈33 ✗):上面那 14 我**加了两遍** ✗
         //   实测:内容框底 ≈ 窗底(+1) · 芯片底 = 内容框底 + trayPadBottom(14) ⇒ 芯片底 = y + 15
         //   要"芯片底 = 玻璃顶 + gap" ⇒ **y = 玻璃顶 + gap − trayPadBottom** ✓(不是 + ✗)
+        // ★★ 2026-11-22 修复(托盘与环之间多出 ~96pt 空档):
+        //   2026-11-22 禁用 `ClickThroughHostingView.sizingOptions` 并改 `PreviewPanelView` 为
+        //   `.padding(.horizontal/.bottom, shadowPadPop)` 后,317pt(`content + shadowPadPop`) 窗体不再
+        //   溢流也不再被拉高到 412pt,于是 `内容框底边` 严格落在 `y + shadowPadPop` (与 `previewContentRect` /
+        //   `hitTest` 一致 ✓)。因此 `y` 必须扣回这段 `shadowPadPop`,才能让芯片下沿恰好落在 `玻璃顶 + trayRingGap`。
         var y = panelFrame.maxY - PanelMetrics.shadowPadStrip
-            + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom
+            + PanelMetrics.trayRingGap - PanelMetrics.trayPadBottom - PanelMetrics.shadowPadPop
         if centeredOnScreen {
             // ⌘` 的"只有窗口"那一局:**没有环可贴** ⇒ 托盘在屏上居中 ✓
-            // ⚠️ 2026-10-27 病例(用户:「上下左右居中,做的对吗,视觉上不对」):
-            //   窗高 = **内容 + 底部那段 `shadowPadPop`**(阴影呼吸只在下边)⇒ 直接对**窗**居中,
-            //   内容会整体**偏上半个 pad**(≈48pt),眼睛一眼就看出来 ✗
-            //   ⇒ 要对齐的是**内容**的中心:y = 屏中 − 窗高/2 − pad/2 ✓
-            // ★★★ 2026-10-27 第三次修正(实测反解,不再猜):
-            //   截图 + 日志对出来的事实(`[托] 窗=832x333@-1280,355` / 卡片 299x187):
-            //   窗高 = 内容高 + `shadowPadPop`(≈97),而内容在窗里是**贴底**的
-            //   (卡片底边距窗底只有 ≈20 = 内边距;窗顶空着 126)✗
-            //   ⇒ 对**窗**居中会让内容整体**偏低**半个 pad,视觉一眼看出 ✗
-            //   ⇒ 正确式子:**窗底 = 屏中 − 内容高/2**(内容贴底 ⇒ 内容中心正好落在屏中)✓
-            y = screenArea.midY - maxContentSize.height / 2
+            //   内容位于 `[y + shadowPadPop .. y + shadowPadPop + maxContentSize.height]`,
+            //   要让内容中心正落 `screenArea.midY`,窗底 `y = screenArea.midY - maxContentSize.height / 2 - shadowPadPop` ✓
+            y = screenArea.midY - maxContentSize.height / 2 - PanelMetrics.shadowPadPop
         }
         // ⚠️ 2026-10-13 第二处错(用户实拍「整个预览卡片下部跟环掉到环下面了」):
         //   上一版把窗高裁到 `topLimit - y`,**能低于"内容 + 底部内缩"** ✗

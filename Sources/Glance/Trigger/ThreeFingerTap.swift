@@ -216,6 +216,8 @@ final class ThreeFingerTap {
     private let launchedAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
     /// 在可见窗口打开期间是否已记录过一次"暂缓自动重启"提示
     private var deferredRelaunchNotice = false
+    /// 点击后延迟 0.35s 复查：避免从键盘回到触控板刚按下那一拍误判“无帧”而狂调 `MTDeviceStart` ✓
+    private var reviveVerifyWork: DispatchWorkItem?
     /// 最近一次"睡醒 / 屏参数变化"的时刻 —— 判"投递已死"时先让驱动缓一缓(见 `reviveIfFramesDead`)
     private var lastWakeAt: CFAbsoluteTime = 0
     /// **MT 投递整体已死**(2026-10-11 病例,见 `reviveIfFramesDead` 里的那段)
@@ -328,12 +330,16 @@ final class ThreeFingerTap {
         //   收紧口径:① 必须是本次静默**之后**实际执行过投递死亡重挂(`reviveAttachAt > lastFrameAt`)
         //   且重挂完成 ≥3s 仍无任何新帧;② 本 App 在前台或任一可见窗口打开期间,**绝不**自动重启,
         //   启动后 60s 内也不自动重启 ✓。
+        // ★★ 2026-11-22 二修(日志铁证:MenuBarExtra 的 `NSStatusBarWindow` 常驻 `isVisible == true`,
+        //   导致旧版 `NSApp.windows.contains { $0.isVisible }` 恒为 true,设置关闭后也永远跳过自动重启;
+        //   且点击瞬时 `silence > 2s` 就直接 `unregister + MTDeviceStart` 在 40 分钟里反复触发 18 次,
+        //   反而在点击当中把活着的多点回调撕掉并堆叠泄露句柄):
+        //   ① 判"窗口打开"显式排除状态栏窗口(`.statusBar` / `NSStatusBarWindow`),只认前台交互/设置引导/切换面板;
+        //   ② 点击若距上一帧 > 5s,先延后 0.35s 复查:只要这次点击本身带来了触点帧就不做无谓重挂 ✓。
         let wakeGrace = now - lastWakeAt
         if frameAt > 0, revivedAt > frameAt, now - revivedAt >= 3.0,
            silence > 8.0, wakeGrace > 15 {
-            let uiOpen = MainActor.assumeIsolated {
-                NSApp.isActive || NSApp.windows.contains { $0.isVisible }
-            }
+            let uiOpen = Self.hasInteractiveWindowOpen()
             if uiOpen {
                 if !alreadyNoticed {
                     feedLock.lock()
@@ -358,9 +364,40 @@ final class ThreeFingerTap {
         attachStateLock.lock()
         let since = lastAttachAt
         attachStateLock.unlock()
-        guard silence > 2.0, now - since > 30 else { return }
-        DiagnosticRingBuffer.shared.recordThreeFingerRevive()
-        attachDevices(reason: String(format: "点击但 %.0fs 无帧(投递死亡)", silence))
+        guard silence > 5.0, now - since > 60, reviveVerifyWork == nil else { return }
+        let clickedAt = now
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reviveVerifyWork = nil
+            self.feedLock.lock()
+            let latestFrameAt = self.lastFrameAt
+            self.feedLock.unlock()
+            // 这次点击前后确实收到了新帧 ⇒ 只是敲键盘/阅读静默了一会儿,无需撕开重挂 ✓
+            guard latestFrameAt < clickedAt - 0.15 else { return }
+            let verifiedSilence = CFAbsoluteTimeGetCurrent() - latestFrameAt
+            self.attachStateLock.lock()
+            let sinceLast = self.lastAttachAt
+            self.attachStateLock.unlock()
+            guard verifiedSilence > 5.0, CFAbsoluteTimeGetCurrent() - sinceLast > 60 else { return }
+            DiagnosticRingBuffer.shared.recordThreeFingerRevive()
+            self.attachDevices(reason: String(format: "点击后仍无帧(%.0fs静默·投递死亡)", verifiedSilence))
+        }
+        reviveVerifyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    /// 仅当真正有设置/引导/速查/权限/面板窗口可见或本 App 激活时才算"正在操作 UI"(排除常驻 `NSStatusBarWindow`) ✓
+    private static func hasInteractiveWindowOpen() -> Bool {
+        MainActor.assumeIsolated {
+            if NSApp.isActive { return true }
+            return NSApp.windows.contains { w in
+                guard w.isVisible, w.alphaValue > 0.01 else { return false }
+                if w.level == .statusBar { return false }
+                let cls = String(describing: type(of: w))
+                if cls.contains("StatusBar") || cls.contains("MenuBar") { return false }
+                return w.canBecomeMain || (w is NSPanel && w.frame.width > 10 && w.frame.height > 10)
+            }
+        }
     }
     /// **按多点设备硬件 ID (`MTDeviceGetDeviceID`) 独立维护的按压账本**(2026-11-20 病例修复):
     /// 内建触控板 + 外接 Magic Trackpad 同时挂着时,原来所有设备共用同一个 `press`:

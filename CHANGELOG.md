@@ -17,10 +17,10 @@
 
 ### Fixed
 - **彻底修复快速切换 / 截图退出后切换 / 从引导页或设置窗 `⌘Tab` 切走后的坦克形残帧与面板卡死**（[病例 #21](docs/debugging.md#21-坦克形残帧与面板卡死收场后异步回拉--切焦未-flush2026-11-22)）：
-  - `ClickThroughHostingView` 禁用 `sizingOptions` 自适应回推尺寸，修正 `PreviewPanelView` 顶部阴影边距（`padTop = 0`）与 `contentMinSize = .zero`，消除托盘窗首帧 `317 → 412pt` 拉伸透穿。
+  - `ClickThroughHostingView` 禁用 `sizingOptions` 自适应回推尺寸，修正 `PreviewPanelView` 顶部阴影边距（`padTop = 0`）与 `contentMinSize = .zero`，消除托盘窗首帧 `317 → 412pt` 拉伸透穿；`TrayGeometry` 同步扣回 `shadowPadPop`，确保托盘与环间距严格保持 `trayRingGap`。
   - 每局退场改为 `alpha = 0 → orderOut → close()` 销毁旧窗并异步预建下一局全新离屏 `NSPanel`，`scheduleAfterDisplayCommit` 等 CA 渲染提交完成后再入场显影，彻底断绝跨局复用 `CGWindowID` 残留旧帧。
   - 加固 `begin` / `showPanel` / `fadeInWindow` / `updatePreview` 代际锁与 `teardownPanel` 同步 `CATransaction.flush()`。
-- **修复设置面板操作时被三指自愈误杀重启的问题**：`ThreeFingerTap.reviveIfFramesDead()` 改为必须“静默之后确实执行过投递死亡重挂（`reviveAttachAt > frameAt`）且 `>= 3s` 仍零新帧”才判死，且前台激活/任意可见窗口打开期间及冷启动 `60s` 内绝不自动重启；同步消除 `ContentBottomKey` 同帧多次回写及 `didResize` `-layoutSubtreeIfNeeded` 告警。
+- **修复设置面板误触发三指自动重启及菜单栏常驻窗阻塞自愈的问题**：`ThreeFingerTap.reviveIfFramesDead()` 改为点击后延迟 `0.35s` 复查（过滤敲键盘停手误判，冷却 `60s`）且必须“静默之后确实执行过投递死亡重挂（`reviveAttachAt > frameAt`）且 `>= 3s` 仍零新帧”才判死；窗口打开判定显式排除 `NSStatusBarWindow`，仅在激活/设置/引导/速查/切换面板可见时及冷启动 `60s` 内暂缓重启；同步消除 `ContentBottomKey` 同帧多次回写及 `didResize` `-layoutSubtreeIfNeeded` 告警。
 - **修复设置 / 引导 / 快捷键速查 / 权限窗口打开时先偏右再往左跳回屏幕中心的问题**：开窗前预居中、首帧在 `alpha = 0` 下完成 `.contentSize` 定框后显影，并在 `SettingsWindowChrome` 监听 `didResize` 保持相对整块屏幕居中。
 - **修复单个 App 全部窗口最小化后的位置跳跃与图标消失**：最后一个可见窗口被最小化时保持原位、仅切换为最小化样式，其余最小化窗口移至尾部并保持相对顺序。
 - **三指轻点重量门与多指账本隔离**：`TapRound` 最低接触门限由 `0.6` 调优至 `0.45`，按硬件 `MTDeviceGetDeviceID` 独立分账，避免多块触控板/掌缘相互污染。
