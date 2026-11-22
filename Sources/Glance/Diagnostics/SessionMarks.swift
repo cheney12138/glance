@@ -76,7 +76,16 @@ enum SessionMarks {
         guard t0 > 0 else { return }
         let total = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         let cpu = threadCPUMs() - cpuAtBegin          // 真占用(与墙钟的差 = 等 ✓)
+        let recordedSteps = steps
+        let recordedLabel = label
         defer { t0 = 0 }   // lastSessionStart 保留:首图打卡要继续用它
+        DiagnosticRingBuffer.shared.recordSessionMarks(
+            label: recordedLabel,
+            totalMs: total,
+            cpuMs: cpu,
+            waitMs: max(0, total - cpu),
+            steps: recordedSteps
+        )
         if isTraceEnabled {
             let axis = steps.map { String(format: "%@ %.1f", $0.0, $0.1) }.joined(separator: " · ")
             glog(String(format: "[打卡] %@ 共 %.1fms(CPU %.1f · 等 %.1f) | %@",

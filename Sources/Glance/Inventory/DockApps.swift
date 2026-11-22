@@ -17,20 +17,23 @@ enum DockAppsProvider {
         let name: String
         let path: String
         let icon: NSImage
+        /// 透明边距补偿倍率（与主环 `IconProvider.Art.fill` 同口径，后台算好缓存，零主线程 XPC）
+        let fill: CGFloat
     }
 
     /// 图标缓存(NSWorkspace.icon(forFile:) 逐次调用不便宜;App 卸载重装极少变,进程级够用)
     /// ⚠️ 自 2026-10-09 起它会在**后台线程**被读写(候选名单的重活挪去了后台 ✓)
     ///   ⇒ 加锁;代价可忽略(每局几次字典访问 ✓)
-    nonisolated(unsafe) private static var iconCache: [String: NSImage] = [:]
+    nonisolated(unsafe) private static var iconCache: [String: IconProvider.Art] = [:]
     nonisolated(unsafe) private static let iconLock = NSLock()
-    /// 取图标(命中就回;未命中就加载并存入 ✓ 锁只圈字典、不圈加载 ⇒ 不会卡住别人 ✓)
-    nonisolated private static func cachedIcon(_ path: String) -> NSImage {
+    /// 取图标与边距补偿(命中就回;未命中就后台加载并算 fillRatio 存入 ✓ 锁只圈字典、不圈加载 ✓)
+    nonisolated private static func cachedArt(_ path: String) -> IconProvider.Art {
         iconLock.lock(); let hit = iconCache[path]; iconLock.unlock()
         if let hit { return hit }
         let icon = NSWorkspace.shared.icon(forFile: path)
-        iconLock.lock(); iconCache[path] = icon; iconLock.unlock()
-        return icon
+        let art = IconProvider.Art(image: icon, fill: IconProvider.fillRatio(of: icon))
+        iconLock.lock(); iconCache[path] = art; iconLock.unlock()
+        return art
     }
 
     /// **白名单**(2026-09-19):不在 Dock 常驻的 App 也进未启动环。存 bundle id(见 spec note 6)。
@@ -88,7 +91,8 @@ enum DockAppsProvider {
 
     /// 扫已装 App:/Applications 与 /System/Applications,两级深(Utilities 等子目录)。
     /// 排除本 App 自己(把它加进未启动环没有意义)。
-    static func scanInstalledApps() -> [InstalledApp] {
+    /// nonisolated:供设置页 `AppPicker` 在后台线程扫描,不卡主线程 ✓
+    nonisolated static func scanInstalledApps() -> [InstalledApp] {
         let fm = FileManager.default
         let ownBundleID = Bundle.main.bundleIdentifier
         var urls: [URL] = []
@@ -104,11 +108,12 @@ enum DockAppsProvider {
         var seen = Set<String>()
         var out: [InstalledApp] = []
         for url in urls {
-            guard let bid = Bundle(url: url)?.bundleIdentifier,
+            guard let bundle = Bundle(url: url),
+                  let bid = bundle.bundleIdentifier,
                   bid != ownBundleID, !seen.contains(bid) else { continue }
             seen.insert(bid)
-            let name = Bundle(url: url)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
-                ?? Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
+            let name = bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String
+                ?? bundle.infoDictionary?["CFBundleName"] as? String
                 ?? url.deletingPathExtension().lastPathComponent
             out.append(InstalledApp(id: bid, name: name, path: url.path,
                                     icon: NSWorkspace.shared.icon(forFile: url.path)))
@@ -165,12 +170,12 @@ enum DockAppsProvider {
             let bid = pinned.bundleID ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.bundleIdentifier ?? pinned.path
             guard !blacklist.contains(bid), !seen.contains(bid) else { continue }
             seen.insert(bid)
-            let icon = cachedIcon(pinned.path)
+            let art = cachedArt(pinned.path)
             let name = pinned.name
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.infoDictionary?["CFBundleName"] as? String
                 ?? URL(fileURLWithPath: pinned.path).deletingPathExtension().lastPathComponent
-            out.append(LaunchableApp(id: bid, name: name, path: pinned.path, icon: icon))
+            out.append(LaunchableApp(id: bid, name: name, path: pinned.path, icon: art.image, fill: art.fill))
         }
         // **白名单补录**:不在 Dock 的 App 按名单顺序排在环尾(用户在设置里排的就是展示序)。
         // 黑名单照旧压住(理论上互斥保证不会撞,这里再挡一道——两处编辑可能在两台设备间不同步);
@@ -180,11 +185,11 @@ enum DockAppsProvider {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) else { continue }
             let path = url.path
             seen.insert(bid)
-            let icon = cachedIcon(path)
+            let art = cachedArt(path)
             let name = Bundle(url: url)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
                 ?? url.deletingPathExtension().lastPathComponent
-            out.append(LaunchableApp(id: bid, name: name, path: path, icon: icon))
+            out.append(LaunchableApp(id: bid, name: name, path: path, icon: art.image, fill: art.fill))
         }
         return out
     }

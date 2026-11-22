@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import GlanceCore
+import UniformTypeIdentifiers
 
 /// 设置面板 —— 施工契约 = 设计 demo `design/v4/Glance 设置 v1.html`(纸面 + 棱镜边 + 玻璃舌头分段控件),
 /// token 与偏离备案见 `design/settings-spec.md`。
@@ -46,6 +47,11 @@ struct SettingsView: View {
 
     @ObservedObject var store: SettingsStore
     @ObservedObject var permissions: PermissionMonitor
+    /// 顶层组装根（GlanceApp）注入的脱敏诊断 JSON 生成器，避免 Settings 反向依赖热键/枚举层。
+    var buildDiagnosticsJSON: (() -> String)? = nil
+    var onOpenCheatSheet: (() -> Void)? = nil
+    var onOpenOnboarding: (() -> Void)? = nil
+    @State private var diagnosticsCopied = false
 
     enum Page: String, CaseIterable, Identifiable {
         case general = "通用"
@@ -66,16 +72,17 @@ struct SettingsView: View {
             switch self {
             case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "触感", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
-            case .about: return ["权限"]
+            case .about: return ["权限", "诊断", "帮助"]
             }
         }
         func anchor(_ group: String) -> String { "\(rawValue):\(group)" }
     }
 
+    /// 内容底哨兵存储盒：只给滚动位置监听回调读，不触发 `SettingsView.body` 重算（避免同帧多次 Preference 回写告警）。
+    private final class ScrollBottomBox { var value: CGFloat? }
+
     @State private var page: Page = .general
-    /// 内容底哨兵的位置 + 视口高度 ⇒ "到底了没有"(见 `ContentBottomKey` 的病例 ✓)
-    @State private var contentBottom: CGFloat?
-    @State private var viewportHeight: CGFloat?
+    @State private var scrollBottomBox = ScrollBottomBox()
     /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
     /// 子菜单点击 = 页内滚动定位。nil = 不定位
     @State private var navSelection: String? = Page.general.anchor(Page.general.groups[0])
@@ -84,6 +91,7 @@ struct SettingsView: View {
     /// 打开的未启动环名单编辑器(nil = 关着)。白/黑共用一个编辑器视图
     @State private var launchEditor: LaunchListEditor.Kind?
     @AppStorage(Keys.panelPinOnRelease) private var pinPanel = KeyDefaults.pinOnRelease
+    @AppStorage(Keys.switchIncludeMinimized) private var includeMinimized = KeyDefaults.includeMinimized
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
     @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = KeyDefaults.alwaysAnimate
     @AppStorage(Keys.panelSummonPop) private var summonPop = KeyDefaults.summonPop
@@ -249,7 +257,7 @@ struct SettingsView: View {
             }
             // ★ 反向:**滚动 → 左侧导航跟着走**(2026-09-22 用户实报后新增;此前只有单向 ✓→✗)
             .coordinateSpace(name: SettingsScrollSpace.name)
-            .onPreferenceChange(ContentBottomKey.self) { contentBottom = ($0 == .greatestFiniteMagnitude ? nil : $0) }
+            .onPreferenceChange(ContentBottomKey.self) { scrollBottomBox.value = ($0 == .greatestFiniteMagnitude ? nil : $0) }
             .onPreferenceChange(GroupOffsetKey.self) { offsets in
                 // ⚠️ 临时量尺(2026-10-15,定位完删 ✗):无条件一发,报全量数值 ✗
                 if SpyProbe.count < 3 {
@@ -257,7 +265,7 @@ struct SettingsView: View {
                     let la = page.groups.last.map { page.anchor($0) }
                     glog(String(format: "[导航] 采样#%d: bottom=%@ vh=%@ lastOffset=%@ minOffset=%.1f",
                                 SpyProbe.count,
-                                contentBottom.map { String(format: "%.1f", $0) } ?? "nil",
+                                scrollBottomBox.value.map { String(format: "%.1f", $0) } ?? "nil",
                                 String(format: "%.1f", vh),
                                 la.flatMap { offsets[$0] }.map { String(format: "%.1f", $0) } ?? "nil",
                                 offsets.values.min() ?? 0))
@@ -271,7 +279,7 @@ struct SettingsView: View {
                 //   (点了倒数第二组但因为到底而滚不动的情形:那次滚动在 `suppressNavSpyUntil` 里 ⇒
                 //    动画跑完就没新变化了 ⇒ 这里不会再把它改成最后一组 ✓)
                 let lastAnchor = page.groups.last.map { page.anchor($0) }
-                if let lastAnchor, let bottom = contentBottom, vh > 0,
+                if let lastAnchor, let bottom = scrollBottomBox.value, vh > 0,
                    (offsets.values.min() ?? 0) < -1, bottom <= vh + 2, (offsets[lastAnchor] ?? 0) > 40 {
                     if navSelection != lastAnchor { navSelection = lastAnchor }
                     return
@@ -290,7 +298,7 @@ struct SettingsView: View {
 
     private var generalPane: some View {
         Group {
-            SettingsGroup(label: "外观", anchor: Page.general.anchor("外观")) {
+            SettingsGroup(label: "外观", icon: "paintbrush.pointed", anchor: Page.general.anchor("外观")) {
                 SettingsRow(title: "颜色外观", desc: "面板与设置窗口同步生效。") {
                     BeamSegmented(options: [
                         .init(id: AppearancePreference.auto, label: "自动"),
@@ -318,13 +326,14 @@ struct SettingsView: View {
                             .frame(width: 46, alignment: .trailing)
                     }
                 }
+                AppearanceRingToy(clearance: iconClearance, sheen: sheen, appearance: appearance)
             }
             .onChange(of: appearance) { _, _ in AppearancePreference.apply() }
 
             // ★ 2026-09-22 用户实报「你刚才加的帧率控制,为什么会在外观这一级」✗
             //   —— 实时预览是**行为/性能**档位,不是外观 ⇒ 从"外观"搬出来独立成组 ✓
             //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
-            SettingsGroup(label: "实时预览", anchor: Page.general.anchor("实时预览")) {
+            SettingsGroup(label: "实时预览", icon: "rectangle.stack", anchor: Page.general.anchor("实时预览")) {
                 // ★ 2026-09-22 用户要求:「现在 live 是开着的吗, 做成设置, 给几个档位,
                 //   用bar控制, 0 代表关闭, 最大 30fps」。
                 //   键名不换(`live.previewTier`,String 型现存值 "0"/"10" 原样继承 ✓)
@@ -332,9 +341,11 @@ struct SettingsView: View {
                 //   其余窗口恒 5fps(见 LivePreviewPool 的分档)。
                 // 组内窗口的呈现方式(ADR-0017)—— 与"看不看实时画面"同一件事的两个面,并在这组里
                 SettingsRow(title: "用「芯片轨道」显示同一 App 的窗口",
-                            desc: "开启后:只有当前选中的窗口显示预览,其余窗口显示成一列标题;窗口多时整列滚动。关闭则沿用现在的多张预览卡。") {
+                            desc: "开启后:只有当前选中的窗口显示预览,其余窗口显示成一列标题;窗口多时整列滚动。关闭则沿用现在的多张预览卡。",
+                            hairline: false) {
                     BeamSwitch(isOn: useChipRail)
                 }
+                TrayLayoutToy(useChipRail: useChipRail, fps: Int(liveTier))
                 SettingsRow(title: "实时预览",
                             desc: "面板里显示窗口的实时画面。0 = 关闭,改完下一次路过即生效。") {
                     HStack(spacing: 8) {
@@ -356,13 +367,17 @@ struct SettingsView: View {
 
             // 原"启动与行为":去掉两条属于"未启动环"的行之后,这组只剩"应用/面板的生命周期" ✓
             // ⇒ 改名为「应用与面板」(名字里不再兜着别的东西)
-            SettingsGroup(label: "应用与面板", anchor: Page.general.anchor("应用与面板")) {
+            SettingsGroup(label: "应用与面板", icon: "macwindow", anchor: Page.general.anchor("应用与面板")) {
                 SettingsRow(title: "登录时启动", desc: "关闭后需手动启动。") {
                     BeamSwitch(isOn: $store.launchAtLogin)
                 }
                 SettingsRow(title: "黑名单",
                             desc: "在运行的 App 只要在这里,即使有窗也不进切换器。") {
                     listCountButton(.ringBlacklist)
+                }
+                SettingsRow(title: "显示最小化窗口",
+                            desc: "在本屏切换列表尾部保留已最小化窗口（灰显），选中后单窗还原。") {
+                    BeamSwitch(isOn: $includeMinimized)
                 }
                 SettingsRow(title: "保持面板打开",
                             desc: "关闭后松开按键即确认,面板随之关闭。",
@@ -376,7 +391,7 @@ struct SettingsView: View {
             // 机器装完 0.3.2 三指四指"根本唤不起来",真凶是 UserDefaults 每机独立、新机
             // 全默认关)。键名不换:已装机用户的现网值原样继承;UserDefaults 直读 = 改了
             // 立即生效,不重启(手势层每次事件都现读)
-            SettingsGroup(label: "手势操控", anchor: Page.general.anchor("手势操控")) {
+            SettingsGroup(label: "手势操控", icon: "hand.point.up.left", anchor: Page.general.anchor("手势操控")) {
                 SettingsRow(title: "三指点按唤起面板",
                             desc: Self.threeFingerTapDesc) {
                     BeamSwitch(isOn: $threeFingerTapPanel)
@@ -396,7 +411,7 @@ struct SettingsView: View {
             //   交给视觉脉冲 —— 2026-09-20 用户自己裁定的 ✓);缺的是"触发点"与"设置里这一行" ✗
             //   两个面(环上的 App / 托盘里的窗口)共用**一个**开关:对人是同一件事
             //   ("指针挪到别的东西上了")⇒ 拆成两条只会让人多读一行 ✓(要拆随时说 ✓)
-            SettingsGroup(label: "触感", anchor: Page.general.anchor("触感")) {
+            SettingsGroup(label: "触感", icon: "waveform", anchor: Page.general.anchor("触感")) {
                 SettingsRow(title: "悬停触感",
                             desc: "指针移到环上的 App、或托盘的窗口上时,触控板触发震动。") {
                     BeamSwitch(isOn: $hapticEnabled)
@@ -419,11 +434,17 @@ struct SettingsView: View {
                         .opacity(hapticEnabled ? 1 : 0.4)
                 }
             }
+            .onChange(of: hapticEnabled) { _, on in
+                if on { DispatchQueue.main.async { Haptics.fire(.hoverAppRow, trace: "设置试震") } }
+            }
+            .onChange(of: hapticStrength) { _, _ in
+                if hapticEnabled { DispatchQueue.main.async { Haptics.fire(.hoverAppRow, trace: "切换强度试震") } }
+            }
 
             // 原"未启动环名单"只装白/黑名单 ⇒ 而"哪些 App 会进环""Tab 能不能跨段"被拆在别的组 ✗
             // ⇒ 合成一组「未启动环」:**关于这个环的一切都在这儿** ✓
             
-            SettingsGroup(label: "未启动环", anchor: Page.general.anchor("未启动环")) {
+            SettingsGroup(label: "未启动环", icon: "app.dashed", anchor: Page.general.anchor("未启动环")) {
                 // ⚠️ 2026-10-19 撤掉「展示 Dock 常驻应用」这一行(用户:「这是个废配置了,删掉吧,也不起作用」):
                 //   键 `panel.showLaunchables` 全仓**没有任何读取点** —— 只有这一行自己在绑 ⇒ 拨了也不影响行为 ✗
                 //   (留着比删掉更坏:用户会以为自己关掉了未启动区,实际什么都没变 ✓)
@@ -446,7 +467,7 @@ struct SettingsView: View {
             }
 
 
-            SettingsGroup(label: "动效", anchor: Page.general.anchor("动效")) {
+            SettingsGroup(label: "动效", icon: "sparkles", anchor: Page.general.anchor("动效")) {
                 SettingsRow(title: "系统减弱动态效果") {
                     RowValue(systemReduced ? "已开启" : "未开启")
                 }
@@ -464,36 +485,56 @@ struct SettingsView: View {
 
     private var aboutPane: some View {
         Group {
-            // 品牌头(2026-09-19 二修,布局听用户的):**大图标独占一排、左右居中**,
-            // 距上方留一点高度;下面才是正常的文字内容(名称/版本行 + 权限组)。
-            // 图标直接取 NSApplication 的实际图标(与 Finder/Dock 同源,换资产自动跟)
-            VStack(spacing: 0) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .frame(width: 128, height: 128)
-                    .clipShape(RoundedRectangle(cornerRadius: 29, style: .continuous))
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
-            }
-            .frame(maxWidth: .infinity)   // 左右居中
-            .padding(.top, 18)            // "距离上方有一点点的高度"
-            .padding(.bottom, 6)          // 图标与文字之间只留呼吸:外层 VStack 的 groupGap 会再垫一层,这里给多了就空
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Glance")
-                        .font(.system(size: 17, weight: .semibold))
-                    Text("版本 \(bundle("CFBundleShortVersionString"))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 14)   // 左缘与 SettingsGroup 的组标题胶囊/行标题同线(都从 contentPadX 起步)
-            SettingsGroup(label: "权限", anchor: Page.about.anchor("权限")) {
+            KoalaAboutHero(
+                version: bundle("CFBundleShortVersionString"),
+                build: bundle("CFBundleVersion")
+            )
+            SettingsGroup(label: "权限", icon: "lock.shield", anchor: Page.about.anchor("权限")) {
                 SettingsRow(title: "辅助功能", desc: "用于读取与聚焦窗口。缺失时切换器无法工作。") {
                     PermissionBadge(granted: permissions.accessibilityGranted)
                 }
                 SettingsRow(title: "屏幕录制", desc: "用于生成窗口预览。", hairline: false) {
                     PermissionBadge(granted: permissions.screenCaptureGranted)
+                }
+            }
+            if let buildJSON = buildDiagnosticsJSON {
+                SettingsGroup(label: "诊断", icon: "stethoscope", anchor: Page.about.anchor("诊断")) {
+                    SettingsRow(title: "诊断转储",
+                                desc: "导出结构化 JSON（环境、帧账、卡死与崩溃栈摘要；不含窗口标题与用户名）。",
+                                hairline: false) {
+                        HStack(spacing: 8) {
+                            capsuleActionButton(diagnosticsCopied ? "已复制" : "复制 JSON") {
+                                let json = buildJSON()
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(json, forType: .string)
+                                diagnosticsCopied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    diagnosticsCopied = false
+                                }
+                            }
+                            capsuleActionButton("导出…") {
+                                exportDiagnosticsJSON(buildJSON())
+                            }
+                        }
+                    }
+                }
+            }
+            if onOpenCheatSheet != nil || onOpenOnboarding != nil {
+                SettingsGroup(label: "帮助", icon: "questionmark.circle", anchor: Page.about.anchor("帮助")) {
+                    if let onOpenCheatSheet {
+                        SettingsRow(title: "快捷键速查",
+                                    desc: "面板开启时按 ? 或 / 也可随时呼出。",
+                                    hairline: onOpenOnboarding != nil) {
+                            capsuleActionButton("打开", action: onOpenCheatSheet)
+                        }
+                    }
+                    if let onOpenOnboarding {
+                        SettingsRow(title: "快速上手引导",
+                                    desc: "重新查看 3 步交互配置引导。",
+                                    hairline: false) {
+                            capsuleActionButton("查看", action: onOpenOnboarding)
+                        }
+                    }
                 }
             }
         }
@@ -534,6 +575,35 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+    }
+
+    private func capsuleActionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(SettingsFont.rowValue)
+                .foregroundStyle(SettingsTheme.ink)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().strokeBorder(SettingsTheme.hairline, lineWidth: SettingsMetrics.hairline)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+    }
+
+    private func exportDiagnosticsJSON(_ json: String) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyyMMdd-HHmmss"
+        panel.nameFieldStringValue = "glance-diag-\(fmt.string(from: Date())).json"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            try? json.write(to: url, atomically: true, encoding: .utf8)
+        }
     }
 }
 
@@ -731,6 +801,7 @@ private struct AppPicker: View {
     let onAdd: (String) -> Void
     @State private var query = ""
     @State private var apps: [DockAppsProvider.InstalledApp] = []
+    @State private var isLoading = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -759,17 +830,25 @@ private struct AppPicker: View {
                     }
                 }
             ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(filtered) { app in
-                        row(app)
-                    }
-                    if filtered.isEmpty {
-                        Text("没有匹配的 App")
+                LazyVStack(spacing: 0) {
+                    if isLoading {
+                        Text("正在扫描已安装 App…")
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 24)
                             .padding(.vertical, 16)
+                    } else {
+                        ForEach(filtered) { app in
+                            row(app)
+                        }
+                        if filtered.isEmpty {
+                            Text("没有匹配的 App")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 16)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -786,7 +865,13 @@ private struct AppPicker: View {
         }
         .frame(width: 440, height: 420)
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)   // ★ sheet 根
-        .onAppear { apps = DockAppsProvider.scanInstalledApps() }
+        .task {
+            let scanned = await Task.detached(priority: .userInitiated) {
+                DockAppsProvider.scanInstalledApps()
+            }.value
+            apps = scanned
+            isLoading = false
+        }
     }
 
     /// ★★ 2026-10-28(用户:「我添加进白名单了, 但是搜索的时候还能搜到, 已经存在了,
@@ -869,7 +954,7 @@ struct ShortcutPane: View {
 
     var body: some View {
         Group {
-            SettingsGroup(label: "触发", anchor: SettingsView.Page.shortcut.anchor("触发")) {
+            SettingsGroup(label: "触发", icon: "bolt", anchor: SettingsView.Page.shortcut.anchor("触发")) {
             SettingsRow(title: "双击 ⌥ 指针跳到另一块屏",
                         desc: "指针落在另一块屏正中间，键盘也跟着过去。") {
                 BeamSwitch(isOn: $doubleOptionJumps)
@@ -968,25 +1053,29 @@ struct ShortcutPane: View {
                     .help(recording ? "按 Esc 取消录制" : "点一下开始录制新的触发键")
                 }
             }
-            SettingsGroup(label: "导航", anchor: SettingsView.Page.shortcut.anchor("导航")) {
+            SettingsGroup(label: "导航", icon: "arrow.left.arrow.right", anchor: SettingsView.Page.shortcut.anchor("导航")) {
+                SettingsRow(title: "数字键直达 App", key: "1 – 9",
+                            desc: "按数字直接跳到环上第 N 个 App(启动环里选第 N 个未启动 App);⇧+数字选当前 App 的第 N 扇窗。") {
+                    BeamSwitch(isOn: digitPicksAppBinding)
+                }
                 SettingsRow(title: "App 内切换窗口", key: "`", desc: "在同一个 App 的窗口之间移动。") {
                     BeamSwitch(isOn: $graveCyclesWindows)
                 }
-                SettingsRow(title: "切换 App") { KeyChip(text: "Tab / ⇧ Tab") }
+                SettingsRow(title: "切换 App") { KeyCapCluster(spec: "Tab / ⇧ Tab") }
                 SettingsRow(title: "切换窗口", desc: "仅有单个窗口时不响应。") {
-                    KeyChip(text: "← →")
+                    KeyCapCluster(spec: "← / →")
                 }
                 SettingsRow(title: "确认 / 放弃", hairline: false) {
-                    KeyChip(text: "松开 " + config.modifierSymbol + " / Esc")
+                    KeyCapCluster(spec: "松开 " + config.modifierSymbol + " / Esc")
                 }
             }
-            SettingsGroup(label: "窗口操作", anchor: SettingsView.Page.shortcut.anchor("窗口操作")) {
+            SettingsGroup(label: "窗口操作", icon: "macwindow.on.rectangle", anchor: SettingsView.Page.shortcut.anchor("窗口操作")) {
                 SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "操作完成后面板保持打开。") {
-                    KeyChip(text: "Q / W / M")
+                    KeyCapCluster(spec: "Q / W / M")
                 }
                 SettingsRow(title: "全屏 / 隐藏 App", desc: "隐藏后应用仍在列表中,但不再显示窗口预览。",
                             hairline: false) {
-                    KeyChip(text: "F / H")
+                    KeyCapCluster(spec: "F / H")
                 }
             }
         }
@@ -1000,6 +1089,15 @@ struct ShortcutPane: View {
 
     /// 篡位开关:开 = 触发键写成 ⌘Tab + 显式记下"用户要接管";关 = 清掉键(⇒ ⌥Tab)+ 撤销接管。
     /// **读的是显式 flag**,不是"触发键恰好是 ⌘Tab"——口径见 `TriggerConfig.takeoverEnabled`。
+    /// 「数字键直达 App」开关:AppStorage 走默认读取点(与 takeoverBinding 同款写法 ——
+    /// 读口在 `Keys.digitPicksApp`(唯一读取点 ✓),写完即生效(触发层每颗键现读 ✓))
+    private var digitPicksAppBinding: Binding<Bool> {
+        Binding(
+            get: { Keys.digitPicksApp },
+            set: { on in UserDefaults.standard.set(on, forKey: Keys.switchDigitPicksApp) }
+        )
+    }
+
     private var takeoverBinding: Binding<Bool> {
         Binding(
             get: { TriggerConfig.takeoverEnabled },

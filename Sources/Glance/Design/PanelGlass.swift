@@ -77,6 +77,10 @@ struct GlassBackground: NSViewRepresentable {
         fallback.material = .popover
         fallback.state = .active
         fallback.blendingMode = .behindWindow
+        fallback.wantsLayer = true
+        fallback.layer?.cornerRadius = cornerRadius
+        fallback.layer?.cornerCurve = .continuous
+        fallback.layer?.masksToBounds = true
         return fallback
     }
 
@@ -102,6 +106,10 @@ struct GlassBackground: NSViewRepresentable {
             if tint != context.coordinator.lastTint {
                 glass.tintColor = tint
                 context.coordinator.lastTint = tint
+            }
+        } else if let fallback = view as? NSVisualEffectView {
+            if fallback.layer?.cornerRadius != cornerRadius {
+                fallback.layer?.cornerRadius = cornerRadius
             }
         }
     }
@@ -161,8 +169,23 @@ extension View {
 }
 
 final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        // 面板与托盘窗口尺寸由 PanelController / TrayGeometry 单一权威驱动；
+        // 禁用 NSHostingView 默认的 intrinsic/minSize 反向推窗框，防止首帧淡入中途
+        // 被 SwiftUI 内部边距撑高（例如托盘 317pt → 412pt 跳变与后备存储重分配）。
+        if #available(macOS 13.0, *) { sizingOptions = [] }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     /// 透明呼吸区宽度,与对应视图的 `.padding(shadowPad…)` 同值
     var pad: CGFloat = 0
+    /// 顶部呼吸区宽度；nil 时沿用 `pad`（托盘顶缘紧贴卡片无需呼吸区，传 0 ✓）
+    var padTop: CGFloat?
 
     /// 滚轮 / 双指滑动 ⇒ 转交面板控制器,语义**等价于 Tab / ⇧Tab**(CONTEXT.md「走 / 跳」)。
     /// 为什么放在这个 view:滚动事件由系统按"指针底下的那个窗口"派发,只有它收得到;
@@ -198,10 +221,15 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
         super.mouseUp(with: event)
     }
 
-        override func hitTest(_ point: NSPoint) -> NSView? {
-        guard pad > 0 else { return super.hitTest(point) }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let top = padTop ?? pad
+        guard pad > 0 || top > 0 else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
-        guard bounds.insetBy(dx: pad, dy: pad).contains(local) else { return nil }
+        let hitRect = NSRect(x: bounds.minX + pad,
+                             y: bounds.minY + pad,
+                             width: max(0, bounds.width - pad * 2),
+                             height: max(0, bounds.height - pad - top))
+        guard hitRect.contains(local) else { return nil }
         return super.hitTest(point)
     }
 }

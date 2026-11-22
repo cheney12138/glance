@@ -137,37 +137,21 @@ struct PreviewPanelView: View {
             //   选中环跟着旧布局走一帧 = 「窗口四周一条白线闪一下」✗
             if controller.isRingSwapInFlight || controller.isContentSwapInFlight { t.animation = nil }
         }
-        // ★★ 2026-10-08(用户:「**预览容器没有渐入**, 跟环有点脱节, 稍微一点点」):
-        //   环在入场时是整块渐入(`PanelController.entryFade` ⇒ PanelView 的 `.opacity`)✓,
-        //   而托盘是**另一扇窗**,它上屏时直接 `alphaValue = 1` ⇒ 内容"啪"一下就到位 ✗
-        //   ⇒ 让它跟环用**同一个进度**(不是各写一套时长:同一个源 ⇒ 永远同步 ✓)
-        //   两个窗,一个源 —— 这是"两套东西必须同源"的老规矩在这条路上的又一次应用 ✓
-        .opacity(controller.entryFade)
+        // ★★ 2026-11-22 残帧修复（对齐 PanelView）：
+        //   入场淡入完全交给控制器驱动 `previewPanel.alphaValue`（`fadeInWindow`），
+        //   SwiftUI 内容层不再叠加 `.opacity(entryFade)` 与 `.opacity(isVisible ? 1 : 0)` ——
+        //   否则首帧 `flushPanelBackingStores` 与渐入前几拍会把整层内容画成透明空壳。
         // ★★ 2026-09-21 用户裁定:「把背景的圆角矩形撤掉 —— 就是最外面那一层,只要单个卡片容器和下面的芯片」
         // 原状:托盘 = 一大块圆角玻璃(GlassBackground + 圆角裁剪 + 受光边/内阴影 + tray 阴影),
         //   卡片与芯片都画在这块玻璃上 ⇒ 换组时"玻璃不动、里面的东西动"看得特别清楚 ✗
-        //   (用户原话:"不是窗框移动,是里面的快照移动了" ✓)
-        // 现在:最外层玻璃整层撤掉 ⇒ 可见元素只剩**每张卡自己的容器**与**芯片** ⇒
-        //   换组的位移只可能来自卡片自己 ⇒ 而卡已经改成固定槽位(方案 A)⇒ 看得见的东西不再动 ✓
-        // 几何仍按原口径算(`previewContentSize` 的 trayPad 等在位)—— 只撤视觉层,不动尺寸账 ✓
-        // **入场上浮**:整块托盘(玻璃 + 卡片)从"原位置再低一小截"浮到该在的位置。
-        // 与长条里**选中格 + 托底**用的是同一个值、同一次 withAnimation —— 所以这两边永远同步上浮,
-        // 其余图标不动(2026-09-15 用户口径:"他们俩直接从原位置开始上浮")。
-        // 退场仍不做动效(2026-09-14 砍的:用户实评"拖沓"),窗口由控制器直接 orderOut
+        // 现在:最外层玻璃整层撤掉 ⇒ 可见元素只剩每张卡自己的容器与芯片。
         .offset(y: controller.contentEntryRise)
-        // 几何仍按原口径留出阴影留白(与 `previewContentSize`/`TrayGeometry` 一致 ✓)
-        // —— 只撤**视觉层**,不动尺寸账 ⇒ 窗口大小/位置与之前完全一致 ✓
-        .padding(PanelMetrics.shadowPadPop)
-        // 托盘窗口按**整局最大布局**开(见 PanelController.trayMaxContentSize):本组摆得小时,
-        // 玻璃要**贴着窗口底边**(= 与今天等尺寸时的位置完全一致),水平居中由默认对齐负责。
-        // 不这么摆的话内容会在更大的窗口里垂直居中 → 玻璃整体上浮一截,和长条之间的缝就变了
-        // ★ 2026-09-21 用户实评:「你先这样固定完之后, 比如 DataGrip, 容器跟 App 的位置错了十万八千里」✗
-        //   ⇒ 左端锚定的代价被亲眼看到:托盘窗宽 = **本局最大行宽** ⇒ 单个窗口的 App(行宽 268 vs 窗口 838)
-        //     被钉在窗口最左边 ⇒ 卡片飘在远处、跟底部选中的图标**毫无视觉关系** ✗
-        //   ⇒ 回到**居中**:卡片始终落在托盘中轴附近 ✓(与图标圈的语义关联靠高亮承担 ✓);
-        //     代价是换组时整排平移 —— 这一条用户已明确接受(「保留形状,接受位移」✓ ADR-0014)
+        // 几何仍按原口径留出阴影留白(与 `TrayGeometry` 一致:左右 + 底部 `shadowPadPop`，顶部不留 padding，
+        // 否则会把 SwiftUI 最小高度撑到 content+2*pad = 412pt，与 TrayGeometry 的 content+pad = 317pt 冲突)
+        .padding(.horizontal, PanelMetrics.shadowPadPop)
+        .padding(.bottom, PanelMetrics.shadowPadPop)
+        // 居中摆放,与底部选中图标保持中心对齐(ADR-0014)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .opacity(controller.isVisible ? 1 : 0)
     }
 
     /// 卡片网格。一行摆得下就是一行(与旧版完全一样),摆不下才换行 ——
@@ -307,7 +291,6 @@ struct PreviewPanelView: View {
                           //   芯片的语义就是"我点了第 i 枚":选中它 → 直接确认 ✓
                           onTap: { i in controller.hoverWindow(i); controller.confirmSelection() },
                           entryTick: controller.entryTick,
-                          entryFloat: controller.entryFloat,
                           visible: controller.isVisible,
                           suppressExitAnimation: controller.isContentSwapInFlight || controller.isRingSwapInFlight)
         } else {
@@ -372,24 +355,26 @@ struct PreviewPanelView: View {
     private func thumb(at i: Int, showsChip: Bool = true, face: CGSize? = nil,
                        settlesOnGroupChange: Bool = false) -> some View {
         let w = windows[i]
-        // 🔬 一次性账:卡片把窗口放大/裁掉了多少(判定"截图比真窗还大"这一族问题)
-        let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
-        _ = CardSizeLog.once(record: w, cardW: box.width, cardH: box.height)
-        CardSizeLog.changed(record: w, cardW: box.width, cardH: box.height)   // 🔬 只在"变了"时报
-        // 🔬 量两把尺子(源 / 图比例 / 盒子比例 / 快照比例)
-        let liveFrame = LivePreviewPool.shared.box(for: w.wid).image
         let shot = snapshotter.cache[w.wid]
-        let liveAspect = liveFrame.map { CGFloat($0.width) / CGFloat($0.height) }
-        let shotAspect = shot?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            .map { CGFloat($0.width) / CGFloat($0.height) }
+        if isTraceEnabled {
+            // 🔬 一次性账与两把尺子对账:仅 trace 模式下执行,常态零 cgImage/字符串开销 ✓
+            let box = PanelMetrics.thumbSize(real: w.bounds.size, aspect: w.aspect)
+            _ = CardSizeLog.once(record: w, cardW: box.width, cardH: box.height)
+            CardSizeLog.changed(record: w, cardW: box.width, cardH: box.height)
+            let liveFrame = LivePreviewPool.shared.box(for: w.wid).image
+            let liveAspect = liveFrame.map { CGFloat($0.width) / CGFloat($0.height) }
+            let shotAspect = shot?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                .map { CGFloat($0.width) / CGFloat($0.height) }
+            CardRulerLog.check(wid: w.wid,
+                               source: liveFrame != nil ? "live" : (shot != nil ? "快照" : "静默"),
+                               box: box, imageAspect: liveAspect ?? shotAspect, shotAspect: shotAspect)
+        }
         if DebugFlags.dumpSources {
             let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+            let liveFrame = LivePreviewPool.shared.box(for: w.wid).image
             SourceDump.dump(key: "shot-\(w.wid)", shot?.cgImage(forProposedRect: nil, context: nil, hints: nil), dir)
             SourceDump.dump(key: "live-\(w.wid)", liveFrame, dir)
         }
-        CardRulerLog.check(wid: w.wid,
-                           source: liveFrame != nil ? "live" : (shot != nil ? "快照" : "静默"),
-                           box: box, imageAspect: liveAspect ?? shotAspect, shotAspect: shotAspect)
         return WindowThumb(
             record: w,
             bundleID: controller.currentGroup?.bundleID,
@@ -422,7 +407,7 @@ struct PreviewPanelView: View {
             //   卡片只能先显示 App 图标(用户:「第一次开始出现 app 图标了…别越改越坏了」)✗
             //   ⇒ 垫图留在原位。半透明窗(`[源比]` 里那个 0.886 的 alpha)那一下还没治好,
             //     但**宁可一次小闪,也不要一张空卡** ✓
-            image: snapshotter.cache[w.wid],
+            image: w.isMinimized ? nil : snapshotter.cache[w.wid],
             // 卡面 = 按真窗比例(用户的原始设计 ✓);换组位移已知并接受 ✓
             // 单窗口时由调用方给一张"放宽过的脸"(见 `PanelMetrics.soloWiden`)✓
             face: face,
@@ -443,7 +428,6 @@ struct PreviewPanelView: View {
             settlesOnGroupChange: settlesOnGroupChange,
             chipEntersFromRight: windows.count == 1,
             entryTick: controller.entryTick,
-            entryFloat: controller.entryFloat,
             showsChip: showsChip,
             // 换环(↓/↑/Tab 跨段)那一拍:卡片的选中动画一律不给(否则换组时整行重排被动画化 ⇒ 从左边浮出来)
             motionSuppressed: controller.isRingSwapInFlight || controller.isContentSwapInFlight,
@@ -457,7 +441,8 @@ struct PreviewPanelView: View {
                     minimize: { controller.minimizeWindowClicked(w.wid) },
                     zoom: { controller.zoomWindowClicked(w.wid) },
                     dimmed: !(i == controller.winIndex),
-                    closeDisabled: w.pid == ProcessInfo.processInfo.processIdentifier
+                    closeDisabled: w.pid == ProcessInfo.processInfo.processIdentifier,
+                    minimizeDisabled: w.isMinimized
                 )
             },
         )
@@ -511,22 +496,15 @@ struct PreviewPanelView: View {
     private func launchCell(_ i: Int) -> some View {
         let app = controller.launchables[i]
         let selected = i == controller.launchIndex
-        return ZStack {
-            // **幽灵贴座位**(T84):未启动图标不再裸坐 —— 与主环入口槽的空壳是同一枚贴。
-            // 一致性从这条韵脚来:入口槽 = "还没装图的壳",启动行 = "装了图的壳";
-            // 图标收到壳的 76%,壳露出一圈才读得出"座位"
-            GhostTile()
-                .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            Image(nsImage: app.icon)
-                .resizable()
-                .renderingMode(.original)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: PanelMetrics.icon * 0.76, height: PanelMetrics.icon * 0.76)
-                .saturation(glow ? (selected ? 1.15 : 0.92) : 1)
-                .brightness(glow ? (selected ? 0.05 : -0.04) : 0)
-        }
-        .scaleEffect(selected ? PanelMetrics.iconScale : 1)
-        .offset(y: selected ? -PanelMetrics.iconLift : 0)
+        return Image(nsImage: app.icon)
+            .resizable()
+            .renderingMode(.original)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
+            .saturation(selected ? (glow ? 1.12 : 1.0) : 0.38)
+            .brightness(selected ? (glow ? 0.04 : 0) : -0.07)
+            .scaleEffect((selected ? PanelMetrics.iconScale : 1) * app.fill)
+            .offset(y: selected ? -PanelMetrics.iconLift : 0)
             .elevation(.icon, active: selected)   // 帧率优先:只有选中的那颗有投影(与主环同款)
             .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
             // **不要托底了**(用户 2026-09-16 裁定):启动行只要"上浮"这一层反馈。
@@ -600,8 +578,6 @@ private struct WindowThumb<Overlay: View>: View {
     var chipEntersFromRight: Bool = false
     /// 入场令牌(每开一局 +1;见 `PanelController.entryTick`)—— 入场动效**只认它** ✓
     var entryTick: Int = 0
-    /// 入场进度(独立小对象 ⇒ 每拍只重绘用到它的小块,不再拖整块面板)✓
-    @ObservedObject var entryFloat: EntryFloatModel
     /// 面板是否可见(同轨道那条理由:常驻视图不会 onAppear)✓
     var visible: Bool = false
     /// **是否在卡片下方画芯片**(2026-10-25,ADR-0017):轨道模式下由右侧轨道承担芯片 ⇒ 卡片不带 ✓
@@ -689,6 +665,9 @@ private struct WindowThumb<Overlay: View>: View {
     /// 磨砂层的透明度(1 = 全糊,0 = 清晰)。切换选中时与 `dim` 同一套时机推进 ⇒ 两条过渡永远同拍 ✓
     @State private var blurFade: Double = 0
     private var blurFadeTarget: Double { selected ? 0 : 1 }
+    /// 后台静态磨砂落账后的局部刷新计数(只触发本 wid 对应卡的重绘,不惊动整块托盘)
+    @State private var blurRev = 0
+
     /// **最新那一帧的磨砂版**(非选中卡用它;选中期间在后台按 ≤5fps 重算)
     @State private var blurredLive: CGImage?
     @State private var blurBusy = false
@@ -780,7 +759,8 @@ private struct WindowThumb<Overlay: View>: View {
     ///   「整个操作过程中我根本没有切换窗口 ⇒ 选中卡片时,它应该只是蒙层的玻璃变化,内容确实是在的」
     ///   ⇒ 底图**永远是最后那一帧流**(不分选中),非选中只是把**这一帧**糊掉 ⇒ 内容连续 ✓
     private var liveFrame: CGImage? {
-        LivePreviewPool.enabled ? liveBox.image : nil
+        guard !record.isMinimized else { return nil }
+        return LivePreviewPool.enabled ? liveBox.image : nil
     }
 
     var body: some View {
@@ -839,7 +819,7 @@ private struct WindowThumb<Overlay: View>: View {
         // 明暗重置,并且**这一张是新出现的** ⇒ 落位一次 ✓
         // 每来一帧(过渡期也来)⇒ 最多 5 次/秒重算磨砂(§见 `refreshBlurredLive`)
         .onChange(of: liveBox.image.map { ObjectIdentifier($0) }) { _, _ in
-            guard !selected else { return }
+            guard !selected, !record.isMinimized else { return }
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastBlurAt < 0.2 { return }
             lastBlurAt = now
@@ -847,7 +827,7 @@ private struct WindowThumb<Overlay: View>: View {
         }
         .onChange(of: selected) { _, nowSel in
             // 刚变成非选中:立刻把"最后那一帧"糊一次(宽限期内流还在跑,后面会继续跟)
-            if !nowSel { lastBlurAt = 0; refreshBlurredLive() }
+            if !nowSel, !record.isMinimized { lastBlurAt = 0; refreshBlurredLive() }
         }
         .onChange(of: record.wid) { _, _ in
             landDim()
@@ -871,6 +851,10 @@ private struct WindowThumb<Overlay: View>: View {
             // ★ 2026-10-26 用户:「不是第一次唤起才有, 是**每次切换 App** 都要有;
             //   App 组内卡片切换保持现状」⇒ 单窗口那一局的芯片入场也认"换组"✓
             //   (多窗口组由轨道的 `onChange(bundleID)` 负责浮出 ✓)
+        }
+        // 后台磨砂图算好后只刷新匹配本 wid 的那张非选中卡
+        .onReceive(NotificationCenter.default.publisher(for: CardImageCache.blurDidFill)) { note in
+            if !selected, (note.object as? CGWindowID) == record.wid { blurRev &+= 1 }
         }
     }
 
@@ -932,6 +916,7 @@ private struct WindowThumb<Overlay: View>: View {
                     //   · 优先用**实时帧的磨砂版**(选中期间一直在后台按 ≤5fps 重算)⇒ 内容是新的 ✓
                     //   · 还没有过任何实时帧(本次运行从没选中过它)⇒ 退回**快照的磨砂版** ✓
                     if !selected {
+                        let _ = blurRev
                         if let b = blurredLive {
                             Image(decorative: b, scale: 1).resizable()
                                 .scaledToFill()
@@ -973,12 +958,10 @@ private struct WindowThumb<Overlay: View>: View {
                 //   出现时机:本次运行里这扇窗还没有过任何一帧(实测 ≈40–150ms)⇒ 一闪而过。
                 ZStack {
                     Rectangle().fill(PanelColors.thumbBg)
-                    if let icon = AppIconCache.icon(pid: record.pid) {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .frame(width: box.height * 0.34, height: box.height * 0.34)
-                            .opacity(0.35)
-                    }
+                    Image(nsImage: IconProvider.art(for: record.pid, bundleID: bundleID).image)
+                        .resizable()
+                        .frame(width: box.height * 0.34, height: box.height * 0.34)
+                        .opacity(0.35)
                 }
             }
         }
@@ -988,7 +971,8 @@ private struct WindowThumb<Overlay: View>: View {
         //   于是 `dim` 一变(组内换窗就会变),这两条动画就把 **frame 的尺寸** 一起插值 ✗
         //   ⇒ 把"明暗/模糊"挪进 frame **里面**(只包住绘制),frame 留在动画之外 ⇒ 几何当拍落 ✓
         .opacity(dim)
-        .saturation(selected ? 1 : 0.88)
+        .saturation(record.isMinimized ? 0 : (selected ? 1 : 0.88))
+        .brightness(record.isMinimized ? -0.05 : 0)
         .animation(fadeMotion, value: dim)      // 只认 dim(现在它真的只影响绘制 ✓)
         .animation(fadeMotion, value: blurFade)
         .frame(width: box.width, height: box.height)
@@ -1044,6 +1028,30 @@ private struct WindowThumb<Overlay: View>: View {
                     .transaction { $0.animation = nil }
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if record.isMinimized {
+                HStack(spacing: 4) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(PanelColors.tlMin)
+                    Text("已最小化")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.black.opacity(0.55))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                        )
+                )
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+        }
         .background(PanelColors.thumbBg)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rThumb, style: .continuous))
         // ★★ 2026-10-20(用户:「卡片有点太单薄了,加点阴影,显得有厚度」):两层影子,挂在**一块
@@ -1095,28 +1103,31 @@ private struct WindowThumb<Overlay: View>: View {
     /// 我们不用绿 —— 用户口径"依旧保持跟随系统色" ✓),只是从标题前面挪到胶囊右端。
     private var chip: some View {
         HStack(spacing: 5) {
-            // 取 `AppIconCache`(按 pid 缓存 ✓ 不进渲染路径的重活 ✗)
-            if let appIcon = AppIconCache.icon(pid: record.pid) {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
-                    // demo:图标是 6px 圆角方形(6/20 = 0.30,不是 emoji 风格)⇒ 收一道小圆角
-                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
-                                                style: .continuous))
-                    // ★ 2026-10-25(V3,用户从实验台里挑的):未选中**只去饱和**,不动透明度 ——
-                    //   整排图标安静下来,字却一个像素不变 ⇒ 可读性零风险 ✓
-                    .saturation(selected ? 1 : 0.35)
-            }
+            // 走统一的 `IconProvider`(后台异步解析 + 主线程零 XPC ✓,2026-11-20 淘汰独立同步的 AppIconCache)
+            Image(nsImage: IconProvider.art(for: record.pid, bundleID: bundleID).image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
+                // demo:图标是 6px 圆角方形(6/20 = 0.30,不是 emoji 风格)⇒ 收一道小圆角
+                .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
+                                            style: .continuous))
+                // ★ 2026-10-25(V3,用户从实验台里挑的):未选中**只去饱和**,不动透明度 ——
+                //   整排图标安静下来,字却一个像素不变 ⇒ 可读性零风险 ✓
+                .saturation(record.isMinimized ? 0 : (selected ? 1 : 0.65))
+                .opacity(record.isMinimized ? (selected ? 0.60 : 0.46) : 1)
             Text(displayTitle)
                 // regular 而不是 medium:芯片要"轻",字重是最直接的一档(题头那边用 medium 是因为它是标题)
                 .font(.system(size: PanelMetrics.titleSize, weight: .regular))
                 .foregroundStyle(PanelColors.thumbTitle)
+                .opacity(record.isMinimized ? (selected ? 0.88 : 0.66) : 1)
                 .lineLimit(1)
                 // 中段:芯片宽度不够时保头保尾(尾部才是文件名/工程的区分位)
                 .truncationMode(.middle)
                 // 占满中段 ⇒ 圆点被顶到胶囊右端(demo 的 flex:1 同手法)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if record.isMinimized {
+                chipMinimizeBadge(opacity: selected ? 0.95 : 0.75)
+            }
             // 选中圆点:占位永远在(避免文字跳),只有选中那一枚亮成系统强调色
             // V3:未选中那枚改成**空心**(实心点会抢注意力;空心只交代"位子在这")
             Circle()
@@ -1135,9 +1146,8 @@ private struct WindowThumb<Overlay: View>: View {
             //   纯白背景上也能读出一块(与加深后的 chipBg 互补,不是替代)
             // V3:未选中**不投影**(影子是"浮起来"的语言,不属于非选中)⇒ 只留选中那枚的影子
             .shadow(color: .black.opacity(selected ? 0.10 : 0), radius: 3, y: 1)
-            .overlay(Capsule(style: .continuous)
-                .strokeBorder(selected ? PanelColors.chipBorder : PanelColors.chipBorderOff,
-                              lineWidth: PanelMetrics.hairline))
+            .overlay(chipCapsuleBorder(selected ? PanelColors.chipBorder : PanelColors.chipBorderOff,
+                                       minimized: record.isMinimized))
             // **没有高光唇**(2026-09-14 深夜删掉的那一段,别加回来):
             // 这里原本有一条"上缘受光唇"—— 沿胶囊弧走、往下收干的一道亮边,理由是"深色里靠受光边
             // 交代我是一块玻璃"。但用户看到的是另一种东西:"像是零几年的 macOS 那种玻璃质感,太过时了"。
@@ -1412,9 +1422,14 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
                 // (选中在闸期间可能已经换过:面板开着的前 1.2 秒用户完全可能按 Tab ✓)
                 self.lastItems = items
                 self.lastSelected = selected
-                self.queue.asyncAfter(deadline: .now() + (openAt - now0) + 0.02) { [weak self] in
-                    guard let self, self.isAccepting else { return }
-                    self.sync(self.lastItems, selected: self.lastSelected, force: true)
+                if !self.gateRetryScheduled {
+                    self.gateRetryScheduled = true
+                    self.queue.asyncAfter(deadline: .now() + (openAt - now0) + 0.02) { [weak self] in
+                        guard let self else { return }
+                        self.gateRetryScheduled = false
+                        guard self.isAccepting else { return }
+                        self.sync(self.lastItems, selected: self.lastSelected, force: true)
+                    }
                 }
                 return
             }
@@ -1545,6 +1560,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             self.handles.removeAll(); self.wanted.removeAll(); self.activeGens.removeAll()
             self.startedAt.removeAll(); self.firstFrameLogged.removeAll()
             self.idleSince.removeAll(); self.pending.removeAll()
+            self.gateRetryScheduled = false
             glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.latest.count) 张")
         }
     }
@@ -1722,6 +1738,7 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
             cfg.queueDepth = 3; cfg.showsCursor = false; cfg.capturesAudio = false
             cfg.scalesToFit = false
             cfg.ignoreShadowsSingleWindow = true     // 与快照链一致(病例 B6:内容框也要同源)
+            cfg.colorSpaceName = CGColorSpace.sRGB   // 请求 GPU/SCK 直接出 sRGB,命中的帧免走 CPU 重绘(下方仍有兜底 ✓)
             let filter = SCContentFilter(desktopIndependentWindow: win)
             // ★★ 2026-10-14 静帧占位(用户:「打开即有真图」✓;当年错位的病根 = **两个图源两把尺子** ✗)
             //   当年:`CGWindowListCreateImage` 自己算取景/缩放 ✗ ⇒ 与 live 差一点点像素
@@ -1791,11 +1808,12 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// 这扇窗的帧是不是**带透明**(窗口半透明)。每扇窗只判一次(16×16 采样)。
-    private var translucentWIDs: Set<CGWindowID> = []
+    /// 这扇窗的帧是不是**带透明**(窗口半透明)。每扇窗只判一次(16×16 采样),正反结果都缓存。
+    /// (旧版用 Set 只缓 true ⇒ 99% 不透明窗口每帧 20–30fps 都重跑一次 16×16 CGContext 重绘 ✗)
+    private var translucentCache: [CGWindowID: Bool] = [:]
     private var translucentLogged: Set<CGWindowID> = []
     private func isTranslucent(_ img: CGImage, wid: CGWindowID) -> Bool {
-        if translucentWIDs.contains(wid) { return true }
+        if let cached = translucentCache[wid] { return cached }
         let side = 16
         var buf = [UInt8](repeating: 0, count: side * side * 4)
         let ok = buf.withUnsafeMutableBytes { raw -> Bool in
@@ -1815,8 +1833,9 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         var translucent = 0
         for i in stride(from: 3, to: buf.count, by: 4) where Int(buf[i]) < 240 { translucent += 1 }
         let ratio = Double(translucent) / Double(side * side)
-        if ratio > 0.20 { translucentWIDs.insert(wid); return true }
-        return false
+        let result = ratio > 0.20
+        translucentCache[wid] = result
+        return result
     }
 
     fileprivate func ingest(_ sb: CMSampleBuffer, wid: CGWindowID, gen g: Int) {
@@ -1888,10 +1907,15 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
         latest[wid] = img
         gateLock.lock(); cachedFrames[wid] = img; gateLock.unlock()
         while latestOrder.count > 10 {
-            let old = latestOrder.removeFirst()
-            if !wanted.contains(old) {
-                latest[old] = nil
-                gateLock.lock(); if cachedFrames[old] != nil { cachedFrames[old] = nil }; gateLock.unlock()
+            guard let idx = latestOrder.firstIndex(where: { !wanted.contains($0) }) else { break }
+            let old = latestOrder.remove(at: idx)
+            latest[old] = nil
+            translucentCache.removeValue(forKey: old)
+            translucentLogged.remove(old)
+            gateLock.lock(); if cachedFrames[old] != nil { cachedFrames[old] = nil }; gateLock.unlock()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.cachedFrame(for: old) == nil else { return }
+                self.boxes.removeValue(forKey: old)
             }
         }
         // ★ 只把"**当前显示组**"的帧交给主线程(2026-09-21,归因量出来的账)。
@@ -1935,20 +1959,7 @@ final class LiveOutput: NSObject, SCStreamOutput, @unchecked Sendable {
 /// 卡片只有 ~207×122pt,而快照是 720px 宽 ⇒ 每次重建都要 decode + 缩放(主线程 ✗)。
 /// 病例(2026-09-21):托盘更新平时 0.1–0.3ms,一换 app 就 **10–27ms** ⇒ 同帧滑块弹簧掉帧。
 /// 现在:后台按**卡片设备像素尺寸**缩放一次并缓存;顺带与实时帧同一规格(1:1)。
-/// App 图标缓存(按 pid)—— 静默态用。
-/// 为什么缓存:`NSRunningApplication(processIdentifier:)` 是系统查询,不该在渲染路径里反复问 ✗
-private enum AppIconCache {
-    private static let lock = NSLock()
-    private static var store: [pid_t: NSImage] = [:]
-    static func icon(pid: pid_t) -> NSImage? {
-        lock.lock()
-        if let i = store[pid] { lock.unlock(); return i }
-        lock.unlock()
-        guard let i = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
-        lock.lock(); store[pid] = i; lock.unlock()
-        return i
-    }
-}
+/// (原 `AppIconCache` 已于 2026-11-20 合并至 `Design/IconProvider`,消除主线程同步 IconServices XPC)
 
 /// 卡片尺寸 vs 真实窗口尺寸的**一次性账**(每扇窗一条) —— 用来判定"卡片把窗口放大了多少"。
 /// 🔬 量"两把尺子"差多少(2026-09-21,查"换 app 时卡里的内容缩一下"):
@@ -2082,18 +2093,25 @@ final class CardImageCache {
     struct Prepared { let cg: CGImage; let scale: CGFloat }
     static let shared = CardImageCache()
 
+    /// 后台静态磨砂计算完成通知(object = CGWindowID),只通知对应卡片局部刷新
+    static let blurDidFill = Notification.Name("glance.cardBlurDidFill")
+
     /// 与 `Design/ImageCache.swift` 同一本账(2026-09-22 合并自两份同形状的代码;座的缓存随
     /// 「座」整体退役 —— 遮罩改成了容器自己的静态雾檐,见 `PanelColors.thumbHaze` ✓)——
     /// 于是**同一个"卡在 inFlight"的 bug 被抄了两遍** ✗
     /// ⚠️ 键是 **(窗 id + 像素尺寸)**，不是"只有窗 id" —— 病例见 `GlanceCore/ImageCacheKey.swift`:
     /// 键只看 id 时，卡片尺寸上限/缩放一变就**永远命中旧尺寸那张图** ✗
-    private let cache = ImageCache<ImageCacheKey.Card, Prepared>(label: "glance.cardimg")
-    /// ★ 磨砂**烘焙**而不是在视图里 `.blur()`:未选中卡可能有十几张,
-    ///   每帧跑十几遍高斯比原来更贵 ✗ ⇒ 一张只算一次,之后就是贴图 ✓
-    private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
+    private let cache = ImageCache<ImageCacheKey.Card, Prepared>(label: "glance.cardimg", maxEntries: 64)
 
     /// 换屏/显示配置变化时清空(图是按当时那块的 scale 缩过的 ✗ 不能跨屏复用)
-    func reset() { cache.reset(); blurStore.removeAll() }
+    func reset() {
+        cache.reset()
+        blurLock.lock()
+        blurStore.removeAll()
+        blurOrder.removeAll()
+        blurInFlight.removeAll()
+        blurLock.unlock()
+    }
 
     /// 磨砂版(非选中卡用)。**与锐版同一把尺子**(同裁剪、同像素尺寸)⇒ 交接时几何不变 ✓
     ///
@@ -2101,37 +2119,73 @@ final class CardImageCache {
     ///   缓存 key 里**没有"这是第几版快照"** ⇒ 保温拍了新图之后,锐图已经换成新的、
     ///   磨砂还是上一版 ⇒ 选中那一刻"糊的"和"清的"根本是两张不同的画面 ✗
     ///   ⇒ key 里带上**源图身份**(`ObjectIdentifier`)—— `image` 换了实例就必然 miss 重算 ✓
-    ///   (用一本手写字典而不是 `ImageCache`:键是动态身份的,旧条目要能被清掉)
+    ///
+    /// ★★ 2026-11-20 性能修复:改为**后台异步计算** + 单飞去重 + 按最老逐条淘汰(≤48)。
+    ///   旧版在主线程 SwiftUI body 里同步执行 `Self.draw` + `CIGaussianBlur` + `createCGImage`,
+    ///   多窗口首帧或快照刷新会在主线程连续同步跑多张高斯模糊,且超 48 张时整本清空引发突发卡顿 ✗。
+    ///   现在未命中立即返回 nil,后台算完落账并只发 `blurDidFill(wid)` 刷新该卡 ✓。
     func blurredImage(wid: CGWindowID, source: NSImage, target: CGSize,
                       radius: CGFloat) -> Prepared? {
-        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let scale = PanelScreen.scale
         let key = ImageCacheKey.card(windowID: wid, target: target, scale: scale)
         let pxW = key.pixelWidth, pxH = key.pixelHeight
         let srcID = ObjectIdentifier(source).hashValue
         let k = "\(wid)-\(srcID)-\(pxW)x\(pxH)-\(Int(radius))"
-        if let hit = blurStore[k] { return hit }
-        if blurStore.count > 48 { blurStore.removeAll() }
-        let out: Prepared? = {
-            guard let sharp = Self.draw(cg, pxW: pxW, pxH: pxH) else { return nil }
-            let rect = CGRect(x: 0, y: 0, width: pxW, height: pxH)
-            let input = CIImage(cgImage: sharp).clampedToExtent()
-            guard let f = CIFilter(name: "CIGaussianBlur",
-                                   parameters: [kCIInputImageKey: input,
-                                                kCIInputRadiusKey: radius * scale]),
-                  let out = f.outputImage?.cropped(to: rect),
-                  let cgOut = self.ciContext.createCGImage(out, from: rect,
-                                                           format: .BGRA8,
-                                                           colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-            else { return nil }
-            return Prepared(cg: cgOut, scale: scale)
-        }()
-        blurStore[k] = out
-        return out
+
+        blurLock.lock()
+        if let hit = blurStore[k] { blurLock.unlock(); return hit }
+        if blurInFlight.contains(k) { blurLock.unlock(); return nil }
+        blurLock.unlock()
+
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+
+        blurLock.lock()
+        if let hit = blurStore[k] { blurLock.unlock(); return hit }
+        if blurInFlight.contains(k) { blurLock.unlock(); return nil }
+        blurInFlight.insert(k)
+        blurLock.unlock()
+
+        CardBlur.queue.async { [weak self] in
+            guard let self else { return }
+            let prepared: Prepared? = {
+                guard let sharp = Self.draw(cg, pxW: pxW, pxH: pxH) else { return nil }
+                let rect = CGRect(x: 0, y: 0, width: pxW, height: pxH)
+                let input = CIImage(cgImage: sharp).clampedToExtent()
+                guard let f = CIFilter(name: "CIGaussianBlur",
+                                       parameters: [kCIInputImageKey: input,
+                                                    kCIInputRadiusKey: radius * scale]),
+                      let out = f.outputImage?.cropped(to: rect),
+                      let cgOut = CardBlur.context.createCGImage(out, from: rect,
+                                                                 format: .BGRA8,
+                                                                 colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+                else { return nil }
+                return Prepared(cg: cgOut, scale: scale)
+            }()
+            self.blurLock.lock()
+            self.blurInFlight.remove(k)
+            if let prepared {
+                if self.blurStore[k] == nil { self.blurOrder.append(k) }
+                self.blurStore[k] = prepared
+                while self.blurOrder.count > 48 {
+                    let old = self.blurOrder.removeFirst()
+                    self.blurStore.removeValue(forKey: old)
+                }
+            }
+            self.blurLock.unlock()
+            if prepared != nil {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.blurDidFill, object: wid)
+                }
+            }
+        }
+        return nil
     }
 
     /// 磨砂版的手写账(见 `blurredImage` 的病例:键必须带源图身份)
+    private let blurLock = NSLock()
     private var blurStore: [String: Prepared] = [:]
+    private var blurOrder: [String] = []
+    private var blurInFlight: Set<String> = []
 
     /// 把源图按 **.fill 中心裁剪**画进 sRGB 定尺位图(锐/磨砂两条路共用 ⇒ 几何不会各算一套 ✓)
     private static func draw(_ cg: CGImage, pxW: Int, pxH: Int) -> CGImage? {
@@ -2150,12 +2204,13 @@ final class CardImageCache {
     }
 
     func image(wid: CGWindowID, source: NSImage, target: CGSize) -> Prepared? {
-        // 老代码在主线程做这一步 ⇒ 保持不变 ✓(而且它在登记之前 ⇒ 失败不占账 ✓)
-        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let scale = PanelScreen.scale                                    // 主线程取 ✓
         // 目标尺寸由调用方给(方案 A:小窗不放大 ⇒ 目标可能小于卡片框)
         // 像素尺寸与"钥匙"都由纯函数算 ⇒ 两者不会各算一套(那是这类 bug 的温床 ✗)
         let key = ImageCacheKey.card(windowID: wid, target: target, scale: scale)
+        if let hit = cache.cached(key) { return hit }                    // 命中零 cgImage 开销 ✓
+        // 老代码在主线程做这一步 ⇒ 保持不变 ✓(而且它在登记之前 ⇒ 失败不占账 ✓)
+        guard let cg = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let pxW = key.pixelWidth, pxH = key.pixelHeight
         return cache.image(for: key) {
             var out: CGImage?
@@ -2224,8 +2279,6 @@ struct ChipRailGroup: View {
     let onTap: (Int) -> Void
     /// 入场令牌(每开一局 +1)⇒ 同一个 App 组再次唤起也重播浮出 ✓
     var entryTick: Int = 0
-    /// 入场进度(独立小对象,见 `EntryFloatModel`)✓
-    @ObservedObject var entryFloat: EntryFloatModel
     /// 面板是否可见 —— **常驻视图不会 `onAppear`**,而隐藏期间的 `entryTick` 变化可能根本没被求值
     /// ⇒ 入场浮出也要认"从隐藏变可见"这一拍 ✓
     var visible: Bool = false
@@ -2359,15 +2412,24 @@ struct ChipRailGroup: View {
                         // ★ 退场动画(⌘W):缩一点 + 淡出。**换组/换环那一拍用 identity 不播** ——
                         //   稳定 id 下换组时旧 wid 全部消失,若不抑制整列芯片都会播退场 ✗
                         //   (内容交换窗口期 = 换组/换环后的第一小段,与 FLIP 守卫同源 ✓)
-                        .transition(suppressExitAnimation
-                                    ? .identity
-                                    : .opacity.combined(with: .scale(scale: 0.90)))
+                        // ★★ 2026-11-12(用户:「偶尔唤起面板…芯片轨道会是上浮出现的,不符合预期」):
+                        //   **插入也一律不播**(asymmetric insertion = identity)—— 唤起那一拍
+                        //   名单从空/陈旧变成真枚举,芯片列插入即淡入+缩放 = "上浮出现" ✗
+                        //   (散场时 groups=[] ⇒ 名单清空,再次唤起 = 整列重新插入,正是"偶尔"
+                        //   的来源 ✓)。只有 ⌘W 删窗的**退场**才是这个动画的正当场合 ✓
+                        //   芯片到位即显示(与 2026-10-27「去掉芯片动画」的定论同一条纪律 ✓)
+                        .transition(.asymmetric(
+                            insertion: .identity,
+                            removal: suppressExitAnimation
+                                ? .identity
+                                : .opacity.combined(with: .scale(scale: 0.90))))
                 }
             }
-            // ★ removal 动画的发条(transition 只是定义,真正动起来需要这一拍处在动画事务里):
-            //   窗口 wid 集合变化(⌘W 删窗)时启动 0.18s 动画 ⇒ 被删芯片的退场真的播出来;
+            // ★ removal / 最小化原地挪尾的排序动画发条：
+            //   窗口 wid 序列变化（⌘W 删窗或 ⌘M 最小化挪尾）时启动轻弹簧 ⇒ 芯片顺滑补位/滑向队尾；
             //   换组/换环那一拍由下面的 transaction 守卫把动画置 nil ⇒ 不播 ✓
-            .animation(.easeOut(duration: 0.18), value: windows.map(\.wid))
+            .animation(MotionPolicy.animation(.spring(response: 0.28, dampingFraction: 0.86)),
+                       value: windows.map(\.wid))
             .transaction { t in
                 if suppressExitAnimation { t.animation = nil }
             }
@@ -2407,15 +2469,13 @@ struct ChipRailGroup: View {
                         : 0
         let title = PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID))
         return HStack(spacing: 6) {
-            if let icon = AppIconCache.icon(pid: w.pid) {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
-                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
-                                                style: .continuous))
-                    .saturation(0.28 + 0.72 * em)
-                    .opacity(0.75 + 0.25 * em)
-            }
+            Image(nsImage: IconProvider.art(for: w.pid, bundleID: bundleID).image)
+                .resizable()
+                .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
+                .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,
+                                            style: .continuous))
+                .saturation(w.isMinimized ? 0 : (0.65 + 0.35 * em))
+                .opacity(w.isMinimized ? (0.46 + 0.14 * em) : (0.86 + 0.14 * em))
             // 文字:两层叠着按 `em` 交叉淡 —— Color 不能直接插值,交叉淡是同一件事且更稳 ✓
             ZStack(alignment: .leading) {
                 Text(title)
@@ -2425,10 +2485,14 @@ struct ChipRailGroup: View {
                     .foregroundStyle(PanelColors.chipFgOn)
                     .opacity(em)
             }
+            .opacity(w.isMinimized ? (0.66 + 0.24 * em) : 1)
             .font(.system(size: PanelMetrics.titleSize, weight: .regular))
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
+            if w.isMinimized {
+                chipMinimizeBadge(opacity: 0.75 + 0.25 * em)
+            }
             ZStack {
                 Circle().fill(PanelColors.chipDotOff).opacity(1 - em)
                 Circle().fill(Color.accentColor).opacity(em)
@@ -2440,10 +2504,10 @@ struct ChipRailGroup: View {
         .frame(width: PanelMetrics.chipRailWidth, height: PanelMetrics.chipH, alignment: .center)
         // ★ 与老芯片**同一套材质**(chipBg 0.90 + 发丝边 + 极淡投影):
         //   透明底会被背后的代码文字干扰(用户实报「现在这个透明的有点被背景的文字干扰了」)✗
-        .background(Capsule(style: .continuous).fill(PanelColors.chipBg))
+        .background(Capsule(style: .continuous)
+            .fill(w.isMinimized ? PanelColors.chipBg.opacity(0.82 + 0.12 * em) : PanelColors.chipBg))
         .shadow(color: .black.opacity(0.10 + 0.05 * em), radius: 3 + 2 * em, y: 1 + 1 * em)
-        .overlay(Capsule(style: .continuous)
-            .strokeBorder(PanelColors.chipBorder, lineWidth: PanelMetrics.hairline))
+        .overlay(chipCapsuleBorder(PanelColors.chipBorder, minimized: w.isMinimized))
         // ★★ 2026-10-28 三轮(用户:「入场开始乱跑了… 我想要的只是切换动效」):
         //   **局部事务这条路彻底废弃** —— 挂上后入场时名单替换/索引调整的内容变化
         //   全被卷进弹簧,芯片乱跑 ✗(这条路上 b5e18e7/91a31c8/45818f9 已栽三次)
@@ -2532,4 +2596,23 @@ struct ChipRailGroup: View {
     }
 
 
+}
+
+/// Compact yellow minimize signifier aligned before the chip's trailing selection dot.
+private func chipMinimizeBadge(opacity: Double) -> some View {
+    Image(systemName: "minus.circle")
+        .font(.system(size: max(PanelMetrics.titleSize - 2, 9.5), weight: .medium))
+        .foregroundStyle(PanelColors.tlMin.opacity(opacity))
+}
+
+/// Shared capsule hairline border: solid for active windows, subtle dashed recess for minimized ones.
+private func chipCapsuleBorder(_ color: Color, minimized: Bool) -> some View {
+    Capsule(style: .continuous)
+        .strokeBorder(
+            color,
+            style: StrokeStyle(
+                lineWidth: PanelMetrics.hairline,
+                dash: minimized ? [3.5, 2.5] : []
+            )
+        )
 }

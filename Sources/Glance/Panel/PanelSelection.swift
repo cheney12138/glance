@@ -46,9 +46,6 @@ extension PanelController {
         //   用户实报的复现是**「tab 切到大象那一拍掉帧」**,而这条路径**从不打点** ✗
         //   ⇒ 我们前几轮量到的长帧全是指针那一路的,压根没量到用户报的那一下 ✗✗
         FrameProbe.lastHoverMark = CACurrentMediaTime()
-        // ★ 2026-10-26 用户:「每次切换 App 都要有(入场动效)」⇒ 换 App 就重播一次浮出 ✓
-        //   (组内换窗走 `moveWindow`,这里不会被调用 ⇒ 那边保持现状 ✓)
-        startEntryFloat()
         traceCost("键盘换选中") {
             // 模型 C(ADR-0013):**逻辑上只有一条环** —— 主环走完 `Tab` 自然进入未启动段,
             // 未启动段走完接回主环;`⇧Tab` 反向对称。两条旧裁定(2026-09-16「不经 Tab 到达」、
@@ -182,8 +179,8 @@ extension PanelController {
         }
         guard groups.indices.contains(target), target != appIndex else { return }   // 两端 = 夹住,不环绕
         launchIndex = nil
+        winIndex = 0                       // 先落:落到目标 App 的第一扇窗,可预测(moveApp/hoverApp 同款 ✓)
         appIndex = target
-        winIndex = 0                       // 落到目标 App 的第一扇窗,可预测
         trace("[T6] 选中(键盘 " + (target == 0 ? "←=最左" : "→=最右") + "): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)")
         // ★★ 2026-10-08 病例(用户实报「通过左右移动到头尾这种方式, 选中的 App **没有 live**、
         //   不会主动接入;指针 hover 选中之后 live 才正常」):
@@ -236,8 +233,8 @@ extension PanelController {
     /// T11 选中项现拍:选中移到哪个组,就把那组窗重截一遍——触发瞬间的截图在
     /// 钉住浏览几秒后已是旧图。异步不阻塞导航;同 wid 后到覆盖先到,天然取新。
     /// 防抖:同一组 0.5s 内不重复拍(横扫面板时边缘组会被扫过多次)
-
-    private func refreshSnapshotForSelection() {
+    /// (2026-11-12 改为内部可见:pickApp 在 PanelController.swift 主类里也要调它 ✓)
+    func refreshSnapshotForSelection() {
         guard let g = currentGroup else { return }
         let now = CFAbsoluteTimeGetCurrent()
         if let last = lastRefreshAt[g.pid], now - last < 0.5 { return }

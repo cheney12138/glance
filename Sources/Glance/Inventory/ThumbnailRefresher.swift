@@ -141,7 +141,8 @@ final class ThumbnailRefresher {
             }
         })
         lastScreenSignature = Self.screenSignature()
-        schedulePeriodicSweep()
+        // ★★ 2026-11-20 性能修复:周期性轻扫仅在面板在台上时挂载(见 `setPanelVisible`),
+        //   面板关着时不再每 1.5s 唤醒主线程空转 ✓。
         // ★★ 2026-10-14 病例(用户:「重启之后还是有很明显的 app 图标」✓):
         //   上面那趟周期性轻扫的**第一趟要等 `adaptiveSweepDelay()`(≥5s)** ✗
         //   ⇒ 启动后那 5 秒里打开面板,**一扇窗都没拍过** ⇒ 卡片全是 App 图标兜底 ✓
@@ -170,19 +171,31 @@ final class ThumbnailRefresher {
     ///   (macOS 14.4+ 起,`SCScreenshotManager` 抓屏同样会点亮那个指示 ✓)
     ///   ⇒ 面板**关着**时不再 1.5–5 秒一拍,压到 60 秒一拍:
     ///     窗口刚开几秒内没有新鲜快照无所谓 —— 面板一打开自己会按需补拍(那条路不变 ✓)
+    private var periodicSweepWork: DispatchWorkItem?
+
+    /// 由 `PanelController` 在面板上屏/收场时调用:面板关着时彻底停掉 1.5s 周期唤醒,
+    /// 仅在面板在台上期间按需轻扫补拍冷窗 ✓。
+    func setPanelVisible(_ visible: Bool) {
+        if visible {
+            guard periodicSweepWork == nil else { return }
+            schedulePeriodicSweep()
+        } else {
+            periodicSweepWork?.cancel()
+            periodicSweepWork = nil
+        }
+    }
+
     private func schedulePeriodicSweep() {
-        // ★★★ 2026-10-25 定案(用户实测:**退出 Glance 那个"正在共享"立刻灭**⇒ 是我们的抓拍留着状态):
-        //   面板**关着**时**一张都不拍**(原来 60 秒一次也还是会让指示周期性亮)。
-        //   代价照实说:面板关着时新开的窗没有快照 ⇒ 打开那一刻可能先显示上一张旧图/图标,
-        //   但**面板一打开自己会按需补拍**(`Snapshotter.precapture`,`[拍照]` 那条路不变 ✓),
-        //   所以打开后 100ms 内就有新图 ✓ —— 用"第一眼稍旧"换"平时完全不抓屏" ✓
-        DispatchQueue.main.asyncAfter(deadline: .now() + adaptiveSweepDelay()) { [weak self] in
+        periodicSweepWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if PanelStageProbe.isVisible() {
-                self.sweepAllScreens(reason: "开窗拍")
-            }
+            self.periodicSweepWork = nil
+            guard PanelStageProbe.isVisible() else { return }
+            self.sweepAllScreens(reason: "开窗拍")
             self.schedulePeriodicSweep()
         }
+        periodicSweepWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + adaptiveSweepDelay(), execute: work)
     }
 
     private func handleActivation(_ note: Notification) {
@@ -283,11 +296,8 @@ final class ThumbnailRefresher {
                 return
             }
             let beganAt = CFAbsoluteTimeGetCurrent()
-            // rawGroups 的归属判定保证一扇窗只属于一块屏:按屏枚举天然不重不漏
-            var windows: [WindowRecord] = []
-            for screen in NSScreen.screens {
-                windows.append(contentsOf: WindowEnumerator.rawGroups(on: screen).flatMap(\.windows))
-            }
+            // 单趟全屏枚举(2026-11-20):避免双屏循环两次 CGWindowList + AX ✗
+            var windows = WindowEnumerator.allScreenWindows()
             guard !windows.isEmpty else { return }
             // ★★ 2026-10-14 病例(用户:「重启之后第一次切换到访达就看到 app 图标了」✓):
             //   20 窗 × ~30–100ms ⇒ 整趟首扫要 **0.6–2s** ✗ ⇒ 这期间打开面板,轮到没轮到的窗

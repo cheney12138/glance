@@ -295,8 +295,21 @@ enum MoveFocusedWindowToNextScreen {
     ///   · 所以也**不需要**缓存:按下是"人手一次"的频率,缓存只会引入"过期值"这类新 bug ✗
     /// ⚠️ 唯一的真实代价:**AX 是跨进程调用** —— 若前台 App 卡死,这一下会等它
     ///   (本仓全局 AX 超时 0.5s,见 T29 ✓)⇒ 所以这里把**耗时打出来**,别靠感觉 ✓
+    ///
+    /// ## 重入闸(2026-11-14 审查发现的回归)
+    /// move 全程可挂起 ~1.7s(250ms 验证 + 5×200ms 磨尺寸 + 3×150ms 落位),原来同步跑在主线程上
+    /// 天然串行;改成 Task 托管后,连按 ⌘⇧M 会产生 **MainActor 上交错的并发 move** ——
+    /// 两个 B 段"屏外泊车"循环同时磨同一个窗,能把窗留在屏外或尺寸磨花。
+    /// ⇒ in-flight 守卫:一局未完,新按下直接忽略(不排队 —— 排队会把 1.7s 的延迟叠成 3.4s,更糟)。
+    private static var inFlight = false
     @MainActor
-    static func run() {
+    static func run() async {
+        guard !inFlight else {
+            glog("[搬窗] 上一局还在进行中,忽略本次连按")
+            return
+        }
+        inFlight = true
+        defer { inFlight = false }
         let t0 = CFAbsoluteTimeGetCurrent()
         defer {
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -355,7 +368,7 @@ enum MoveFocusedWindowToNextScreen {
              + "(\(src.localizedName) → \(dst.localizedName)):\(name) — \(win.title)"
              + " \(fill ? "撑满" : "保持尺寸")(占比 \(Int(ratio * 100))% vs 门槛 "
              + "\(Int(Keys.moveFillMinRatio * 100))%)")
-        _ = WindowFocuser.move(window: win, to: target, resize: fill)
+        _ = await WindowFocuser.move(window: win, to: target, resize: fill)
     }
 }
 

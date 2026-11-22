@@ -7,6 +7,18 @@ struct WindowRecord {
     let ownerName: String
     let title: String
     let bounds: CGRect
+    /// 该窗是否处于最小化状态（仅在 `Keys.includeMinimized` 开启时才可能为 true）
+    let isMinimized: Bool
+
+    init(wid: CGWindowID, pid: pid_t, ownerName: String, title: String, bounds: CGRect,
+         isMinimized: Bool = false) {
+        self.wid = wid
+        self.pid = pid
+        self.ownerName = ownerName
+        self.title = title
+        self.bounds = bounds
+        self.isMinimized = isMinimized
+    }
 
     /// 窗口宽高比(横窗 >1,竖窗 <1)。卡片自适应宽度(T88)与出图高度推导共用这一个口径 ——
     /// 两边各算各的必然漂(截图的高就是按它推的)。
@@ -136,9 +148,17 @@ enum WindowEnumerator {
         // 快照还是一片空白 —— Chromium 挂在 layer 0、alpha 1、尺寸正常的辅助 surface)。
         // 判据照 AltTab 的 WindowAdmissionResolver:可切换目标必须在 AX 侧也对得上。
         // 安全阀:AX 没话说(nil)时**不过滤**,否则会把不暴露 AX 的 App 整组清空。
+        // ★ 2026-11-20 性能修复:只在"本屏有候选窗 或 任意屏有铺满全屏尺寸的候选窗"的 pid 上跑 AX,
+        //   其余停在另一块屏上的进程直接跳过(双屏下少跑约一半跨进程 AX IPC,输出完全等价 ✓)。
+        let screensSnapshot = NSScreen.screens
         var axFiltered: [WindowRecord] = []
         axFiltered.reserveCapacity(candidates.count)
         for (pid, group) in Dictionary(grouping: candidates, by: \.pid) {
+            let needsAX = group.contains { r in
+                ownsByContextScreen(r.bounds, contextScreen: screen)
+                    || Self.coversAnyScreen(r.bounds, screens: screensSnapshot)
+            }
+            guard needsAX else { continue }
             guard let admission = AXWindowList.admission(ofPID: pid) else {
                 axFiltered.append(contentsOf: group)
                 continue
@@ -160,16 +180,14 @@ enum WindowEnumerator {
         //   被全屏挡住的(不许灌环,用户铁律:A 屏的 App 出现在 B 屏绝对不可以),
         //   也可能是用户关掉的(应该立即入环)—— CGWindowList 分不出这两者,
         //   所以用**全屏状态**当判据切换无窗判定面(见下方 allWindowedPIDs)
-        let screensSnapshot = NSScreen.screens
         var fullscreenActive = false
-        for r in axFiltered {
-            for s in screensSnapshot {
-                if r.bounds.width >= s.frame.width - 2, r.bounds.height >= s.frame.height - 2,
-                   abs(r.bounds.midX - s.frame.midX) < 2, abs(r.bounds.midY - s.frame.midY) < 2 {
-                    fullscreenActive = true
-                }
-            }
+        for r in axFiltered where Self.coversAnyScreen(r.bounds, screens: screensSnapshot) {
+            fullscreenActive = true
+            break
         }
+        // 一次拉取运行中进程表并按 pid 建索引,替代下方每扇窗重复调两次 `NSRunningApplication(processIdentifier:)` ✓
+        let runningApps = NSWorkspace.shared.runningApplications
+        let appByPID = Dictionary(runningApps.map { ($0.processIdentifier, $0) }, uniquingKeysWith: { a, _ in a })
         var byPID: [pid_t: AppGroup] = [:]
         for r in records {
             // **系统权限弹窗过滤**(2026-09-15 用户报:"要权限的时候那个系统弹窗也被识别到,没有 app 图标,
@@ -178,7 +196,7 @@ enum WindowEnumerator {
             // 名单会随系统版本漂(不同的 macOS 用 tccd / UserNotificationCenter / CoreServicesUIAgent …),
             // 而"有没有常规激活策略"是系统自己维护的事实 ✓。
             // 注意**不要**顺手动 `.accessory`(菜单栏型 App)—— 它们可以有正当的窗口(例如我们自己的设置窗,若将来放出来)。
-            let app = NSRunningApplication(processIdentifier: r.pid)
+            let app = appByPID[r.pid]
             let bundleID = app?.bundleIdentifier ?? ""
             let byPolicy = app?.activationPolicy == .prohibited
             let byBundle = Self.promptHostBundleIDs.contains(bundleID)
@@ -194,8 +212,80 @@ enum WindowEnumerator {
                 continue
             }
             byPID[r.pid, default: AppGroup(pid: r.pid, appName: r.ownerName,
-                                            bundleID: NSRunningApplication(processIdentifier: r.pid)?.bundleIdentifier,
+                                            bundleID: app?.bundleIdentifier,
                                             windows: [])].windows.append(r)
+        }
+
+        // ★ 可选最小化窗口兜底（默认关闭，0ms 额外开销）：
+        // 开启后仅收录「归属当前屏 ∧ AX 明确报 kAXMinimized == true」的窗口（排在同 App 可见窗尾部），
+        // 严格排除其他 Space 的正常窗，不破按屏隔离（ADR-0008）。
+        var minimizedPIDsAdded: Set<pid_t> = []
+        if Keys.includeMinimized,
+           let allInfos = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+            let onScreenWIDs = Set(candidates.map(\.wid))
+            // 注意:有些 App 的最小化窗在 CGWindowList(.optionOnScreenOnly) 里依然出现(动画中或系统缓存),
+            // 因此这里扫描全部 layer 0 候选窗,再用 AX 侧 `kAXMinimized == true` 实锤;
+            // 若某扇窗已在 `byPID` 的在屏列表里但 AX 实锤已最小化,将其从可见列表降为最小化窗 ✓。
+            var offScreenCandidates: [WindowRecord] = []
+            for info in allInfos {
+                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                      let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                      let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                      bounds.width >= 50, bounds.height >= 50
+                else { continue }
+                let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+                if alpha <= 0.05 { continue }
+                let app = appByPID[pid]
+                let bundleID = app?.bundleIdentifier ?? ""
+                if app?.activationPolicy == .prohibited
+                    || Self.promptHostBundleIDs.contains(bundleID)
+                    || Self.promptHostNames.contains(info[kCGWindowOwnerName as String] as? String ?? "") {
+                    continue
+                }
+                // 屏幕归属:优先按 CG 窗框几何归属;若最小化到 Dock 后系统改变了 bounds 导致几何不命中任何屏,
+                // 则回退看该 App 的「最后活跃屏记忆」(lastScreen)是否等于当前语境屏 ✓
+                let ownsScreen: Bool
+                if ownsByContextScreen(bounds, contextScreen: screen) {
+                    ownsScreen = true
+                } else if !onScreenWIDs.contains(wid),
+                          !screensSnapshot.contains(where: { ownsByContextScreen(bounds, contextScreen: $0) }),
+                          let ls = lastScreen(ofBundle: app?.bundleIdentifier),
+                          ls == screen.localizedName {
+                    ownsScreen = true
+                } else {
+                    ownsScreen = false
+                }
+                guard ownsScreen else { continue }
+                let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
+                let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
+                offScreenCandidates.append(WindowRecord(wid: wid, pid: pid, ownerName: owner,
+                                                        title: title, bounds: bounds, isMinimized: true))
+            }
+            for (pid, group) in Dictionary(grouping: offScreenCandidates, by: \.pid) {
+                let minIDs = AXWindowList.minimizedWindowIDs(ofPID: pid)
+                guard !minIDs.isEmpty else { continue }
+                let verified = group.filter { minIDs.contains($0.wid) }
+                guard !verified.isEmpty else { continue }
+                let app = appByPID[pid]
+                if var existing = byPID[pid] {
+                    let existingWIDs = Set(existing.windows.map(\.wid))
+                    var visiblePart = existing.windows.filter { !minIDs.contains($0.wid) }
+                    var minimizedPart = existing.windows
+                        .filter { minIDs.contains($0.wid) }
+                        .map { WindowRecord(wid: $0.wid, pid: $0.pid, ownerName: $0.ownerName,
+                                            title: $0.title, bounds: $0.bounds, isMinimized: true) }
+                    minimizedPart.append(contentsOf: verified.filter { !existingWIDs.contains($0.wid) })
+                    existing.windows = visiblePart + minimizedPart
+                    byPID[pid] = existing
+                } else {
+                    byPID[pid] = AppGroup(pid: pid, appName: verified[0].ownerName,
+                                          bundleID: app?.bundleIdentifier,
+                                          windows: verified)
+                }
+                minimizedPIDsAdded.insert(pid)
+            }
         }
 
         // **落屏记忆快照**(见文件头):有可见窗的 App 记下"此刻活在这块屏"。
@@ -239,6 +329,7 @@ enum WindowEnumerator {
         } else {
             allWindowedPIDs = Set(candidates.map(\.pid))
         }
+        allWindowedPIDs.formUnion(minimizedPIDsAdded)
         // 不划分显示器分组,任何语境屏都展示;确认 = 激活该 App。
         // ★ **立即入环**(2026-09-19 用户裁定):窗全关 = 马上是无窗应用,不设时限 ——
         //   防"⌘Q 诈尸"的分工见文件头(quitPIDs + 外部 ⌘Q 死亡间隙自愈)
@@ -247,7 +338,7 @@ enum WindowEnumerator {
         //   照旧任何语境屏都展示。有屏全屏时无窗条目整体退环(F2/F4 铁律,见上)
         let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
         let contextScreenName = screen.localizedName
-        for app in NSWorkspace.shared.runningApplications {
+        for app in runningApps {
             guard app.activationPolicy == .regular,
                   app.processIdentifier != ownPID,
                   !allWindowedPIDs.contains(app.processIdentifier),
@@ -273,6 +364,64 @@ enum WindowEnumerator {
         return byPID.values.filter { group in
             guard let bid = group.bundleID else { return true }
             return !hidden.contains(bid)
+        }
+    }
+
+    /// 一次性枚举**所有显示器**上的合法窗口(供 `ThumbnailRefresher.sweepAllScreens` 后台保温用)。
+    /// 相比按每块屏循环调 `rawGroups(on:)`(双屏跑 2 遍 CGWindowList + AX + runningApplications),
+    /// 单趟完成全系统枚举与 AX 过滤,在双屏/多屏下把保温枚举耗时直接减半 ✓。
+    nonisolated static func allScreenWindows() -> [WindowRecord] {
+        guard let infos = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+
+        var candidates: [WindowRecord] = []
+        for info in infos {
+            guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width > 1, bounds.height > 1
+            else { continue }
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            if alpha <= 0.05 || bounds.width < 50 || bounds.height < 50 { continue }
+            let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(无标题)"
+            let owner = info[kCGWindowOwnerName as String] as? String ?? "(未知应用)"
+            candidates.append(WindowRecord(wid: wid, pid: pid, ownerName: owner, title: title, bounds: bounds))
+        }
+
+        let screens = NSScreen.screens
+        let runningApps = NSWorkspace.shared.runningApplications
+        let appByPID = Dictionary(runningApps.map { ($0.processIdentifier, $0) }, uniquingKeysWith: { a, _ in a })
+        let hidden = Set(DockAppsProvider.ringBlacklist)
+
+        var result: [WindowRecord] = []
+        result.reserveCapacity(candidates.count)
+        for (pid, group) in Dictionary(grouping: candidates, by: \.pid) {
+            let app = appByPID[pid]
+            let bundleID = app?.bundleIdentifier ?? ""
+            if app?.activationPolicy == .prohibited || Self.promptHostBundleIDs.contains(bundleID) { continue }
+            if !bundleID.isEmpty, hidden.contains(bundleID) { continue }
+            let keptByName = group.filter { !Self.promptHostNames.contains($0.ownerName) }
+            guard !keptByName.isEmpty else { continue }
+            let admittedGroup: [WindowRecord]
+            if let admission = AXWindowList.admission(ofPID: pid) {
+                admittedGroup = keptByName.filter { admission.admitted.contains($0.wid) }
+            } else {
+                admittedGroup = keptByName
+            }
+            for r in admittedGroup where screens.contains(where: { ownsByContextScreen(r.bounds, contextScreen: $0) }) {
+                result.append(r)
+            }
+        }
+        return result
+    }
+
+    nonisolated private static func coversAnyScreen(_ bounds: CGRect, screens: [NSScreen]) -> Bool {
+        screens.contains { s in
+            bounds.width >= s.frame.width - 2 && bounds.height >= s.frame.height - 2
+                && abs(bounds.midX - s.frame.midX) < 2 && abs(bounds.midY - s.frame.midY) < 2
         }
     }
 

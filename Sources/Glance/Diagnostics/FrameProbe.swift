@@ -106,6 +106,13 @@ final class FrameProbe: NSObject {
         //   现在每行汇总自带“我当时开着什么”⇒ 单行即可判定，不用重启当分界。
         let heavy = DebugFlags.heavySwitches.filter { $0.isOn }.map { $0.name.replacingOccurrences(of: "debug.", with: "") }
         let ctx = heavy.isEmpty ? "重型开关:无" : "重型开关:" + heavy.joined(separator: ",")
+        DiagnosticRingBuffer.shared.attachFrameMetrics(
+            frames: sorted.count,
+            p50Ms: pick(0.5),
+            p95Ms: pick(0.95),
+            maxFrameMs: (sorted.last ?? 0) * 1000,
+            longFramePct: Double(long) / Double(sorted.count) * 100
+        )
         print(String(format: "[帧] %@ 共 %d 帧 | P50 %.1fms · P95 %.1fms · max %.1fms | 长帧 %d(%.0f%%) %@| 探针起点=%.0fms%@",
                      label, sorted.count, pick(0.5), pick(0.95), (sorted.last ?? 0) * 1000,
                      long, Double(long) / Double(sorted.count) * 100, where_, startUptimeMs, judge))
@@ -262,6 +269,7 @@ final class MainThreadWatchdog {
                     still += 1
                     if still >= stallSeconds, !reportedStall {
                         reportedStall = true
+                        DiagnosticRingBuffer.shared.recordWatchdogStall(seconds: still)
                         let pid = ProcessInfo.processInfo.processIdentifier
                         // ⚠️ 这一行**必须**走 glog:后台线程写文件不受主线程卡死影响 ✓
                         glog(String(format: "[卡死] 主线程 ≥%.0fs 没心跳(后台线程仍在跑)⇒ "

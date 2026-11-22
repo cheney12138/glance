@@ -150,18 +150,64 @@ extension PanelController {
         case .minimize:
             guard g.windows.indices.contains(winIndex) else { return }
             let w = g.windows[winIndex]
+            guard !w.isMinimized else { return }
             glog("[T12] 最小化: \(g.appName) — \(w.title)")
             // ★★ **先记后做**(与 purgedWIDs/quitPIDs 同一套 ✓)——
             //    用户 2026-09-22:「遗照灰的渲染有点延迟. 是在确认窗口真的缩小了吗」
-            //    ⇒ **是**,原来就是:我把"记下已收纳"写在 AX 调用**之后** ✗,而
-            //      `AXUIElementSetAttributeValue` 是**同步跨进程调用**(要等 App 真缩下去才返回 ✓)
-            //      ⇒ 图只能等 App 缩完才变灰 ✓(实测那点延迟就是目标 App 自己的最小化耗时 ✓)
             //    ⇒ 改成乐观:图**当帧**就变灰 ✓;AX 被拒了再回滚 ✓(不许留假状态 ✓)
-            purgedWIDs.insert(w.wid)          // 先记后摘:复核之前不许它"诈尸"回来
             minimizedWIDs[w.wid] = g.pid      // 常驻:环上的"已收纳"记号 ✓
             sessionMinimizedPIDs.insert(g.pid) // 本局:松开时不许唤醒它 ✓
             marksRevision &+= 1               // ⇒ 当帧重绘(不等 AX ✓)
             glog("[记号] 记下已收纳(先记后做):窗 \(w.wid) @ \(g.appName)")
+
+            if Keys.includeMinimized {
+                // ★ 开启「显示最小化窗口」：不删除再补回（避免闪没又蹦出），
+                //   - 若该窗后面还有未最小化（可见）的窗口：将其标记 `isMinimized = true` 并挪到本组尾部，
+                //     由 `ForEach(..., id: \.wid)` + 排序弹簧平滑滑到队尾；
+                //   - 若该窗已经是最后一个可见窗（它后面的窗口全都是已最小化窗，或本组仅此 1 窗）：
+                //     **保持原位不动**，仅原地将样式变为 `isMinimized = true`（不移除再追加、不改变顺序、不触发跳跃）✓。
+                optimisticMinimizedWIDs.insert(w.wid)
+                let savedGroups = groups
+                let savedWin = winIndex
+                let minRecord = WindowRecord(wid: w.wid, pid: w.pid, ownerName: w.ownerName,
+                                             title: w.title, bounds: w.bounds, isMinimized: true)
+                let hasVisibleAfter = g.windows[(winIndex + 1)...].contains { !$0.isMinimized }
+                var reordered = g.windows
+                if hasVisibleAfter {
+                    reordered.remove(at: winIndex)
+                    reordered.append(minRecord)
+                } else {
+                    reordered[winIndex] = minRecord
+                }
+                var next = groups
+                if let gi = next.firstIndex(where: { $0.pid == g.pid }) {
+                    let old = next[gi]
+                    next[gi] = AppGroup(pid: old.pid, appName: old.appName,
+                                        bundleID: old.bundleID, windows: reordered)
+                }
+                let visibleCount = reordered.filter { !$0.isMinimized }.count
+                let nextWin = visibleCount > 0 ? min(winIndex, visibleCount - 1) : winIndex
+                applyList(next, keepPID: g.pid, keepWin: nextWin, forceReshoot: false, resizeWindow: false)
+
+                let accepted = WindowFocuser.minimize(window: w)
+                if !accepted {
+                    minimizedWIDs.removeValue(forKey: w.wid)
+                    sessionMinimizedPIDs.remove(g.pid)
+                    optimisticMinimizedWIDs.remove(w.wid)
+                    marksRevision &+= 1
+                    glog("[记号] 回滚已收纳(原地挪尾):窗 \(w.wid) 最小化未被受理")
+                    applyList(savedGroups, keepPID: g.pid, keepWin: savedWin, forceReshoot: false, resizeWindow: false)
+                    return
+                }
+                let wid = w.wid
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                    self?.optimisticMinimizedWIDs.remove(wid)
+                }
+                refreshAfterAction()
+                return
+            }
+
+            purgedWIDs.insert(w.wid)          // 先记后摘:复核之前不许它"诈尸"回来
             let accepted = WindowFocuser.minimize(window: w)
             if !accepted {
                 // 系统没受理(取不到 AX 窗 / 被拒)⇒ **把乐观记的账全撤掉** ✓ 不许留假灰 ✗
@@ -251,34 +297,58 @@ extension PanelController {
         //   · 终案语义(用户裁定):**面板反映用户的意图,屏幕反映现实** ——
         //     Q 过的 App 本局绝不自动放回;真被拒的确认框用户在屏幕上自己看得见,
         //     新一局 begin 重枚举,真相自然恢复。zoom 窗拖 1s 还是 10s 都不再有变量。
-        //   (放回逻辑随二修撤销;`group`/`index` 参数保留以免动调用方,已无用处。
-        //    本函数此后只负责打日志;记忆的最终清账交给 begin —— 下一局以系统真实状态为准。)
+        //   (放回逻辑随二修撤销;`group`/`index` 参数保留以免动调用方,已无用处。)
+        //
+        // ★★ 2026-11-14 四修(用户:「原生 switcher 的 Q 对 IDEA 这种带确认框的,会**直接唤起那个 APP**,
+        //   比我们做得好」)—— 三修语义里"弹窗由用户处理"有个洞:确认框自己只会 orderFront,
+        //   **不会把后台 App 激活到前台** ⇒ 面板散场后,确认框孤零零落在别的窗底下,用户要自己去找 ✗
+        //   ⇒ 学原生:探测到"进程还活着且窗还在"= 被确认框拦下 ⇒ **把 App 直接唤起到前台**,
+        //     确认框落在视野正中,由用户当场决定 ✓;面板若还开着,一并散场(注意力交给确认框)。
+        //   探测节奏从 0.9s 一问改 0.45s 首探 + 0.8s 复探:确认框出得快(IDEA <0.5s),问晚了白等;
+        //   复探兼收"慢死"App(首探时窗已空、还没死透的那类)。
+        //   ⚠️ 已知代价:纯"退出慢"(无确认框)的 App 也会被误判唤起 —— 它反正马上要死,
+        //     前台闪一下就没了;原生 switcher 同款行为,接受 ✓
+        //   「Q 过的本局不回」**不变**:环不恢复它;用户取消确认框的话,下一局 begin 以真实状态为准 ✓
         let generation = beginGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            guard let self, self.beginGeneration == generation else { return }
-            let app = NSRunningApplication(processIdentifier: pid)
-            guard app != nil, app?.isTerminated == false else {
-                glog("[T12] 退出完成: \(name)")
-                self.quitPIDs.remove(pid) // 死透了;撤掉只是账面干净(下一局 begin 反正会清)
-                return
-            }
-            // 还活着:本局绝不放回。再问一句窗口表,把"正在死"与"疑似被拒"在日志里分清 ——
-            // 今天的误伤就是靠这一行定位的,复盘时对得上账
-            guard let screen = self.contextScreen else { return }
-            Task.detached(priority: .userInitiated) {
-                let raw = WindowEnumerator.rawGroups(on: screen)
-                await MainActor.run {
-                    guard self.beginGeneration == generation else { return }
-                    let windows = raw.first { $0.pid == pid }?.windows ?? []
-                    if windows.isEmpty {
-                        glog("[T12] 退出中(进程在、窗已空): \(name) → 本局不放回")
-                    } else {
-                        glog("[T12] 疑似被拒(窗还在,可能是确认框): \(name) → 本局不放回,弹窗由用户处理")
+        func probe(at delay: Double, attempt: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.beginGeneration == generation else { return }
+                let app = NSRunningApplication(processIdentifier: pid)
+                guard app != nil, app?.isTerminated == false else {
+                    glog("[T12] 退出完成: \(name)")
+                    self.quitPIDs.remove(pid) // 死透了;撤掉只是账面干净(下一局 begin 反正会清)
+                    return
+                }
+                // 还活着:本局绝不放回。再问一句窗口表,把"正在死"与"疑似被拒"在日志里分清 ——
+                // 今天的误伤就是靠这一行定位的,复盘时对得上账
+                guard let screen = self.contextScreen else { return }
+                Task.detached(priority: .userInitiated) {
+                    let raw = WindowEnumerator.rawGroups(on: screen)
+                    await MainActor.run {
+                        guard self.beginGeneration == generation else { return }
+                        let windows = raw.first { $0.pid == pid }?.windows ?? []
+                        if windows.isEmpty {
+                            glog("[T12] 退出中(进程在、窗已空): \(name) → 本局不放回")
+                            if attempt == 1 { probe(at: 0.8, attempt: 2) }  // 慢死型:再问一次
+                            // quitPIDs **故意不撤**:本局后续任何重枚举都不许它回来(「Q 过的本局不回」)
+                        } else {
+                            // 被拦下了(确认框/拒绝退出):唤起 App,确认框交给用户(原生 Q 同款 ✓)
+                            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                            if front != pid {
+                                glog("[T12] 退出被拦下(窗还在,确认框): \(name) → 唤起 App 交给用户")
+                                WindowFocuser.activateApp(pid: pid)
+                            } else {
+                                glog("[T12] 退出被拦下(窗还在,确认框): \(name) → 已在前台,弹窗就地处理")
+                            }
+                            if self.isVisible { self.dismiss(reason: "退出被确认框拦下,唤起 App 处理") }
+                            // quitPIDs **故意不撤**(「Q 过的本局不回」不变 ✓):用户取消的话,
+                            // 下一局 begin 以真实状态为准 —— 环里它自然回来 ✓
+                        }
                     }
-                    // quitPIDs **故意不撤**:本局后续任何重枚举都不许它回来(「Q 过的本局不回」)
                 }
             }
         }
+        probe(at: 0.45, attempt: 1)
     }
 
     /// 处决后的就地刷新:重枚举 + **尽量保住原来的选中**(按 pid 认 App,窗位夹紧)。
@@ -309,7 +379,7 @@ extension PanelController {
     func reconcileMinimizedMarks(_ raw: [AppGroup]) {
         let before = minimizedWIDs.count
         var onScreen = Set<CGWindowID>()
-        for g in raw { for w in g.windows { onScreen.insert(w.wid) } }
+        for g in raw { for w in g.windows where !w.isMinimized { onScreen.insert(w.wid) } }
         // 每个被标记的 App 问一次 AX 真相(只有 1–2 个 App ✓;问不到就 nil ⇒ 不据此下结论 ✓)
         var axTucked: [pid_t: Bool?] = [:]
         for pid in Set(minimizedWIDs.values) where axTucked[pid] == nil {
@@ -321,7 +391,7 @@ extension PanelController {
             //    缩下去之后 0.18s 那次重枚举**还会把它报回来**(本仓早就记过这个"诈尸" ✓
             //    见 purgedWIDs 的注释 ✓),我这里却当场把记号剪掉了 ✗ ⇒ 记号一闪就没 ✓
             //    ⇒ 按 purgedWIDs 的老规矩:复核期(0.9s)内**不算数** ✓
-            guard !purgedWIDs.contains(wid) else { return true }              // 复核期内:不动它 ✓
+            guard !purgedWIDs.contains(wid) && !optimisticMinimizedWIDs.contains(wid) else { return true } // 复核期内:不动它 ✓
             if onScreen.contains(wid) {                                       // ① 真的回到屏上了 ✓
                 glog("[记号] 摘掉已收纳:窗 \(wid) 回到屏上了")
                 return false
@@ -437,7 +507,57 @@ extension PanelController {
             } else if let f = byPID[old.pid] {
                 // 位置不动,只换内容(窗多了少了都还在这格)。但**我们刚摘掉的窗**要按住,
                 // 否则 0.2s 后它诈尸回来一次(见 purgedWIDs 的病例)
-                let kept = f.windows.filter { !purgedWIDs.contains($0.wid) }
+                var kept = f.windows.filter { !purgedWIDs.contains($0.wid) }
+                // ★ 开启「显示最小化窗口」时的防闪没与保序：
+                //   ① macOS 执行最后一扇窗最小化的 0.18s 动画期间，该窗已离开在屏列表（`.optionOnScreenOnly`），
+                //      但 AX 侧 `kAXMinimized` 可能尚未翻转、或被枚举 0.15s 超时截断 ⇒ `f.windows` 会短暂缺失这扇窗，
+                //      甚至整组落入无窗应用 `windows: []`，导致整列标签瞬间消失！
+                //      因此：旧列表里已有的最小化窗（或正处于 `optimisticMinimizedWIDs` 保护期的窗），
+                //      只要进程还活着且不在 `purgedWIDs` 里，重枚举漏报时**原地保留** ✓。
+                //   ② 已最小化窗口之间的相对顺序以当前面板顺序（`old.windows`）为准，
+                //      避免 `CGWindowList` 每次返回的非在屏窗口顺序波动导致标签乱跳 ✓。
+                if Keys.includeMinimized,
+                   NSRunningApplication(processIdentifier: old.pid)?.isTerminated == false {
+                    let freshByWID = Dictionary(kept.map { ($0.wid, $0) }, uniquingKeysWith: { a, _ in a })
+                    let oldWIDs = Set(old.windows.map(\.wid))
+                    var visiblePart: [WindowRecord] = []
+                    var minimizedPart: [WindowRecord] = []
+
+                    // 先收本轮枚举里依然可见（且不在最小化乐观保护期）的旧窗，保持当前顺序；再收新冒出来的可见窗
+                    for w in old.windows {
+                        guard let fw = freshByWID[w.wid] else { continue }
+                        let isMin = fw.isMinimized || optimisticMinimizedWIDs.contains(w.wid)
+                        if !isMin { visiblePart.append(fw) }
+                    }
+                    for fw in kept where !oldWIDs.contains(fw.wid) {
+                        let isMin = fw.isMinimized || optimisticMinimizedWIDs.contains(fw.wid)
+                        if !isMin { visiblePart.append(fw) }
+                    }
+
+                    // 再按当前面板里的顺序收已最小化窗（若重枚举暂未报出，则用旧记录兜底保活，防止标签消失）
+                    for w in old.windows where !purgedWIDs.contains(w.wid) {
+                        if let fw = freshByWID[w.wid] {
+                            let isMin = fw.isMinimized || optimisticMinimizedWIDs.contains(w.wid)
+                            if isMin {
+                                minimizedPart.append(fw.isMinimized ? fw
+                                    : WindowRecord(wid: fw.wid, pid: fw.pid, ownerName: fw.ownerName,
+                                                   title: fw.title, bounds: fw.bounds, isMinimized: true))
+                            }
+                        } else if w.isMinimized || optimisticMinimizedWIDs.contains(w.wid) {
+                            minimizedPart.append(w.isMinimized ? w
+                                : WindowRecord(wid: w.wid, pid: w.pid, ownerName: w.ownerName,
+                                               title: w.title, bounds: w.bounds, isMinimized: true))
+                        }
+                    }
+                    for fw in kept where !oldWIDs.contains(fw.wid) {
+                        if fw.isMinimized || optimisticMinimizedWIDs.contains(fw.wid) {
+                            minimizedPart.append(fw.isMinimized ? fw
+                                : WindowRecord(wid: fw.wid, pid: fw.pid, ownerName: fw.ownerName,
+                                               title: fw.title, bounds: fw.bounds, isMinimized: true))
+                        }
+                    }
+                    kept = visiblePart + minimizedPart
+                }
                 if kept.isEmpty {
                     // ★ **窗全没了 ≠ App 没了**(2026-09-20 用户:「cmd w 只是关闭窗口,
                     //    不需要从环里杀掉」):W 关掉最后一扇窗后,进程还活着 —— 它是
@@ -448,9 +568,21 @@ extension PanelController {
                                                bundleID: old.bundleID, windows: []))
                     }
                 } else {
-                    merged.append(kept.count == f.windows.count ? f
-                                  : AppGroup(pid: f.pid, appName: f.appName,
-                                             bundleID: f.bundleID, windows: kept))
+                    merged.append(AppGroup(pid: f.pid, appName: f.appName,
+                                           bundleID: f.bundleID, windows: kept))
+                }
+            } else if Keys.includeMinimized,
+                      NSRunningApplication(processIdentifier: old.pid)?.isTerminated == false {
+                // ★ 兜底：若另一块屏处于全屏（`fullscreenActive` 为 true，无窗应用分支跳过）
+                //   且本 App 最后一扇窗正在最小化过渡中（重枚举尚未在 `minimizedPIDsAdded` 里捞到它），
+                //   `byPID[old.pid]` 会暂时为 nil。把旧列表里的已最小化窗（或乐观保护期内的窗）原样保留，绝不让标签或 App 消失 ✓。
+                let preserved = old.windows.filter { !purgedWIDs.contains($0.wid) && ($0.isMinimized || optimisticMinimizedWIDs.contains($0.wid)) }.map { w in
+                    w.isMinimized ? w : WindowRecord(wid: w.wid, pid: w.pid, ownerName: w.ownerName,
+                                                     title: w.title, bounds: w.bounds, isMinimized: true)
+                }
+                if !preserved.isEmpty {
+                    merged.append(AppGroup(pid: old.pid, appName: old.appName,
+                                           bundleID: old.bundleID, windows: preserved))
                 }
             }
             // 不在 fresh 里 = 这个 App 真的没了(退出)→ 丢掉
@@ -572,6 +704,7 @@ extension PanelController {
         }
         guard listReady else {
             // 名单还在后台枚举 ⇒ **记下意图**,等 finishBegin 兑现 ✓
+            cancelPendingReveal()
             confirmBeforeList = true
             let gen = beginGeneration
             let work = DispatchWorkItem { [weak self] in
@@ -605,7 +738,8 @@ extension PanelController {
         //     2026-09-22 用户第二条实报:「关闭再唤起之后, 选中 app 拉不起窗口了」✗
         //     就是拿常驻表当守卫的后果:另起一局再确认也什么都不做 ✗
         //     ⇒ **本局不唤醒**(那次缩小不算白按 ✓)、**下一局能唤醒**(用户的手已离开键盘 ✓)
-        if sessionMinimizedPIDs.contains(g.pid), g.windows.isEmpty {
+        if sessionMinimizedPIDs.contains(g.pid),
+           (g.windows.isEmpty || g.windows.allSatisfy(\.isMinimized)) {
             dismiss(reason: "确认(刚被缩小收纳 ⇒ 不唤醒它)")
             return
         }
@@ -616,6 +750,10 @@ extension PanelController {
             return
         }
         let w = g.windows[winIndex]
+        if w.isMinimized && optimisticMinimizedWIDs.contains(w.wid) {
+            dismiss(reason: "确认(刚被缩小收纳的单窗 ⇒ 本局不唤醒)")
+            return
+        }
         dismiss(reason: "确认")                                     // ★ 先收面板 ✓
         WindowFocuser.focus(window: w)
     }

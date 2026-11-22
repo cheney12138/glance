@@ -141,20 +141,6 @@ if sheen {
         .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.slide),
                    value: controller.groups.count)
         .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
-        // 模型 C(ADR-0013):段头 —— 只在未启动段存在,住在下缘 rowPadY 留白里
-        // (零高度、不参与布局,不碰尺寸账)。发现性由 Tab 走到底自然遇见(那是模型本身),
-        // 段头只负责交代两件事:这是什么、怎么回去。
-        .overlay(alignment: .bottom) {
-            if controller.entrySelected {
-                Text("未启动的 App · ↑ 返回 / Tab 继续")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(PanelColors.txt2)
-                    .opacity(0.9)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 4)
-                    .allowsHitTesting(false)
-            }
-        }
         // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
         .glassEdge(cornerRadius: PanelMetrics.rPanel)
         // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
@@ -255,9 +241,12 @@ if sheen {
         //   托底按"只在主环显示"的旧规矩消失 —— 而那一刻它正好在 ±88°(一条线,看不见)✓
         //   ⇒ 消失是无缝的,不需要额外的淡出 ✗
         .background(alignment: .leading) {
-            puck
-                .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
-                .allowsHitTesting(false)
+            ZStack(alignment: .leading) {
+                puck
+                launchPuck
+            }
+            .modifier(RingFlipEffect(angle: controller.ringFlipAngle, progress: flipProgress))
+            .allowsHitTesting(false)
         }
         .padding(.leading, PanelMetrics.rowPadX)
         .padding(.trailing, PanelMetrics.rowPadX)
@@ -319,42 +308,52 @@ if sheen {
 
     /// 换环后(strip 里装的是"未启动的 App")的格子。
     ///
-    /// 与托盘里那一行**同一套**(幽灵壳 + 图标收到 76% + 上浮这层反馈),不另立语言 ——
-    /// 用户口径:「完全覆盖掉」:同一块地方换了内容,不是另一种东西。
-    /// 托底不在这儿:仍是主环那一枚滑动的,只是换环后跟着 launchIndex 走(见 puckOffsetX)。
+    /// 样式重设计：去掉每格笨重的 `GhostTile` 灰方块底壳，并补齐与主环同口径的 `app.fill`
+    /// 透明边距补偿（两环 1:1 等大，翻环零缩水）；通过“未选休眠态（降饱和 0.38、微压暗 −0.07，
+    /// 全程不透明不漏骨头）”与“选中唤醒态（回满彩、上浮放大 + 镂空玻璃滑块 `LaunchPuck`）”
+    /// 自然区分未启动与运行中。
     private func launchRingCell(_ i: Int) -> some View {
         let app = controller.launchables[i]
         let sel = i == controller.launchIndex
-        return ZStack {
-            GhostTile().frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
-            Image(nsImage: app.icon)
-                .resizable()
-                .renderingMode(.original)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: PanelMetrics.icon * 0.76, height: PanelMetrics.icon * 0.76)
-        }
-        .scaleEffect(sel ? PanelMetrics.iconScale : 1)
-        .offset(y: sel ? controller.contentEntryRise - PanelMetrics.iconLift : 0)
-        .elevation(.icon, active: sel)
-        .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
-        .contentShape(Rectangle())
-        .onHover { inside in if inside { controller.hoverApp(i) } }
-        .onTapGesture { controller.launchAt(i) }
-        // ★ 同上:名单还没定稿时,`launchIndex` 会因为"多了一个 App"整体右移一位 ——
-        //   那条 `.animation` 会把**所有路牌**一起平滑挪过去 = 用户看到的"新 App 从环里长出来"✗
-        .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.select),
-                   value: controller.launchIndex)
+        return Image(nsImage: app.icon)
+            .resizable()
+            .renderingMode(.original)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: PanelMetrics.icon, height: PanelMetrics.icon)
+            .saturation(sel ? (sheen ? 1.12 : 1.0) : 0.38)
+            .brightness(sel ? (sheen ? 0.04 : 0) : -0.07)
+            .scaleEffect((sel ? PanelMetrics.iconScale : 1) * app.fill)
+            .offset(y: sel ? controller.contentEntryRise - PanelMetrics.iconLift : 0)
+            .elevation(.icon, active: sel)
+            .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
+            .contentShape(Rectangle())
+            .onHover { inside in if inside { controller.hoverApp(i) } }
+            .onTapGesture { controller.launchAt(i) }
+            // ★ 同上:名单还没定稿时,`launchIndex` 会因为"多了一个 App"整体右移一位 ——
+            //   那条 `.animation` 会把**所有路牌**一起平滑挪过去 = 用户看到的"新 App 从环里长出来"✗
+            .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.select),
+                       value: controller.launchIndex)
     }
-    
-    /// 滑动托底 —— **实现搬去 `PuckView.swift`**(2026-09-22 拆分:它是独立一块,
-    /// 几何/视觉/动效/落点数学全在那边,改它不用翻这个 500 行的视图 ✓)。
-    /// 这里只负责"喂当前状态"。
+
+    /// 滑动托底 —— **统一入口在 `PuckView.swift`**，启动环与未启动环复用同一个 `Puck` 视图，
+    /// 仅以 `.running` / `.launch` 区分材质深浅；保持两个独立实例各绑各的索引，避免翻环时跨索引飞行残影。
     private var puck: some View {
-        Puck(offsetX: Puck.offsetX(appIndex: controller.appIndex),
+        Puck(style: .running,
+             offsetX: Puck.offsetX(appIndex: controller.appIndex),
              entryRise: controller.contentEntryRise,
              visible: !controller.entrySelected,
              animation: controller.selectionAnimation(PanelMotion.slide),
              animationValue: controller.appIndex)
+    }
+
+    private var launchPuck: some View {
+        let idx = controller.launchIndex ?? 0
+        return Puck(style: .launch,
+                    offsetX: Puck.offsetX(appIndex: idx),
+                    entryRise: controller.contentEntryRise,
+                    visible: controller.entrySelected && controller.launchIndex != nil && !controller.launchables.isEmpty,
+                    animation: controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.slide),
+                    animationValue: idx)
     }
 
     // MARK: - 启动区入口槽(方案 E v3:点阵记号 + 自己的轻选中语言)
@@ -437,7 +436,7 @@ private struct IconCell: View {
     @AppStorage(Keys.panelSheen) private var glow = KeyDefaults.sheen
 
     var body: some View {
-        let art = IconProvider.art(for: group.pid)
+        let art = IconProvider.art(for: group.pid, bundleID: group.bundleID)
         Image(nsImage: art.image)
             .renderingMode(.original)
             .resizable()

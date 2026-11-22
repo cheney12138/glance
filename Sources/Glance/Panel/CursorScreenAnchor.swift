@@ -10,13 +10,17 @@ enum CursorScreenAnchor {
         return NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
     }
 
-    /// 把窗口平移到光标屏正中,尺寸不动
-    static func center(_ window: NSWindow) {
-        guard let screen = cursorScreen else { return }
+    /// 把窗口平移到屏幕正中,尺寸不动（默认落在光标所在屏；传 `preferWindowScreen` 时在窗口当前所在屏上自适应保居中）
+    static func center(_ window: NSWindow, preferWindowScreen: Bool = false) {
+        let screen = (preferWindowScreen ? window.screen : nil) ?? cursorScreen ?? window.screen
+        guard let screen else { return }
         let size = window.frame.size
-        window.setFrameOrigin(NSPoint(
-            x: screen.frame.midX - size.width / 2,
-            y: screen.frame.midY - size.height / 2
-        ))
+        guard size.width > 1, size.height > 1 else { return }
+        let target = screen.frame
+        let rawX = target.midX - size.width / 2
+        let rawY = target.midY - size.height / 2
+        let clampedX = min(max(rawX, target.minX), max(target.minX, target.maxX - size.width))
+        let clampedY = min(max(rawY, target.minY), max(target.minY, target.maxY - size.height))
+        window.setFrameOrigin(NSPoint(x: clampedX, y: clampedY))
     }
 }

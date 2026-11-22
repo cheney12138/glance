@@ -39,17 +39,12 @@ final class Snapshotter: ObservableObject {
     /// 曾经成功拍到过的 window id(只增不减;`prune` 不动它)。见 `precapture` 的 missLost 分账。
     private var everCaptured: Set<CGWindowID> = []
 
-    /// 缓存的字节量(粗账:逐张按位图 `bytesPerRow × height` 累加,不追 CGImage 内部对齐)。
+    /// 缓存的字节量(粗账:按 `bytesPerRow × height` 随写入/剪枝增量维护,O(1) 读取,
+    /// 不再在每次唤起面板时于主线程遍历所有 `NSImage` 调 `cgImage(forProposedRect:)`).
     /// 用途:LumaRing 式懒加载("非热组不预截")的**先量后议**(2026-09-16 用户问,裁决:内存是
     /// 懒加载唯一真值,交互不动)—— 账挂在 `[唤起]` 行天天可见,有数才有"值不值得省"的裁决
-    var cacheMemoryBytes: Int {
-        cache.values.reduce(0) { acc, img in
-            if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                return acc + cg.bytesPerRow * cg.height
-            }
-            return acc
-        }
-    }
+    private var cacheBytes: [CGWindowID: Int] = [:]
+    private(set) var cacheMemoryBytes: Int = 0
 
     func prune(keeping liveWindows: Set<CGWindowID>) {
         // ⚠️ 2026-09-15:原来这里**无条件** `session &+= 1` —— 而这个函数在每次列表刷新时都会被调用,
@@ -66,6 +61,10 @@ final class Snapshotter: ObservableObject {
         }
         cache = cache.filter { liveWindows.contains($0.key) }
         cacheAt = cacheAt.filter { liveWindows.contains($0.key) }
+        if removed {
+            cacheBytes = cacheBytes.filter { liveWindows.contains($0.key) }
+            cacheMemoryBytes = cacheBytes.values.reduce(0, +)
+        }
         Task { await failedOnce.reset() } // 窗口列表变了,失败记录重来(权限也可能刚修好)
     }
 
@@ -153,6 +152,7 @@ final class Snapshotter: ObservableObject {
     }
 
     func precapture(_ windows: [WindowRecord], attempt: Int = 1, force: Bool = false, maxAge: Double? = nil, onlyMissing: Bool = false) {
+        var windows = windows.filter { !$0.isMinimized }
         guard !windows.isEmpty else { return }
         // ★★ 2026-10-14 **这道闸重立**(用户定稿的三层降级:「app图标兑底 → 快照 → live,
         //   层层降级,任何场景都不显示异常」✓):
@@ -164,7 +164,6 @@ final class Snapshotter: ObservableObject {
         //     · 面板关着 ⇒ 照常采(快照层的主要货源 ✓,反正内部还有 TTL 过滤 ✓)
         //     · 面板在台上 ⇒ 只采"从没拍到过"的窗(冷窗/新窗 ✓,通常 1–2 扇 ≤60ms ✓);
         //       TTL 到期重拍那种全量让位 ✓(652ms 长帧那个病例不再回来 ✓)
-        var windows = windows
         if PanelStageProbe.isVisible() {
             let cold = windows.filter { cache[$0.wid] == nil }
             if cold.isEmpty {
@@ -248,9 +247,10 @@ final class Snapshotter: ObservableObject {
                     //   `Image(nsImage:)` 兜底,而那份是未管理的 ⇒ 还是会闪一下 ✗
                     //   ⇒ 在**源头**统一:缓存里的每一张静帧都已经是 sRGB ✓
                     let sourced = SnapshotColorSpace.toSRGB(image) ?? image
+                    let bytes = sourced.bytesPerRow * sourced.height
                     let nsImage = NSImage(cgImage: sourced,
                                           size: NSSize(width: sourced.width, height: sourced.height))
-                    await self.publish(wid: w.wid, image: nsImage, batch: current, first: captured == 1, batchSize: batch.count)
+                    await self.publish(wid: w.wid, image: nsImage, bytes: bytes, batch: current, first: captured == 1, batchSize: batch.count)
                 }
             } catch {
                 await self.failedOnce.note("[T5] SCShareableContent 获取失败: \(error.localizedDescription)(屏幕录制权限?)")
@@ -285,9 +285,12 @@ final class Snapshotter: ObservableObject {
     /// 单张图落账(主线程)。`batch` = 发单时的会期号,只挡"上一局的图":
     /// 本会期里飞在半路的批次一律允许回填。
     @MainActor
-    private func publish(wid: CGWindowID, image: NSImage, batch: Int, first: Bool, batchSize: Int) {
+    private func publish(wid: CGWindowID, image: NSImage, bytes: Int, batch: Int, first: Bool, batchSize: Int) {
         guard batch == session else { return }
         cache[wid] = image
+        let oldBytes = cacheBytes[wid] ?? 0
+        cacheBytes[wid] = bytes
+        cacheMemoryBytes += bytes - oldBytes
         // "曾经拍到过"的账:prune 时不清,用来区分两种"无图"——
         //   从来没拍到过(SCK 不给 / 键不匹配)vs 拍到过但没留下来(丢了)
         everCaptured.insert(wid)

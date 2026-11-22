@@ -51,7 +51,10 @@ struct PermissionGuideView: View {
             .padding(20)
         }
         .frame(width: 460)
-        .background(SettingsTheme.paper)
+        .background {
+            SettingsWindowChrome().frame(width: 0, height: 0)
+            SettingsTheme.paper
+        }
         .onAppear { monitor.refresh() }
         // 授权齐了收掉拖拽助手(轮询每秒在刷新,这一拍总会到)
         .onChange(of: monitor.allGranted) { _, granted in

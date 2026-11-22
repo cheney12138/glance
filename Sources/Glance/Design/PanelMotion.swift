@@ -63,13 +63,11 @@ enum MotionPolicy {
     /// 是否处于"降级动效"模式
     static var reduced: Bool { !alwaysAnimate && systemReduced }
 
-    /// **唤起静音期**(2026-09-20,帧账驱动):唤起那一拍内**任何动效都不给**。
-    /// 病例(用户):「掉帧是第一次 ⌘Tab 唤起的时候」「不管是不是第二个,唤起面板的时候都不要这个动效了」——
-    /// 帧探针实测:那一秒里有"首图上屏 +343ms"与"起流握手"两件重活,而**托底还要滑到默认选中那格**
-    /// (`switch.advanceOnOpen` 开着 ⇒ 默认落在第二格)⇒ 位移叠在重活上就是肉眼里的卡 ✓。
-    /// 所以:唤起后 ~0.45s 内,`animation(_:)` 一律返回 nil(瞬时到位),之后恢复。
-    /// 只影响动效,不影响任何状态与逻辑。
-    static var summonQuiet = false
+    /// (2026-11-14 删)这里曾有"唤起静音期 summonQuiet"(2026-09-20 立的:唤起后 ~0.45s 内
+    /// animation() 返回 nil)。它是**死开关**:全仓从无写入者,静音期从未真正生效过 ——
+    /// 审查定性"声明了闸却没装",留着只会误导后来人以为唤起有静音保护 ✗。
+    /// 唤起那一拍的卡顿由 showPanel 的"先画后上屏 + listSettling + contentSwapUntil"管,
+    /// 不需要一个没人打开过的全局开关。
 
     /// **框架自己那套降级,我们覆盖不了**(2026-10-08 消元结论,值得记牢)。
     ///
@@ -89,7 +87,6 @@ enum MotionPolicy {
 
     /// 取动效:正常给弹簧;降级给一记短淡出(不位移、也不硬跳)
     static func animation(_ full: Animation, reduced reducedDuration: Double = 0.16) -> Animation? {
-        if summonQuiet { return nil }            // 唤起静音期:瞬时到位(见 summonQuiet 的注释)
         return reduced ? .easeOut(duration: reducedDuration) : full
     }
 

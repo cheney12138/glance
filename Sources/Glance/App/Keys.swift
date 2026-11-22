@@ -53,6 +53,8 @@ enum Keys {
     /// ⚠️ 老键 `debug.summonPop`(起始倍率)与 `debug.summonPopBounce`(阻尼)**已作废** ——
     ///   渐入不动几何,那两个旋钮没有意义了(键常量一并删掉,别留"写了没用"的假旋钮 ✓)
     static let debugSummonPopMs = "debug.summonPopMs"
+    /// `debug.summonRevealDelayMs` —— 快捷键超快切换时不加载/不上屏面板的阈值（毫秒；默认 **130**，设 0 = 按下立即上屏）
+    static let debugSummonRevealDelayMs = "debug.summonRevealDelayMs"
     /// `debug.mainThreadWatchdog` —— 主线程看门狗(默认 **关** ✓):卡死时由**后台线程**写一行日志 ✓
     /// (2026-10-08 病例:那次卡死既没有崩溃报告、也没有 spin 报告,trace 又是块缓冲 ⇒
     ///  文件里最后一行可能比真实卡死时刻早几分钟 ✗ ⇒ 现场必须在**还活着**的时候记下来 ✓)
@@ -182,6 +184,10 @@ enum Keys {
 
     /// `switch.scrollMovesSelection`
     static let switchScrollMovesSelection = "switch.scrollMovesSelection"
+    /// `switch.digitPicksApp`:数字键 1…9 直接跳到环上第 N 个 App(2026-11-12)
+    static let switchDigitPicksApp = "switch.digitPicksApp"
+    /// `switch.includeMinimized`:是否在本屏切换列表尾部收录已最小化的窗口（沿用遗照灰，选中单窗还原；默认关）
+    static let switchIncludeMinimized = "switch.includeMinimized"
 
     // MARK: trigger —— 触发键
 
@@ -194,6 +200,10 @@ enum Keys {
     static let moveWindowKeyCode = "moveWindow.keyCode"
     static let moveWindowModifier = "moveWindow.modifier"
 
+    // MARK: app —— 引导与生命周期
+
+    /// `app.onboardingCompleted` —— 首次 30 秒轻引导是否已完成（老用户启动时自动静默置 true）
+    static let appOnboardingCompleted = "app.onboardingCompleted"
 }
 
 /// **出厂默认值的唯一来源**(2026-09-22 立)。
@@ -219,6 +229,43 @@ extension Keys {
         let v = (UserDefaults.standard.object(forKey: panelMoveFillMinRatio) as? NSNumber)?.doubleValue
         return min(max(v ?? KeyDefaults.moveFillMinRatio, 0), 100) / 100
     }
+
+    /// 「数字键选 App」的**唯一读取点**(2026-11-12):触发层每颗数字键现读 ⇒ 设置里开关即生效 ✓
+    /// 关 ⇒ 裸数字不再跳 App(⇧+数字选窗不受此开关管 —— 那是另一条独立的老功能 ✓)
+    static var digitPicksApp: Bool {
+        UserDefaults.standard.object(forKey: switchDigitPicksApp) as? Bool ?? KeyDefaults.digitPicksApp
+    }
+
+    static var includeMinimized: Bool {
+        UserDefaults.standard.object(forKey: switchIncludeMinimized) as? Bool ?? KeyDefaults.includeMinimized
+    }
+
+    static var onboardingCompleted: Bool {
+        UserDefaults.standard.object(forKey: appOnboardingCompleted) as? Bool ?? KeyDefaults.onboardingCompleted
+    }
+
+    /// 老用户免打扰迁移：若从未写过 `app.onboardingCompleted`，但已存在历史运行配置键，
+    /// 直接静默标为已完成，避免升级后打扰老用户。
+    static func migrateOnboardingForLegacyUserIfNeeded() {
+        let ud = UserDefaults.standard
+        guard ud.object(forKey: appOnboardingCompleted) == nil else { return }
+        let legacySignals = [
+            "ring.lastScreenByBundle",
+            triggerKeyCode,
+            panelAppearance,
+            panelWindowLayout,
+            launchBlacklist,
+            ringBlacklist,
+        ]
+        if legacySignals.contains(where: { ud.object(forKey: $0) != nil }) {
+            ud.set(true, forKey: appOnboardingCompleted)
+        }
+    }
+}
+
+extension Notification.Name {
+    /// 面板成功唤起一次时发出，用于引导第 1 步实时打勾（不耦合 PanelController 类型）。
+    static let glancePanelDidSummon = Notification.Name("com.cheney12138.glance.panelDidSummon")
 }
 
 /// 组内窗口的呈现方式(键名见 `Keys.panelWindowLayout`)
@@ -261,6 +308,12 @@ enum KeyDefaults {
     static let fourFingerTapLaunchRing = true
     /// 会话内 `` ` `` 循环当前 App 的窗口。**开**:不开就永远不知道面板里能按 ` ✓(面板外不生效 ⇒ 无副作用)
     static let graveCyclesWindows = true
+    /// 数字键 1…9 直接跳到环上第 N 个 App(⇧+数字仍是选第 N 扇窗 ✓)。**开**(2026-11-12):
+    /// 真正的"让用户知道有这功能"靠设置面板这一行说明文字 ✓ —— 面板上**不画角标**(用户裁定:
+    /// 角标很丑 ✗;位置语义与 Tab 顺序天然一致,无需号码提示)
+    static let digitPicksApp = true
+    /// 在本屏切换列表尾部收录已最小化窗口（默认关，零额外枚举开销）
+    static let includeMinimized = false
     /// 双击 ⌥ 把指针(和键盘焦点)送到另一块屏。**开**:多屏用户的高频痛点 ✓(双击误触概率低)
     static let doubleOptionJumps = true
     /// 悬浮触感。**开**:唯一保留的触感,回答"我到底换到下一格了吗" ✓(强度另有一档设置)
@@ -282,4 +335,6 @@ enum KeyDefaults {
     /// 语义:按 ⌘` ⇒ 托盘/芯片轨道出现(没有环)、默认先切一扇;松手才真正切窗;
     ///       Esc / 点空白 = 放弃。⇧⌘` 反向。
     static let takeoverGraveCyclesWindows = true
+    /// 首次 30 秒轻引导默认未完成（老用户会在启动迁移中自动标 true）
+    static let onboardingCompleted = false
 }

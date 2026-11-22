@@ -77,12 +77,15 @@ public enum WindowTitle {
         return picked
     }
 
-    /// VSCode 2.0+ 标题尾部的 git 状态词(2026-11-09):它们是状态标记不是工程名,
+    /// 标题尾部的编辑器状态词(2026-11-09 起,2026-11-11 扩):它们是状态标记不是工程名,
     /// 排掉后「从后往前第一个像工程的段」才能命中真正的工程。
     /// 括号形态 `(Working Tree)` 由同一集合的带括号变体覆盖。
+    /// ★ 2026-11-11(用户实报 CatPaw 只读文件):`… — train_mrn_app_main — Read-only`
+    ///   ⇒ 排除集漏了只读标记,选中 `Read-only` ✗ 芯片显示 read only。补入只读变体。
     private static let gitStatusWords: Set<String> = [
         "Modified", "Untracked", "Deleted", "Added", "Renamed", "Conflict",
         "(Working Tree)", "(Working tree)",
+        "Read-only", "Read-Only", "Read Only", "readonly", "ReadOnly",
     ]
 
     /// **中段截断**(借鉴 AltTab 的 `titleTruncation`:end/middle/start,默认 end)。

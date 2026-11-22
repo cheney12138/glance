@@ -186,7 +186,7 @@ extension PanelController {
     ///   `NSRunningApplication(processIdentifier:)`(= 一次 LaunchServices XPC)⇒
     ///   面板开着时每秒 60 次同步 XPC ⇒ 掉帧 ✗
     ///   ⇒ 按"pid + bundle"记一次结果,只有换格/换 App 才重算 ✓(颜色本来就跟着选中走)
-    private static var sheenTintMemo: (key: String, color: NSColor?)?
+    static var sheenTintMemo: (key: String, color: NSColor?)?
     var sheenTint: NSColor? {
         let key: String
         let color: NSColor?
@@ -199,7 +199,7 @@ extension PanelController {
             let g = groups[appIndex]
             key = "pid:\(g.pid):\(g.bundleID ?? "")"
             if let m = Self.sheenTintMemo, m.key == key { return m.color }
-            color = IconTint.color(for: IconProvider.art(for: g.pid).image, key: key)
+            color = IconTint.color(for: IconProvider.art(for: g.pid, bundleID: g.bundleID).image, key: key)
         }
         Self.sheenTintMemo = (key, color)
         return color
@@ -286,7 +286,17 @@ extension PanelController {
     ///   原来"隐藏优先" ⇒ 一个 App 同时满足"有窗收在 Dock 里"与"系统说它 hidden"时,显示角标 ✗
     ///   而用户刚按的是 ⌘M,要看见的是"那扇窗收起来了" ⇒ **有收纳就显示灰** ✓
     func mark(for pid: pid_t) -> PanelMark? {
-        PanelMarkPolicy.mark(hidden: hidingPIDs.contains(pid), tucked: minimizedPIDs.contains(pid))
+        let group = groups.first { $0.pid == pid }
+        // 主环图标「遗照灰」口径：
+        // - 该 App 在本屏仍有可见窗 ⇒ 保持正常彩色（最小化窗在展开层里以遗照灰显示）；
+        // - 该 App 本屏全部窗口都已最小化（含外部 ⌘M），或无可见窗且曾被收纳 ⇒ 主环呈现遗照灰。
+        let allTucked: Bool
+        if let group, !group.windows.isEmpty {
+            allTucked = group.windows.allSatisfy(\.isMinimized)
+        } else {
+            allTucked = minimizedPIDs.contains(pid)
+        }
+        return PanelMarkPolicy.mark(hidden: hidingPIDs.contains(pid), tucked: allTucked)
     }
 
     /// **本局**被我们缩小过的 App —— 只给"松开时不许唤醒它"这条守卫用 ✓

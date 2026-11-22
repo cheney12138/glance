@@ -47,6 +47,7 @@ struct GlanceApp: App {
         //   这里只清**旧的调试键**(历史上被自动化测试留成 ON 过,不清会残留 ✓);
         //   要临时钉住仍可走启动参数 `-debug.pinPanelOnRelease 1` ✓
         UserDefaults.standard.removeObject(forKey: Keys.debugPinPanelOnRelease)
+        Keys.migrateOnboardingForLegacyUserIfNeeded()
     }
 
     @StateObject private var permissions = PermissionMonitor()
@@ -63,6 +64,7 @@ struct GlanceApp: App {
                 Divider()
             }
             QuickSettingsMenu()          // ★ 2026-09-22:菜单里也能调(见类型注释里的取舍)
+            Button("快捷键速查…") { showCheatSheet() }
             Button("设置…") { showSettings() }
             Divider()
             Button("检查更新…") { UpdateChecker.checkForUpdates() }
@@ -128,7 +130,8 @@ struct GlanceApp: App {
                     DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
                     // 跨屏送窗(ADR-0016):走**独立注册的快捷键**(默认 ⌘⇧M,可在设置里录 ✓)
                     // —— 脱面板:和面板开没开、选中哪一格都无关 ✓
-                    hotkeys.onMoveWindowToNextScreen = { MoveFocusedWindowToNextScreen.run() }
+                    // ★ 2026-11-12 三修改 async(搬窗要等一拍再设尺寸,见 WindowFocuser.move 的病例注释)⇒ Task 托管 ✓
+                    hotkeys.onMoveWindowToNextScreen = { Task { @MainActor in await MoveFocusedWindowToNextScreen.run() } }
                     // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
                     // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
                     ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }
@@ -155,6 +158,7 @@ struct GlanceApp: App {
                         panelController?.dismissForOutsideInput()
                     }
                     panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
+                    panelController.onOpenCheatSheet = { showCheatSheet() }
                     if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
                 }
                 // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
@@ -172,9 +176,17 @@ struct GlanceApp: App {
         .menuBarExtraStyle(.menu)
 
         Window("Glance 权限", id: "permissions") {
-            PermissionGuideView(monitor: permissions)
+            if permissions.allGranted && !Keys.onboardingCompleted {
+                OnboardingView {
+                    dismissWindow(id: "permissions")
+                    permissionWindowShown = false
+                }
+            } else {
+                PermissionGuideView(monitor: permissions)
+            }
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
         // 权限窗与设置窗同一张纸(纸色当窗口底,红绿灯浮在左上角) —— 两窗一个语言 ✓
         .windowStyle(.hiddenTitleBar)
         // ★ 缺权自动弹引导。⚠️ 三条路径,各自的坑都有病例:
@@ -185,8 +197,12 @@ struct GlanceApp: App {
         //   · 运行中删权:allGranted true→false ⇒ 本 onChange 的 else 分支 ✓
         .onChange(of: permissions.allGranted) { _, granted in
             if granted {
-                // 权限齐了:引导窗没有存在意义,收掉(上一版只弹不收 ⇒ 权限齐了窗还挂着)
-                if self.permissionWindowShown { dismissWindow(id: "permissions"); self.permissionWindowShown = false }
+                // 老用户已完成引导 ⇒ 权限齐了直接收掉权限窗；
+                // 首次安装新用户 ⇒ 保留同一扇窗原地切入 3 步轻引导（不二次弹窗）。
+                if self.permissionWindowShown && Keys.onboardingCompleted {
+                    dismissWindow(id: "permissions")
+                    self.permissionWindowShown = false
+                }
             } else if permissions.hasCheckedSinceLaunch {
                 showPermissions()   // 运行中删权(已真正查过权限,不是初值)
             }
@@ -197,24 +213,65 @@ struct GlanceApp: App {
         }
 
         Window("Glance 设置", id: "settings") {
-            SettingsView(store: SettingsStore.shared, permissions: permissions)
+            SettingsView(
+                store: SettingsStore.shared,
+                permissions: permissions,
+                buildDiagnosticsJSON: { [permissions, hotkeys] in
+                    DiagnosticCollector.buildJSON(permissions: permissions, hotkeys: hotkeys)
+                },
+                onOpenCheatSheet: { showCheatSheet() },
+                onOpenOnboarding: { showOnboarding() }
+            )
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
         // 设置窗是"一张纸":标题栏交给窗内的构图(demo 的红绿灯直接浮在纸的左上角,
         // 棱镜边压在它们下面)。窗口标题仍在 Window 菜单里,窗口照旧可拖、可关。
+        .windowStyle(.hiddenTitleBar)
+
+        Window("快捷键速查", id: "cheatsheet") {
+            ShortcutCheatSheetView(onOpenSettings: { showSettings() })
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .windowStyle(.hiddenTitleBar)
+
+        Window("快速上手", id: "onboarding") {
+            OnboardingView {
+                dismissWindow(id: "onboarding")
+            }
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
     }
 
     /// LSUIElement 应用的窗口不会自动到前台。macOS 14 起 activate 降级为"请求",
     /// 且零窗 agent 的激活请求会被压制(实机现形:首次点设置躺在后面,二次正常)。
-    /// 所以开窗后补一剂:再激活 + 显式 makeKeyAndOrderFront + orderFrontRegardless
+    /// 所以开窗后补一剂:再激活 + 显式 makeKeyAndOrderFront + orderFrontRegardless。
+    ///
+    /// 注意(2026-11-22 修复):`CursorScreenAnchor.center` 必须在开窗前(复用旧窗时)与首帧上屏前
+    /// (新建窗时由 `SettingsWindowChrome` 在 `alpha = 0` 下完成),绝不能放在 `asyncAfter(0.1)` 里 ——
+    /// 否则窗会先在右上角/旧位闪现 0.1s,再当场“往左位移跑一下”。
     private func showWindow(id: String) {
         NSApp.activate(ignoringOtherApps: true)
+        if let existing = NSApp.windows.first(where: { $0.identifier?.rawValue == id }) {
+            if !existing.isVisible { existing.alphaValue = 0 }
+            CursorScreenAnchor.center(existing)
+        }
         openWindow(id: id)
+        DispatchQueue.main.async {
+            guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue == id }) else { return }
+            CursorScreenAnchor.center(w)
+            w.alphaValue = 1
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue == id }) else { return }
             NSApp.activate(ignoringOtherApps: true)
-            CursorScreenAnchor.center(w)
+            if w.alphaValue < 1 {
+                CursorScreenAnchor.center(w)
+                w.alphaValue = 1
+            }
             w.makeKeyAndOrderFront(nil)
             w.orderFrontRegardless()
         }
@@ -235,6 +292,14 @@ struct GlanceApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Snapshotter.shared.precaptureOwnWindows() }
     }
 
+    private func showCheatSheet() {
+        showWindow(id: "cheatsheet")
+    }
+
+    private func showOnboarding() {
+        showWindow(id: "onboarding")
+    }
+
     /// 冷启动预热(T86):启动后空闲 2.5s 干两件没人看的事 ——
     /// ① 语境屏枚举 + 预截一遍:把冷枚举管线(T85 实测 256ms:CGWindowList / AX 首连 / SCK 全是
     ///    第一次)与空缓存整个暖掉,首局唤起直接吃热路径(实测上屏 353ms → 84ms);
@@ -245,12 +310,15 @@ struct GlanceApp: App {
     /// ★ 2026-09-18 拆成两笔(用户实报「白光又出现了」—— 日志:启动后 1.6s 就唤起,
     /// `[唤起] 缓存 0.0MB/0 张、按键→上屏 264ms`,而 `[保温]` 2538ms 才跑):
     /// 两件事的"贵"差一个量级,不该绑在同一个 2.5s 上 ——
-    ///   · 两块面板窗构建 + 首帧合成预热 = 便宜(几十 ms)⇒ 提前到 **0.6s**;
+    ///   · 两块面板窗构建 + 首帧合成预热 = 便宜(几十 ms)⇒ 提前到 **0.15s**(2026-11-14 审查:0.6s 的空窗里撞唤起 = 裸奔窗);
     ///   · 冷枚举扫屏 + 全量预截 = 贵(百 ms 级,AX/CGWindowList/SCK 全是第一次)⇒ 仍等 2.5s。
     /// 这样"启动后立刻唤起"也有预热过的合成器与建好的窗口,冷启动的白光没有可乘之机
     /// (扫屏还没跑只影响"第一眼有没有图",那是另一件事,不闪)。
     private func scheduleWarmup() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [panelController] in
+        // 2026-11-14 审查:0.6 → 0.15。保温(建窗+首帧+图标解码)只花几十 ms,
+        //   晚 0.45s 的窗口里用户若按下 ⌥⇥,撞上的是"同步建窗 ~80ms"的裸奔窗(按下没动静然后突然出来)。
+        //   扫屏(coldStartSweep)仍留 2.5s —— 那一支才是真贵的(百 ms 级 AX/CGWindowList/SCK)。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [panelController] in
             panelController.prewarmPanels()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {

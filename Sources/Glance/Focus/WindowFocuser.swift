@@ -73,6 +73,18 @@ enum WindowFocuser {
     }
 
     static func focus(window w: WindowRecord) {
+        if w.isMinimized {
+            let unminimized = unminimize(window: w)
+            glog("[T7] 单窗还原最小化: \(w.ownerName) — \(w.title) (\(unminimized ? "已受理" : "未找到 AX 窗"))")
+            if unminimized {
+                let target = WindowRecord(wid: w.wid, pid: w.pid, ownerName: w.ownerName,
+                                          title: w.title, bounds: w.bounds, isMinimized: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                    Self.focus(window: target)
+                }
+                return
+            }
+        }
         // ★★ 2026-10-08 另一半病例(用户原话里的前半句):「**设置面板还是换不起来**」——
         //   目标是我们**自己的窗**(设置/权限)时,上面那套"让位给对方"用不上(不能让位给自己 ✗),
         //   而 `_SLPSSetFrontProcessWithOptions` 对自家进程也照样是"成功谎言" ✗
@@ -143,6 +155,7 @@ enum WindowFocuser {
             let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
             guard front != w.pid else { return }                       // ✓ 成了
             guard front == beforePID else { return }                   // 用户去了第三处 ⇒ 不抢
+            DiagnosticRingBuffer.shared.recordSLPSVerifyFallback()
             glog("[T7] ⚠️ 聚焦核验:0.5s 后仍是 \(before.localizedName ?? "?") 在前台 ⇒ "
                  + "SLPS 成功是谎言,降级 activate 补一发 @\(w.ownerName)")
             NSRunningApplication(processIdentifier: w.pid)?.activate(options: [])
@@ -236,6 +249,13 @@ enum WindowFocuser {
         return AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, true as CFBoolean) == .success
     }
 
+    /// 单窗取消最小化：只把目标这一扇窗的 `kAXMinimized` 设为 `false`，绝不级联拉起同 App 其他最小化窗。
+    @discardableResult
+    static func unminimize(window w: WindowRecord) -> Bool {
+        guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXMinimizedAttribute as CFString, false as CFBoolean) == .success
+    }
+
     /// 缩放(绿灯):按它的 zoom 按钮——绿灯是"缩放"不是"全屏",
     /// App 自己决定 content-fit;动作收口与红绿灯语义对齐(预览卡 T14)
     /// F:选中窗进出全屏(AltTab `toggleFullscreenWindowShortcut`,默认 F)。
@@ -283,10 +303,28 @@ enum WindowFocuser {
     /// ⇒ 正解：**先把它挪过去**（此刻它归目标屏 ✓）⇒ 再设尺寸 ⇒ 尺寸变化可能让系统重排/夹位置，
     ///   所以最后**再钉一次位置** ✓；仍不一致就再补一轮（最多两轮 ✓）
     ///
+    /// ★★ 2026-11-12 三修~六修(同日连环,用户实报:「cmd shift m移动的时候全屏铺满的尺寸
+    ///   计算有问题,大屏→小屏、小屏→大屏都不对」「窗口自己很诡异的上下移动…跟活了一样」):
+    ///
+    ///   隔离实验(raw AX 对同一扇 ELYTerminal)把机理拼齐了:
+    ///   · AX 的 setSize/setPosition 返回 .success ≠ 已落地 —— Electron 类 App 是**异步重入**的:
+    ///     它自己的"字符网格重排"与我们的写请求竞速,晚到的写会被它更晚的重排覆盖(实测同序列
+    ///     间隔 80ms 被吃、400ms 落地;同序列不同起点结果不同)
+    ///   · "活了一样"的上下抖动 = 我们的 setPos 与 App 的**底部锚定**打架:它把窗往下踢 34pt,
+    ///     我们每轮拉回 33pt,循环 6 轮 = 窗口撞底又弹回 6 次 ✗
+    ///   ⇒ 六修:**每步验证式** —— 不再"发完就当成功":
+    ///     ① 需要缩的先在源屏上缩,**等到真的缩了**才挪(每轮 200ms 读回,最多 5 轮;
+    ///        缩不过去就不挪 —— 硬挪过去也是塞不下 ✗)
+    ///     ② 挪到最终位置,**等到真的到位**才发尺寸
+    ///     ③ 目标屏上补终值(尺寸与位置**分开发、各自验证** —— 实验 A 证明单发高度能落地,
+    ///        而 pos+size 连发触发底部锚定竞速 ✗)
+    ///     ④ 任一步连发 5 轮不落地 = 放弃(记日志,别把用户窗口抖成"活的" ✗)
+    ///   → 函数为 async:唯一调用方(送窗 run())已 @MainActor,每步等一拍无感 ✓
+    ///
     /// 设完**回读**:有些 App 有最小尺寸/贴边约束 ⇒ 实得 ≠ 请求是**它的属性**，不是 bug ✗
     /// ⇒ 这就是这行日志存在的意义（`[T33] 搬窗: … 请求 … · 实得 …`）✓
     @discardableResult
-    static func move(window w: WindowRecord, to frame: CGRect, resize: Bool = false) -> Bool {
+    static func move(window w: WindowRecord, to frame: CGRect, resize: Bool = false) async -> Bool {
         guard let element = axWindowElement(pid: w.pid, wid: w.wid) else { return false }
 
         func setPosition(_ p: CGPoint) -> Bool {
@@ -305,14 +343,76 @@ enum WindowFocuser {
             return abs(now.minX - frame.minX) <= 2 && abs(now.minY - frame.minY) <= 2
                 && abs(now.width - frame.width) <= 2 && abs(now.height - frame.height) <= 2
         }
-
         var ok = true
         if resize {
-            for _ in 0..<2 {                       // 最多两轮:第一轮通常就够,第二轮兜"系统重排"✓
-                ok = setPosition(frame.origin) && ok   // ① 先挪过去(关键:尺寸不再被源屏夹 ✓)
-                ok = setSize(frame.size) && ok         // ② 在新屏上设尺寸
-                ok = setPosition(frame.origin) && ok   // ③ 尺寸变化可能挪位 ⇒ 再钉一次
-                if reached() { break }
+            // ★★ 七修(2026-11-12,用户:「ok了. 但是很僵硬, 会有一个明显的铺满过程, 尝试做到无感的」):
+            //   六修的"每步验证式"功能对了但观感僵硬 —— 四步串行、每步等验证,中间态全裸奔在
+            //   用户眼前(缩→滑→长→钉,一段看得见的"铺满过程" ✗)
+            //   ⇒ 两段式:**A 段(快路)** = 一次性连发(原生手感:窗直接跳到终态,无中间过程);
+            //   大多数 App/大多数方向一跳就位 ✓ 250ms 内验证,不达标才进 B 段 ——
+            //   **B 段(顽固窗,Electron 等) = 屏外停车场**:把窗挪到目标屏**正下方屏外**
+            //   (用户视野里它直接消失),在看不见的地方把尺寸磨到位(屏外无屏幕约束,连"先缩
+            //   再挪"都不需要了 ✓),最后一步落位 = 窗以**最终尺寸**出现在目标位置 ——
+            //   全程用户只看见"一跳",没有任何铺满过程 ✓
+
+            // —— A 段:一次性连发(pos→size→pos,旧三连的老姿势,大多数 App 够用 ✓)——
+            _ = setPosition(frame.origin)
+            _ = setSize(frame.size)
+            _ = setPosition(frame.origin)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if !reached() {
+                // —— B 段:屏外停车场 ——
+                // ① 停到目标屏正下方屏外(窗顶在**目标屏可见区底**之下再让 60pt,整扇不可见)
+                //   (同方向同列:用户看到的不是"往下滑",而是"直接消失" ✓)
+                //   ⚠️ 2026-11-14 审查修正:原来 y = frame.maxY + 60 按**窗**算 —— 纵向堆叠双屏时
+                //   "目标屏下方 60pt"可能落在隔壁那块屏上,用户看见窗闪现 ✗ ⇒ 按目标屏 visibleFrame 算,
+                //   并对全部屏幕的 min/maxY 取包络 —— 停车点必须在**任何一块屏**之外 ✓
+                let targetScreen = NSScreen.screens.first { $0.frame.intersects(CGRect(origin: frame.origin, size: CGSize(width: 1, height: 1))) }
+                    ?? NSScreen.screens.first { $0.visibleFrame.contains(CGPoint(x: frame.midX, y: frame.midY)) }
+                let screenBottom = targetScreen?.visibleFrame.maxY
+                    ?? NSScreen.screens.map(\.frame).map(\.maxY).max() ?? frame.maxY
+                let allScreensTopEnvelope = NSScreen.screens.map(\.frame).map(\.maxY).max() ?? 0
+                let allScreensBottomEnvelope = NSScreen.screens.map(\.frame).map(\.minY).min() ?? 0
+                // 泊车 y:目标屏底之下;若那还在某块屏的包络内,再压到全局包络之下
+                var parkY = min(screenBottom, frame.maxY) + 60
+                if parkY < allScreensTopEnvelope && parkY > allScreensBottomEnvelope {
+                    parkY = allScreensBottomEnvelope - frame.height - 60
+                }
+                let park = CGPoint(x: frame.minX, y: parkY)
+                _ = setPosition(park)
+                // ② 在停车场把尺寸磨到位(每轮发一次、等一拍、读回验证;屏外无约束,
+                //    增缩都自由 ✓ Electron 的网格圆整也在看不见的地方完成 ✓)
+                var sized = false
+                for _ in 0..<5 {
+                    _ = setSize(frame.size)
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    if let now = readFrame(element),
+                       abs(now.width - frame.width) <= 2, abs(now.height - frame.height) <= 2 {
+                        sized = true; break
+                    }
+                }
+                // ③ 落位:以(已磨好的)尺寸直接出现在目标位置 —— 用户只看见这一跳 ✓
+                var landed = false
+                for _ in 0..<3 {
+                    _ = setPosition(frame.origin)
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if let now = readFrame(element),
+                       abs(now.minX - frame.minX) <= 2, abs(now.minY - frame.minY) <= 2 { landed = true; break }
+                }
+                // 停车被 App 拽回可见区(Electron 底部锚定那类行为)⇒ 尺寸大概率也没磨成;
+                // 不再重试 —— 重复请求正是六修里"窗口活了"的燃料 ✗,认账交给日志 ✓
+                // ⚠️ 2026-11-14 审查修正:give-up 路径原先只看 sized —— 定位循环失败照样
+                //   ok=true,窗可能**永远留在停车场(屏外)** 而日志报"成功" ✗。
+                //   现在:① 定位失败也置 false;② 最后无条件再 setPosition 一次 ——
+                //   这是最后一次尝试,不发重试循环(不重演"窗口活了"),发完读回记日志,
+                //   若仍不到位,窗至少离目标位置只剩一次 setPosition 的距离,不会被遗忘在屏外。
+                if !sized { ok = false }
+                if !landed {
+                    ok = false
+                    _ = setPosition(frame.origin)
+                    let final = readFrame(element).map { "(\(Int($0.minX)),\(Int($0.minY)))" } ?? "?"
+                    glog("[搬窗] 落位 3 轮未到位,已最后补发一次;终态=(\(final)) 期望=(\(Int(frame.minX)),\(Int(frame.minY)))")
+                }
             }
         } else {
             ok = setPosition(frame.origin)
@@ -418,6 +518,21 @@ enum WindowFocuser {
         NSRunningApplication(processIdentifier: pid)?.terminate()
     }
 
+    /// 把 App 带到前台(有窗的;与 focusWindowlessApp 同款两段式:openApplication 优先,
+    /// 拿不到 bundleURL / 系统没接 ⇒ activate 兒底)。
+    /// 用途:Q 被确认框拦下时(2026-11-14,用户:「原生 switcher 会直接唤起那个 APP,比我们做得好」)——
+    /// 弹窗自己只会 orderFront,**不会把后台 App 激活到前台** ⇒ 不唤起的话确认框落在最底下 ✗
+    static func activateApp(pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        if let url = app.bundleURL {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { running, _ in
+                if running == nil { app.activate(options: .activateAllWindows) }
+            }
+        } else {
+            app.activate(options: .activateAllWindows)
+        }
+    }
+
     /// T15 无窗应用确认:alt-tab 的处方是"把它当启动一次"——activate 对无窗 App
     /// 在 macOS 14+ 会被系统当君子请求无视(T15 实机现形:选中后没反应)。
     /// openApplication 走不通才退回 activate(allWindows)。
@@ -480,6 +595,7 @@ enum WindowFocuser {
     }
 
     private static func degrade(_ w: WindowRecord, reason: String) {
+        DiagnosticRingBuffer.shared.recordSLPSDegrade(code: reason)
         yieldActivationIfWeAreActive(pid: w.pid)   // 降级这条路同样要先让位 ✓
         NSRunningApplication(processIdentifier: w.pid)?.activate(options: [])
         if !degradedWarned {

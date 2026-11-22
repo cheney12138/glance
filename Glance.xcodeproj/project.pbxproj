@@ -57,6 +57,11 @@
 		AA0000000000000000000F0A /* AppearancePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F0B /* AppearancePreference.swift */; };
 		AA0000000000000000000F0C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F0D /* Assets.xcassets */; };
 		AA0000000000000000000F10 /* CaptureSessionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000F11 /* CaptureSessionProbe.swift */; };
+		AA0000000000000000000D01 /* DiagnosticRingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D02 /* DiagnosticRingBuffer.swift */; };
+		AA0000000000000000000D03 /* DiagnosticCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D04 /* DiagnosticCollector.swift */; };
+		AA0000000000000000000D05 /* ShortcutCheatSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D06 /* ShortcutCheatSheetView.swift */; };
+		AA0000000000000000000D07 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D08 /* OnboardingView.swift */; };
+		AA0000000000000000000D09 /* SettingsToys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D0A /* SettingsToys.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -109,6 +114,11 @@
 		AA0000000000000000000F0B /* AppearancePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreference.swift; sourceTree = "<group>"; };
 		AA0000000000000000000F0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000F11 /* CaptureSessionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSessionProbe.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D02 /* DiagnosticRingBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticRingBuffer.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D04 /* DiagnosticCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticCollector.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D06 /* ShortcutCheatSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutCheatSheetView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D08 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D0A /* SettingsToys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsToys.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -226,6 +236,9 @@
 				5A0000000000000000000072 /* SettingsView.swift */,
 				5A0000000000000000000090 /* SettingsTheme.swift */,
 				5A0000000000000000000092 /* SettingsControls.swift */,
+				AA0000000000000000000D0A /* SettingsToys.swift */,
+				AA0000000000000000000D06 /* ShortcutCheatSheetView.swift */,
+				AA0000000000000000000D08 /* OnboardingView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -239,6 +252,7 @@
 				AA0000000000000000000101 /* Keys.swift */,
 				5A0000000000000000000C2 /* ScreenScopedSwitching.swift */,
 				AA0000000000000000000111 /* DebugFlags.swift */,
+				AA0000000000000000000D04 /* DiagnosticCollector.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -263,6 +277,7 @@
 				5A0000000000000000000096 /* Stdout.swift */,
 				5A00000000000000000000D0 /* SessionMarks.swift */,
 				AA0000000000000000000F02 /* FrameProbe.swift */,
+				AA0000000000000000000D02 /* DiagnosticRingBuffer.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -384,6 +399,11 @@
 				AA0000000000000000000F10 /* CaptureSessionProbe.swift in Sources */,
 				5A0000000000000000000097 /* Stdout.swift in Sources */,
 				AA0000000000000000000F01 /* FrameProbe.swift in Sources */,
+				AA0000000000000000000D01 /* DiagnosticRingBuffer.swift in Sources */,
+				AA0000000000000000000D03 /* DiagnosticCollector.swift in Sources */,
+				AA0000000000000000000D05 /* ShortcutCheatSheetView.swift in Sources */,
+				AA0000000000000000000D07 /* OnboardingView.swift in Sources */,
+				AA0000000000000000000D09 /* SettingsToys.swift in Sources */,
 				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
 				5A0000000000000000000C1 /* ImageCache.swift in Sources */,
 				5A0000000000000000000C5 /* IconTint.swift in Sources */,

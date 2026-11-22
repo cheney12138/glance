@@ -23,11 +23,15 @@ final class PermissionMonitor: ObservableObject {
     /// 被删权永远检测不到 ⇒ 门禁永远不关,吞键 tap 继续在无权状态下跑 —— reviewer C1)。
     /// 没齐 = 1s(用户正在设置里勾选中,回来要给反馈);齐了 = 5s(低成本的保活对账)。
     func refresh() {
-        accessibilityGranted = AXIsProcessTrusted()
-        screenCaptureGranted = CGPreflightScreenCaptureAccess()
+        let ax = AXIsProcessTrusted()
+        let sc = CGPreflightScreenCaptureAccess()
+        // 仅在值真变时写入 @Published,避免 5s 保活轮询每次空发两次 objectWillChange ✓
+        if accessibilityGranted != ax { accessibilityGranted = ax }
+        if screenCaptureGranted != sc { screenCaptureGranted = sc }
         if !hasCheckedSinceLaunch {
             hasCheckedSinceLaunch = true
-            launchGuideNeeded = !allGranted   // 冷启动缺权:让 onChange 看见一个真变化
+            let needGuide = !allGranted
+            if launchGuideNeeded != needGuide { launchGuideNeeded = needGuide }
         }
         startPolling(interval: allGranted ? 5.0 : 1.0)
     }
@@ -53,8 +57,10 @@ final class PermissionMonitor: ObservableObject {
     private func startPolling(interval: TimeInterval) {
         if let t = pollTimer, t.timeInterval == interval { return }   // 间隔没变就不动(避免每次 refresh 重置)
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        t.tolerance = interval * 0.2   // 允许系统定时器合并唤醒,省电 ✓
+        pollTimer = t
     }
 }

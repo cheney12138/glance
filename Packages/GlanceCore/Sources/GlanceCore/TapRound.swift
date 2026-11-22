@@ -122,12 +122,11 @@ public enum TapRound {
         ///   在**没有前序拖拽**时仍一票否决(2026-09-23 语料,见 corpus 样本)✓
         public var dragGraceDuration: Double = 0.50
 
-        /// ⚠️ 2026-09-24 试过放宽到 0.45 —— **被语料测试当场拦下** ✓ 保持 0.6:
-        ///   依据(用户实报「三指要点好多遍才能唤起」):有意点按实测落在 **0.6–0.9** ✓,
-        ///   而被这条门挡下的是 `size < 0.6` 那些 —— 其中 `size=0.5` 正是用户**最早报的误触**
-        ///   (`TapRoundCorpusTests` 里那条"已挡住"的样本 ✗)⇒ 放宽 = 把老 bug 请回来 ✗
-        ///   ⇒ 于是只动**漂移门**(0.03→0.05 ✓);重量门交给档位 `debug.tapMinContactSize` 现场 A/B ✓
-        public var minContactSize: Float = 0.6
+        /// ★ 2026-11-20 下调 **0.6 → 0.45**(用户实报「偶尔需要三指点个两三次才能唤起」):
+        ///   2.5 小时实测账:成功唤起 47 次、被重量门误杀 **34 次**(21 次 `0.55–0.599` + 13 次 `0.45–0.549`,
+        ///   失手率 42%,甚至出现连续 4 发正常三指轻点全被拒 ✗)。下调到 0.45 后保留对 `≤0.4` 极轻搭手/掠过的
+        ///   拦截,同时让正常三指轻点一触即开;仍可通过 `debug.tapMinContactSize` 现场微调 ✓
+        public var minContactSize: Float = 0.45
         /// **触点"主轴"上限** —— 太大就不是手指,是**掌心/掌缘**压到了 ✓
         ///
         /// 病例(2026-09-24 用户实报):「只用单个笔记本、不接外接屏的时候,两只手放在键盘上打字,
@@ -392,12 +391,19 @@ public enum TapRound {
             lastTouching = touching
 
             // ⑦ 真手指第一次落板 ⇒ 表从这一帧重掐（掌先落的不计时 —— 掌搭着打字时那段时间不该算进点按）
+            // ⚠️ 2026-11-21 死锁崩溃病例（/tmp/glance-hang.txt 铁证）：
+            //   上面 ⑤b `live.removeAll` 剪掉过期旧轨迹后，`live` 数组会缩短，导致 ⑤ 里记录的旧下标集合
+            //   `claimed` 失效（例如 `resetIfStuck(keepTracks: true)` 留下的 `live[0]` 过期被剪，新落指
+            //   追加在 `live[1]`，剪完 `live.count == 1`，再按 `claimed = {1}` 取 `live[1]` 当场触发
+            //   `Array._checkSubscript` fatal error；而此时 `mt_ThreadedMTEntry` 正持着 `pressLock`
+            //   ⇒ 主线程在 `currentMaxTouching()` 永远死等锁，整进程 98% CPU 卡死、三指彻底失灵）。
+            //   ⇒ 改按剪枝后的 `live.indices` 遍历本帧命中的轨迹（`lastSeen == now`），结构上杜绝越界 ✓。
             if touching > 0, !sawRealTouch {
                 sawRealTouch = true
                 beganAt = now
                 countedSince = 0
                 maxTracks = 0
-                for i in claimed {                           // 位移基线也重掐
+                for i in live.indices where live[i].lastSeen == now { // 位移基线重掐（剪枝后安全下标）
                     live[i].baseNorm = live[i].lastNorm
                     live[i].baseAbs = live[i].lastAbs
                 }
@@ -470,7 +476,7 @@ public enum TapRound {
                 //   <10s 内成串)—— 搭着/掠着本来就不可能成功(只认 3/4 指),理由对排查零信息量。
                 //   0 指空轮的静默(上面那条)只是小头;这行才是主药。≥2 指的过轻仍留理由 ✓
                 guard snap.fingerCount >= 2 else { return .rejected("") }
-                return .rejected(String(format: "触点过轻(最重 %.1f < 下限 %.1f · %d 指 ⇒ 搭着/掠着,不是轻点)",
+                return .rejected(String(format: "触点过轻(最重 %.2f < 下限 %.2f · %d 指 ⇒ 搭着/掠着,不是轻点)",
                                         snap.maxSize, policy.minContactSize, snap.fingerCount))
             }
 

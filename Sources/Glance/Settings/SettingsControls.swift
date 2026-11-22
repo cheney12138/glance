@@ -48,6 +48,8 @@ struct ViewportHeightKey: PreferenceKey {
 
 struct SettingsGroup<Content: View>: View {
     var label: String? = nil
+    /// 组标题旁的可选图标（SF Symbols），增加分组辨识度与呼吸感。
+    var icon: String? = nil
     /// 侧栏子菜单的滚动锚点(锚点 id = "\(页):\(组名)");nil = 不参与定位
     var anchor: String? = nil
     @ViewBuilder var content: Content
@@ -64,11 +66,16 @@ struct SettingsGroup<Content: View>: View {
                 // 与行标题严格同线,层级不靠边框靠字号 + 记号
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(SettingsTheme.ink)
+                        .fill(SettingsTheme.beam)
                         .frame(width: 3, height: 13)
                     Text(label)
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(SettingsTheme.ink)
+                    if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.ink2.opacity(0.75))
+                    }
                 }
                 .padding(.bottom, SettingsMetrics.labelGap)
                 .id(anchor)   // 锚点 = 标题本体(无标题的组不参与定位)
@@ -108,6 +115,7 @@ struct SettingsRow<Trailing: View>: View {
     var desc: String? = nil
     var hairline: Bool = true
     @ViewBuilder var trailing: Trailing
+    @State private var hovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,6 +142,15 @@ struct SettingsRow<Trailing: View>: View {
                 trailing
             }
             .padding(.vertical, SettingsMetrics.rowPadY)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(hovered ? SettingsTheme.tabRail : .clear)
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, 2)
+            }
+            .onHover { over in
+                withAnimation(MotionPolicy.animation(.easeOut(duration: 0.14))) { hovered = over }
+            }
 
             if hairline {
                 Rectangle()
@@ -250,7 +267,9 @@ struct BeamSwitch: View {
 
 /// 内容区盖不到的那两件事,只能落到窗上:
 /// 1. **窗口底色**:`.frame(600×H)` 只是内容,窗口比它高出一条标题栏,不刷底会露白边;
-/// 2. **整张纸可拖**:无标题栏窗口若只能拖顶上一条,手感是残的(控件自己会吃掉手势,无误拖)。
+/// 2. **整张纸可拖**:无标题栏窗口若只能拖顶上一条,手感是残的(控件自己会吃掉手势,无误拖);
+/// 3. **开窗无位移居中 + 内容自适应重居中**:首帧未就位前先按 `alpha=0` 完成布局并落到光标屏正中,
+///    消除先出现在旧位/角落再 0.1s 跳回屏中的闪烁;后续内容尺寸变化(`didResize`)同步保居中。
 struct SettingsWindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ChromeView() }
 
@@ -258,16 +277,22 @@ struct SettingsWindowChrome: NSViewRepresentable {
 
     final class ChromeView: NSView {
         private var closeObserver: NSObjectProtocol?
+        private var resizeObserver: NSObjectProtocol?
+        private weak var configuredWindow: NSWindow?
+        private var isCentering = false
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             // 窗关闭时 SwiftUI 先把本视图摘离窗口(willClose 通知因此没人收 —— 实测),
             // 摘离这一刻就是收工信号
-            if window == nil, closeObserver != nil {
-                print("[帧] 设置探针 收工(视图摘离窗口)")
-                FrameProbe.shared.stop()
-                if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-                closeObserver = nil
+            if window == nil {
+                if closeObserver != nil {
+                    print("[帧] 设置探针 收工(视图摘离窗口)")
+                    FrameProbe.shared.stop()
+                }
+                teardownObservers()
+                configuredWindow = nil
+                return
             }
             apply()
         }
@@ -276,25 +301,72 @@ struct SettingsWindowChrome: NSViewRepresentable {
             guard let window else { return }
             window.backgroundColor = SettingsTheme.paperNS
             window.isMovableByWindowBackground = true
-            // 🔬 滚动掉帧排查(2026-09-19 用户「感觉滚动有点掉帧」):设置窗在台期间挂
-            // 帧间隔探针,关窗即打 P50/P95/长帧结论 —— 先量再治(每帧都慢 vs 偶发长帧,
-            // 药方相反,见 FrameProbe 头注)。trace 门控,常态零开销
-            if isTraceEnabled, let content = window.contentView {
-                print("[帧] 设置探针 挂上(contentView=\(type(of: content)))")
-                FrameProbe.shared.start(on: content, label: "设置")
-                closeObserver = NotificationCenter.default.addObserver(
-                    forName: NSWindow.willCloseNotification, object: window, queue: .main
-                ) { _ in
-                    print("[帧] 设置探针 收工(willClose)")
-                    FrameProbe.shared.stop()
+            window.isRestorable = false
+
+            if window !== configuredWindow {
+                teardownObservers()
+                configuredWindow = window
+
+                // 首次挂载且窗口尚未上屏时,先在 alpha=0 下完成 SwiftUI 首轮 .contentSize 定框并居中,
+                // 再同帧拉回可见,彻底消灭"先在右上角/旧位闪一下再往左位移"的问题。
+                if !window.isVisible {
+                    window.alphaValue = 0
+                    if window.frame.width > 1, window.frame.height > 1 {
+                        recenter(window, preferWindowScreen: false)
+                    }
+                    DispatchQueue.main.async { [weak self, weak window] in
+                        guard let self, let window else { return }
+                        self.recenter(window, preferWindowScreen: false)
+                        window.alphaValue = 1
+                    }
+                } else {
+                    recenter(window, preferWindowScreen: true)
                 }
-            } else if isTraceEnabled {
-                print("[帧] 设置探针 没挂上(isTrace=\(isTraceEnabled) contentView=\(window.contentView.map { "\($0)" } ?? "nil"))")
+
+                resizeObserver = NotificationCenter.default.addObserver(
+                    forName: NSWindow.didResizeNotification, object: window, queue: .main
+                ) { [weak self, weak window] _ in
+                    guard let self, let window else { return }
+                    DispatchQueue.main.async { [weak self, weak window] in
+                        guard let self, let window else { return }
+                        self.recenter(window, preferWindowScreen: true)
+                    }
+                }
+
+                // 🔬 滚动掉帧排查(2026-09-19 用户「感觉滚动有点掉帧」):设置窗在台期间挂
+                // 帧间隔探针,关窗即打 P50/P95/长帧结论 —— 先量再治(每帧都慢 vs 偶发长帧,
+                // 药方相反,见 FrameProbe 头注)。trace 门控,常态零开销
+                if isTraceEnabled, let content = window.contentView {
+                    print("[帧] 设置探针 挂上(contentView=\(type(of: content)))")
+                    FrameProbe.shared.start(on: content, label: "设置")
+                    closeObserver = NotificationCenter.default.addObserver(
+                        forName: NSWindow.willCloseNotification, object: window, queue: .main
+                    ) { _ in
+                        print("[帧] 设置探针 收工(willClose)")
+                        FrameProbe.shared.stop()
+                    }
+                } else if isTraceEnabled {
+                    print("[帧] 设置探针 没挂上(isTrace=\(isTraceEnabled) contentView=\(window.contentView.map { "\($0)" } ?? "nil"))")
+                }
             }
         }
 
-        deinit {
+        private func recenter(_ window: NSWindow, preferWindowScreen: Bool) {
+            guard !isCentering else { return }
+            isCentering = true
+            defer { isCentering = false }
+            CursorScreenAnchor.center(window, preferWindowScreen: preferWindowScreen)
+        }
+
+        private func teardownObservers() {
             if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+            if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+            closeObserver = nil
+            resizeObserver = nil
+        }
+
+        deinit {
+            teardownObservers()
         }
     }
 }
@@ -308,21 +380,25 @@ struct SettingsWindowChrome: NSViewRepresentable {
 struct SettingsTabRail: View {
     @Binding var page: SettingsView.Page
     @Binding var selection: String?   // 锚点 id = "\(页):\(组名)"
+    /// ★ 2026-11-12 二修:舌头(puck)自己的页 —— 与 `page` 分家(见 tab() 里的病例注释)
+    @State private var puckPage: SettingsView.Page = .general
+    @State private var greetingSeed = 0
     @Namespace private var puckNS
 
     /// 时辰问候:按中国传统的一天分八段(晨/上午/正午/午后/黄昏/夜晚/深夜/破晓前),
-    /// 文学一点,深夜两段带一点劝歇的体贴。用户此刻在做什么,话就说到什么。
-    static func greeting(for date: Date) -> String {
+    /// 文学一点,深夜两段带一点劝歇的体贴。轻点可换同刻小句子。
+    static func greeting(for date: Date, variant: Int = 0) -> (icon: String, text: String) {
         let hour = Calendar.current.component(.hour, from: date)
+        let alt = variant % 2 == 1
         switch hour {
-        case 5..<8:    return "晨光熹微,一日方长。"
-        case 8..<11:   return "日色渐明,事可从容。"
-        case 11..<13:  return "日头正高,先吃口热饭。"
-        case 13..<17:  return "日光渐斜,茶要趁热。"
-        case 17..<19:  return "暮色四合,归途有风。"
-        case 19..<23:  return "夜色温柔,灯下事慢慢做。"
-        case 23...23:  return "夜深了,眼睛也该歇歇。"
-        default:       return "万籁俱寂,好梦。"
+        case 5..<8:    return ("sunrise", alt ? "露水未散,写点顺手的代码。" : "晨光熹微,一日方长。")
+        case 8..<11:   return ("sun.max", alt ? "窗口齐整,万事有序。" : "日色渐明,事可从容。")
+        case 11..<13:  return ("sun.max.fill", alt ? "手边停一停,胃也要照顾。" : "日头正高,先吃口热饭。")
+        case 13..<17:  return ("cup.and.saucer", alt ? "风吹纸页,切窗只需一瞬间。" : "日光渐斜,茶要趁热。")
+        case 17..<19:  return ("sunset", alt ? "收拾好手头几扇窗再走。" : "暮色四合,归途有风。")
+        case 19..<23:  return ("moon.stars", alt ? "玻璃映着灯火,夜色正好。" : "夜色温柔,灯下事慢慢做。")
+        case 23...23:  return ("moon.zzz", alt ? "早点合上盖子吧。" : "夜深了,眼睛也该歇歇。")
+        default:       return ("sparkles", alt ? "星河未落,注意休息。" : "万籁俱寂,好梦。")
         }
     }
 
@@ -333,6 +409,13 @@ struct SettingsTabRail: View {
                 if page == p {
                     ForEach(p.groups, id: \.self) { g in
                         subTab(page: p, group: g)
+                            // ★★ 2026-11-12 病例(用户实拍:「导航栏点击切换的时候…乱七八糟」):
+                            //   切页那一下旧页的子菜单走**默认过渡 = 淡出** ⇒ 旧文字还没淡完、
+                            //   新页子菜单已插入、下面的行还在下滑 ⇒ 三层叠在一起 = "叠影乱跳" ✗
+                            //   ⇒ 旧子菜单**瞬移退场**(removal .identity:不淡、不滑、立刻让位 ✓);
+                            //   新子菜单快速淡入(只动 opacity,不碰布局 ✓);行位移继续平滑下移 ✓
+                            //   舌头(puck)照常滑 —— 它挂在页面行上,与子菜单的过渡互不相干 ✓
+                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
                     }
                 }
             }
@@ -341,11 +424,24 @@ struct SettingsTabRail: View {
             // 时辰问候(2026-09-19 五修,用户裁定):从侧栏顶部挪到**底部角落** ——
             // 顶部还给导航(三个目录往上移);字体回系统体,与整页文字样式一致,不另立语言
             TimelineView(.everyMinute) { ctx in
-                Text(Self.greeting(for: ctx.date))
-                    .font(.system(size: 12))
-                    .foregroundStyle(SettingsTheme.ink2)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                let mood = Self.greeting(for: ctx.date, variant: greetingSeed)
+                HStack(spacing: 5) {
+                    Image(systemName: mood.icon)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsTheme.ink2.opacity(0.85))
+                    Text(mood.text)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(SettingsTheme.ink2)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(MotionPolicy.animation(SettingsMotion.tint)) {
+                        greetingSeed &+= 1
+                    }
+                }
+                .help("点一下换句问候")
             }
             .padding(.leading, SettingsMetrics.sidebarInset + SettingsMetrics.sidebarRowPadX)
             .padding(.trailing, SettingsMetrics.sidebarInset)
@@ -355,7 +451,17 @@ struct SettingsTabRail: View {
 
     private func tab(_ p: SettingsView.Page) -> some View {
         Button {
-            withAnimation(MotionPolicy.animation(SettingsMotion.puck)) { page = p }
+            // ★★ 2026-11-12 二修(用户实报:「文字和icon不是同步的, icon跑的要慢一点"):
+            //   一修(asymmetric 过渡)只治了叠影,但**布局位移仍在动画事务里** ⇒
+            //   页行(带 icon)还在慢慢滑,新子菜单文字已瞬时就位 ⇒ 两层快慢不一致 ✗
+            //   ⇒ 终案:**布局瞬切、舌头单独滑**:
+            //     ① `page` 走禁用动画的事务(所有行同帧就位,文字/图标天生同步 ✓)
+            //     ② `puckPage` 只驱动背景舌头(matchedGeometry,不参与布局),单独进动画
+            //        ⇒ 舌头从旧行平滑滑到新行,其余一切当帧到位 ✓
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { page = p }
+            withAnimation(MotionPolicy.animation(SettingsMotion.puck)) { puckPage = p }
             selection = p.anchor(p.groups[0])   // 切页同时跳到该页第一组
         } label: {
             HStack(spacing: 7) {
@@ -371,7 +477,7 @@ struct SettingsTabRail: View {
             .padding(.horizontal, SettingsMetrics.sidebarRowPadX)
             .padding(.vertical, 7)
             .background {
-                if page == p {
+                if puckPage == p {
                     // 选中块**内缩**(不随行全宽出血):System Settings/DockDoor 的侧栏做法,
                     // 圆角小一号(7),高度收一档 —— 是"高亮行",不是"黑牌子"
                     RoundedRectangle(cornerRadius: 7, style: .continuous)

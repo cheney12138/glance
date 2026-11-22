@@ -28,10 +28,38 @@ final class PanelController: ObservableObject {
                 MainActor.assumeIsolated { self?.refreshStaleListSoon() }
             }
         }
+        // ★★ 2026-11-22(用户:「点开引导页面, 按照提示唤起 cmd tab … 显示全是 glance 设置面板的帧内容,
+        //   但实际已经切换到 cat paw ide 了」):
+        //   自家普通窗(设置 / 快速上手 / 速查)打开或关闭时进程早已在跑,不触发 `didLaunchApplication`,
+        //   导致 `lastSessionGroups`(陈旧名单)没有及时续鲜 ⇒ 用户刚开或刚关引导窗就按 ⌘Tab 时,
+        //   陈旧名单与真名单的 Glance 条目不一致,首帧先落在旧的 Glance 窗上、80ms 后真名单到达又跳到 CatPaw IDE ✗
+        //   ⇒ 自家非面板窗开/关时同样触发 `refreshStaleListSoon()` 后台续鲜 ✓
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
+            NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let w = note.object as? NSWindow, !(w is GlancePanel) else { return }
+                    self?.refreshStaleListSoon()
+                }
+            }
+        }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in Task { @MainActor in self?.dismissForSystemSleep() } }
+        }
+        // ★ 2026-11-19 病例:「三指唤起延迟巨大」—— 根因是面板首次画到新启动 App 时,
+        //   主线程同步等 IconServices XPC 14.7s(sample 铁证)。修后图标改后台解析,
+        //   未命中时先上占位 → 这里监听落账通知,触发一次重画 + 清 sheenTint 备忘
+        //   (备忘里可能记着占位图标推导的颜色,不落清会错一局)。
+        NotificationCenter.default.addObserver(
+            forName: IconProvider.iconCacheDidFill, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                Self.sheenTintMemo = nil
+                self?.objectWillChange.send()
+            }
         }
     }
     @Published var groups: [AppGroup] = []
@@ -59,22 +87,19 @@ final class PanelController: ObservableObject {
                 if let g = currentGroup, !g.windows.isEmpty, winIndex >= g.windows.count {
                     winIndex = max(0, g.windows.count - 1)
                 }
-                // ★★ 2026-10-19(用户实拍:「预览窗**最右边一条细白线**闪一下」):
-                //   托盘窗框是**跟着当前组**收放的(2026-10-13 的口径),而 SwiftUI 会在
-                //   "窗框还是旧组的宽度、内容已经是新组"的那一帧先画一次 ⇒ 右侧被窗缘切一刀,
-                //   白线 = 被切断的选中环 ✓
-                //   ⇒ 在**状态落下来之前**先把窗框改成新组的尺寸(didSet 早于 body 求值 ✓),
-                //     渲染那一帧窗宽已经够,不再切 ✓
-                // ★ 2026-10-26(用户:「鼠标 hover app 的时候, 芯片没动效」):
-                //   入场浮出原来只在 `begin` / `moveApp` 里起跳 —— 而**指针悬停换组**不走 `moveApp`,
-                //   直接从 `appIndex` 过账 ⇒ 少了一次浮出 ✗ ⇒ 统一放到这里(所有换组路径的唯一出口)
-                startEntryFloat()
-                updatePreview()
-                // ★★ 2026-11-09(用户:「从大象切到 terminal, 整个面板范围内的环 + 窗口内容
-                //   都是大象的对应帧」):托盘 2026-10-26 就有了换组整窗重绘兑底,
-                //   **主面板(环窗)没有同款** ⇒ 换组那一拍环窗 backing 里还是上一组的像素,
-                //   合成器多送一拍 = 用户看到的残帧。对齐托盘同款:换组拍强制整窗重绘。
-                //   (SwiftUI 的 body 重算是下一拍的事 —— 这一行就是要抢在它前面把重绘拍下去 ✓)
+                // ★★ 2026-11-20 性能修复:
+                //   ① 撤掉已废弃的 `startEntryFloat()`(视图层早已在 2026-10-27 删掉对 `entryFloat.progress`
+                //      的读取,留下 60Hz 定时器每切一次 App 白推 16 帧全托盘重算 ✗);
+                //   ② 撤掉这里的 `updatePreview()`:所有写 `appIndex` 的同步调用方
+                //      (moveApp / hoverApp / jumpToGroupEdge / pickApp / showPanel / applyList)
+                //      在同一轮 runloop 内紧接着就会调 `updatePreview()`(同样早于 SwiftUI body 求值),
+                //      放在 didSet 里导致每次换 App 重复跑两遍,且在 finishBegin/applyList 里还会拿着
+                //      尚未重算 cap 与窗框的旧几何抢跑一次 ✗
+                // ★★ 2026-11-22 残帧排查修正:
+                //   不在高频换组(`appIndex.didSet`)里递增 `glassEpoch` ✗ ——
+                //   每次 hover/Tab 换组都把 `NSGlassEffectView` 与整棵 `PreviewPanelView` 拆掉重建,
+                //   再在同帧强行 `CATransaction.flush()`,反而会导致 SwiftUI 异步 `ViewGraph` 尚未重建完成时
+                //   把半拆状态的玻璃/空帧刷进 WindowServer ✓。`glassEpoch` 只在每局开局 `showPanel` 递增一次 ✓。
                 if let panel {
                     panel.invalidateShadow()
                     panel.contentView?.needsDisplay = true
@@ -129,17 +154,6 @@ final class PanelController: ObservableObject {
     /// 病例(2026-10-27,用户):新开一个 App、再 ⌘Tab ⇒ 先上屏的是陈旧名单(没它),
     /// 真名单到了才把它加进来 ⇒ 环**中途形变**长出来,读起来像"卡在变" ✗
     @Published private(set) var listSettling = false
-    /// **入场进度**(0…1,1 = 到位):芯片 / 轨道那一记"自下而上浮出"由它驱动。
-    ///
-    /// ★★ 2026-10-26 第三次修(用户:「动效还是时有时没有」):
-    ///   SwiftUI 的 `withAnimation` 方案在这条链路上**天生不稳** ——
-    ///   状态归零与起动画落在同一个事务、或窗口还没上屏、或视图被重建,
-    ///   任意一条都会让动画被合并/看不到 ✗(10-23 卡片落位踩过同样的坑)
-    ///   ⇒ 改成**自己按帧推**(与 `settleIn` 同一套):每 8ms 写一次值,每一次都是真实提交,
-    ///     不依赖 SwiftUI 的动画事务 ⇒ 稳定可见 ✓
-    /// 入场浮出的进度(单独的小对象 —— 只让"浮出那一小块"重绘,见 `EntryFloatModel`)
-    let entryFloat = EntryFloatModel()
-    private var entryTimer: DispatchSourceTimer?
     /// 一局的不变量基线(开局时存;`SessionInvariants` 只读只报,不改行为 ✓)
     private var sessionBaseline: SessionSnapshot?
     /// 本局查过几次(防呆:不变量一旦违反会**每拍都报** ⇒ 只报第一次,免得刷屏 ✗)
@@ -199,6 +213,13 @@ final class PanelController: ObservableObject {
     private var activityToken: NSObjectProtocol?
     /// begin 的世代号:后台枚举回来时,若已开了新一局就丢掉旧结果(连按 ⌘Tab 的竞态)
     var beginGeneration = 0
+    /// 延迟上屏阈值状态（超快 ⌘Tab 直切不建窗、不上屏，杜绝闪切残帧）
+    private var revealDeferred = false
+    private var revealWork: DispatchWorkItem?
+    private var pendingShowParams: (beganAt: CFAbsoluteTime, enumerateMs: Double)?
+    private var deferredStaleFallbackArgs: (beganAt: CFAbsoluteTime, reverse: Bool, generation: Int)?
+    private var sessionAppliedStale = false
+    private var sessionShowedPanel = false
 
     /// 预截补拍的推迟量 = 入场弹簧的沉降时间。T86 起**整单都挪**:唤起零拍,所有补拍
     /// (显示组 force + 其余组 TTL)都发生在沉降之后 —— 见 `finishBegin` 的那段注释
@@ -232,15 +253,42 @@ final class PanelController: ObservableObject {
     var currentGroup: AppGroup? { groups.indices.contains(appIndex) ? groups[appIndex] : nil }
     var expandedCount: Int { currentGroup?.windows.count ?? 0 }
 
+    /// 导航态按 `?` / `/` 时由 GlanceApp 唤出独立速查窗（避免 Panel 反向依赖 Settings）
+    var onOpenCheatSheet: (() -> Void)?
+
     // MARK: - 触发层入口
 
     func handle(_ action: HotkeyTapCenter.Action) {
         bumpIdle()
         noteKeyboardAction()   // 键盘发言:此后指针的旧位移不再有优先权(谁后动听谁)
         finishRingFlip()       // ★ 翻牌还没落地就来新输入 ⇒ 先把这一发收尾,动作再照常执行 ✓
+        // 阈值窗口内若又收到连续导航键（而非 begin/confirm/cancel/yieldToCapture），
+        // 立刻取消延迟并准备上屏，保证连续 Tab/方向键零等待、不卡手 ✓
+        let revealAfterMove: Bool
         switch action {
-        case .begin: begin(reverse: false)
-        case .beginReverse: begin(reverse: true)
+        case .begin, .beginReverse, .confirm, .cancel, .yieldToCapture:
+            revealAfterMove = false
+        default:
+            if revealDeferred {
+                if listReady {
+                    revealAfterMove = true
+                } else {
+                    revealPendingPanel(generation: beginGeneration)
+                    revealAfterMove = false
+                }
+            } else {
+                revealAfterMove = false
+            }
+        }
+        switch action {
+        case .begin:
+            DiagnosticRingBuffer.shared.recordSessionOpen()
+            NotificationCenter.default.post(name: .glancePanelDidSummon, object: nil)
+            begin(reverse: false)
+        case .beginReverse:
+            DiagnosticRingBuffer.shared.recordSessionOpen()
+            NotificationCenter.default.post(name: .glancePanelDidSummon, object: nil)
+            begin(reverse: true)
         case .next: moveApp(1)
         case .prev: moveApp(-1)
         case .firstGroup: jumpToGroupEdge(0)
@@ -249,6 +297,27 @@ final class PanelController: ObservableObject {
         case .leaveLaunchRing: leaveLaunchRing()
         case .cycleWindowPrev: moveWindow(-1)   // ` 循环窗口(与 ←/→ 分家)
         case .cycleWindowNext: moveWindow(1)
+        case .pickApp(let n):
+            // ★ 2026-11-12(用户:「按数字键选中的app"):数字 = 跳到环上第 N 个 App。
+            //   两个段一视同仁(与 ←→ 的口径同源 ✓):主环选第 N 个组,启动环选第 N 个未启动 App;
+            //   越界/已选中 = 夹住不动,不做环绕(与「两端夹住、不环绕」同一条纪律 ✓)
+            if entrySelected {
+                guard launchables.indices.contains(n), launchIndex != n else { return }
+                launchIndex = n
+                trace("[T6] 选中(键盘数字 \(n + 1)): 未启动 [\(n + 1)/\(launchables.count)] \(launchables[n].name)")
+                return
+            }
+            guard groups.indices.contains(n), n != appIndex else { return }
+            launchIndex = nil
+            // ★ 选中一变必打帧探针点(2026-11-14 审查发现数字键路径漏了):与 moveApp 同款
+            FrameProbe.lastHoverMark = CACurrentMediaTime()
+            winIndex = 0                       // 先落:落到目标 App 的第一扇窗,可预测(moveApp/hoverApp 同款 ✓)
+            appIndex = n
+            trace("[T6] 选中(键盘数字 \(n + 1)): [\(appIndex + 1)/\(groups.count)] \(groups[appIndex].appName)(共 \(groups[appIndex].windows.count) 窗)")
+            // ★★ 2026-10-08 病例(←→ 那条欠的账,新选中路径必须照抄):选中一变必跟两笔,
+            //   否则静图不换、Live 流不起 ⇒ "左右到头尾的 App 没有 live"同款病 ✗
+            traceCost("  ↳拍图") { refreshSnapshotForSelection() }
+            traceCost("  ↳托盘更新") { updatePreview() }
         case .pickWindow(let n):
             // 只在"当前 App 的窗口范围"内生效:越界 = 什么都不做
             // (跳到不存在的地方不该有副作用 —— 与"两端夹住、不环绕"同一个道理)
@@ -258,8 +327,12 @@ final class PanelController: ObservableObject {
                   groups[appIndex].windows.indices.contains(n) else { return }
             winIndex = n
             trace("[T6] 窗口选中(键盘数字 \(n + 1)): \(groups[appIndex].windows[n].title)")
-        case .confirm: confirmSelection()
-        case .cancel: dismiss(reason: "放弃")
+        case .confirm:
+            DiagnosticRingBuffer.shared.recordSessionConfirm()
+            confirmSelection()
+        case .cancel:
+            DiagnosticRingBuffer.shared.recordSessionCancel()
+            dismiss(reason: "放弃")
         // 截图会话里的回车(T32):面板退场、**不聚焦任何窗**。
         // 语义上它就是"放弃"(不生效),但理由不同 —— 用户不是不要了,是那一发回车归截图工具,
         // 所以日志里必须分得清这两件事(否则复盘时会把"截图让权"读成"用户反悔")
@@ -269,6 +342,12 @@ final class PanelController: ObservableObject {
         case .minimizeWindow: destructive(.minimize)
         case .toggleFullscreen: destructive(.fullscreen)
         case .hideApp: destructive(.hide)
+        case .openCheatSheet:
+            dismiss(reason: "打开快捷键速查")
+            onOpenCheatSheet?()
+        }
+        if revealAfterMove, revealDeferred {
+            revealPendingPanel(generation: beginGeneration)
         }
     }
 
@@ -438,6 +517,7 @@ final class PanelController: ObservableObject {
         quitPIDs.removeAll()   // 同上:上一局处决过的 App,新一局以系统真实状态为准
         observeHidingChanges()  // 装一次即可(全局通知 ✓)—— 让"藏着"的角标当场跟上 ✓
         purgedWIDs.removeAll() // 同上:上一局被关/被最小化的窗
+        optimisticMinimizedWIDs.removeAll() // 上一局原地挪尾的最小化守卫
         // ★ "已收纳"的账**跨局保留**(用户 2026-09-22:「角标要常驻」✓)—— 只靠下面的自愈剪枝 ✓
         hidingPIDs.removeAll()          // 隐藏标记是现读系统的 ✓ 这里只是清掉上一帧的缓存
         sessionMinimizedPIDs.removeAll() // "不许唤醒"只活一局 ✓(记号常驻,守卫不常驻)
@@ -447,6 +527,18 @@ final class PanelController: ObservableObject {
         trayChrome?.beginSession()      // 新一局 ⇒ 重新允许托盘上屏(见 ChromeWindow.place 的病例 ✓)
         beginGeneration &+= 1
         let generation = beginGeneration
+        // 阈值延迟上屏策略（默认 130ms，可用 debug.summonRevealDelayMs 实机微调；0 = 立即上屏）：
+        // · 按键→立即在后台枚举（~30ms 就位），面板窗口先不创建、不上屏；
+        // · 若在阈值内松开修饰键（<130ms 超快切换）⇒ 直接静默切焦，零弹窗、零残帧；
+        // · 若长按超过阈值，或途中再按一次 Tab/方向键 ⇒ 立即用已就位的最新名单上屏（不卡手）✓
+        let revealDelayMs = DebugFlags.summonRevealDelayMs
+        let advanceOnOpen = UserDefaults.standard.object(forKey: Keys.switchAdvanceOnOpen) as? Bool ?? KeyDefaults.advanceOnOpen
+        let modHeld = !NSEvent.modifierFlags.intersection([.command, .option, .control]).isEmpty
+        let useRevealDelay = revealDelayMs > 0 && advanceOnOpen && modHeld
+        cancelPendingReveal()
+        sessionAppliedStale = false
+        sessionShowedPanel = false
+        revealDeferred = useRevealDelay
         // 新一局开始:旧的"退场拆迁单"当场作废。不在这里作废的话,下面几条早退路径
         // (取不到屏/本屏无窗)不会走到 showPanel,那张迟到的单子就会在新一局里执行,
         // 把触发层状态机一起打死 —— 之后 ⌘Tab 全部漏给系统 = macOS 原生切换器。
@@ -457,40 +549,33 @@ final class PanelController: ObservableObject {
         // 事件 tap 的 runloop 挂在主线程,枚举(几十毫秒)一旦压在 tap 回调里,系统会判回调超时
         // 把 tap 停用 —— 停用那一瞬漏出去的 ⌘Tab 就是 macOS 原生切换器(实机量到:
         // begin 之后主线程被占 ~110ms,期间投递的按键全在排队)。让回调立刻返回,枚举在后台跑。
-        // ★ ① 「陈旧名单先上屏」(2026-09-24):别干等枚举那 40–63ms ✗
-        //   账:`[打卡] 唤起 共 85.9ms | 枚举 44.8 · 落点 16.0 · 开窗 17.4 · 首帧 7.7`
-        //   ⇒ 枚举占一多半,而且它**挡在面板出现之前** ⇒ 入口那两根弹簧的头 3 帧被等掉 ✓
-        //   门槛(`StaleListPolicy` ✓):档位开着 ∧ 有名单 ∧ 有窗 ∧ **同一块屏**(ADR-0008 ✓)
-        // ★★ 2026-10-28(用户:「打开设置 → 唤起, 设置 app 加到环里有个很明显的形变」,
-        //   60fps 逐帧:托盘**右缘 1396 → 1360,跨 ~130ms 一路收窄**):
-        //   陈旧名单是**上一局的完整名单**(可能 8 个 App),窗口局(⌘`)只留一组 ⇒
-        //   真名单一到,托盘宽度当场从"8 个 App 的版式"缩到"1 个 App 的版式" = 可见形变 ✗
-        //   窗口局本来就短、而且它要等图才上屏 ⇒ **不值得为它走陈旧名单**(省下的 ~50ms 看不出来 ✓)
-        let stale = !windowsOnly && StaleListPolicy.canShowStale(
-            enabled: DebugFlags.staleListFirst,
-            listCount: lastSessionGroups.count,
-            windowCount: lastSessionGroups.reduce(0) { $0 + $1.windows.count },
-            sameScreen: DisplayOrder.displayID(of: screen) == lastSessionScreenID)
-        if stale {
-            // ⚠️ **必须下一拍再做,不能在 tap 回调里同步做**:`finishBegin` 里还有 AX 调用、
-            //   Dock 名单读取(首局要加载图标,几十 ms)与开窗布局 —— 这些压在事件 tap 的回调里,
-            //   系统会判回调超时把 tap 停用 ⇒ 那一瞬漏出去的 ⌘Tab 就是 macOS 原生切换器 ✗
-            //   (这正是当初把枚举搬后台的原因,别在原地把它请回来 ✓)
-            //   下一拍 ≈ 0.1–1ms,仍比等枚举(40–63ms)早得多 ✓
+        let canStale = canUseStaleList(on: screen)
+        if useRevealDelay {
+            deferredStaleFallbackArgs = (beganAt: beganAt, reverse: reverse, generation: generation)
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.beginGeneration == generation,
+                      self.revealDeferred, !self.confirmBeforeList else { return }
+                self.revealPendingPanel(generation: generation)
+            }
+            revealWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(revealDelayMs), execute: work)
+        } else if canStale {
             DispatchQueue.main.async {
                 guard generation == self.beginGeneration else { return }
-                // 用上一局的名单把面板画出来(位置/落点/入场照旧 ✓);枚举回来只**刷新内容** ✓
-                let staleList = self.lastSessionGroups
-                let wins = staleList.reduce(0) { $0 + $1.windows.count }
-                self.trace("[T8] 陈旧名单先上屏:\(staleList.count) 个 App · \(wins) 扇窗(不等枚举)")
-                self.finishBegin(staleList, generation: generation, beganAt: beganAt,
-                                 reverse: reverse, stale: true)
+                self.presentStaleListFallback(generation: generation, beganAt: beganAt, reverse: reverse)
             }
         }
         Task.detached(priority: .userInitiated) {
             let raw = WindowEnumerator.rawGroups(on: screen)
             await MainActor.run {
-                if stale {
+                guard generation == self.beginGeneration else { return }
+                if self.sessionAppliedStale {
+                    // ★★ 2026-11-22 残帧与幽灵驻留根治:
+                    //   快速 ⌘Tab(按下→松开 < 80–130ms)时,面板已在后台枚举完成前通过 `confirmSelection() -> dismiss()` 收场;
+                    //   旧版 `if stale` 分支未校验 `generation == self.beginGeneration && self.isVisible`,
+                    //   导致面板已关闭、甚至已聚焦目标 App 后,迟到的枚举仍进入 `applyRefreshed -> applyList -> updatePreview`,
+                    //   在 `isVisible == false` 下把 `groups` 重新填满并把 `previewPanel.alphaValue` 重新拉回 1 ✗!
+                    guard self.isVisible else { return }
                     // 已经用陈旧名单上屏了 ⇒ **不能**再走 `finishBegin`(那会重演一次入场 ✗)
                     // ⇒ 走现成的刷新路径:顺序冻结、按 pid 认住选中(与"处决后刷新"同一条路 ✓)
                     let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
@@ -504,6 +589,66 @@ final class PanelController: ObservableObject {
                     self.finishBegin(raw, generation: generation, beganAt: beganAt, reverse: reverse)
                 }
             }
+        }
+    }
+
+    private func revealPendingPanel(generation: Int) {
+        guard generation == beginGeneration, revealDeferred else { return }
+        revealWork?.cancel()
+        revealWork = nil
+        revealDeferred = false
+        if let params = pendingShowParams {
+            pendingShowParams = nil
+            deferredStaleFallbackArgs = nil
+            scheduleSessionPrecapture(generation: generation, stale: sessionAppliedStale)
+            showPanel(beganAt: params.beganAt, enumerateMs: params.enumerateMs)
+        } else if let fallback = deferredStaleFallbackArgs, !listReady {
+            deferredStaleFallbackArgs = nil
+            if canUseStaleList(on: contextScreen) {
+                presentStaleListFallback(generation: fallback.generation, beganAt: fallback.beganAt,
+                                         reverse: fallback.reverse, tag: "阈值/连按接力")
+            }
+        }
+    }
+
+    private func canUseStaleList(on screen: NSScreen?) -> Bool {
+        guard !windowsOnly, let screen else { return false }
+        return StaleListPolicy.canShowStale(
+            enabled: DebugFlags.staleListFirst,
+            listCount: lastSessionGroups.count,
+            windowCount: lastSessionGroups.reduce(0) { $0 + $1.windows.count },
+            sameScreen: DisplayOrder.displayID(of: screen) == lastSessionScreenID
+        )
+    }
+
+    private func presentStaleListFallback(generation: Int, beganAt: CFAbsoluteTime,
+                                          reverse: Bool, tag: String = "不等枚举") {
+        let staleList = lastSessionGroups
+        let wins = staleList.reduce(0) { $0 + $1.windows.count }
+        trace("[T8] 陈旧名单先上屏:\(staleList.count) 个 App · \(wins) 扇窗(\(tag))")
+        finishBegin(staleList, generation: generation, beganAt: beganAt,
+                    reverse: reverse, stale: true)
+    }
+
+    func cancelPendingReveal() {
+        revealWork?.cancel()
+        revealWork = nil
+        revealDeferred = false
+        pendingShowParams = nil
+        deferredStaleFallbackArgs = nil
+    }
+
+    private func scheduleSessionPrecapture(generation: Int, stale: Bool) {
+        let allWindows = groups.flatMap { $0.windows }
+        Snapshotter.shared.reapAlive()
+        let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
+        let shownIDs = Set(shown.map(\.wid))
+        Snapshotter.shared.precapture(shown, maxAge: .infinity)
+        Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) }, maxAge: .infinity)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.recaptureDelay) { [weak self] in
+            guard !stale, let self, generation == self.beginGeneration, self.isVisible else { return }
+            Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
+            Snapshotter.shared.precapture(shown, force: true)
         }
     }
 
@@ -562,6 +707,7 @@ final class PanelController: ObservableObject {
         SessionMarks.step(stale ? "陈旧上屏" : "枚举")
         // 上一局已被新一局取代(连按 ⌘Tab):旧结果直接丢,别把面板闪回旧内容
         guard generation == beginGeneration else { return }
+        sessionAppliedStale = stale
         let screen = contextScreen
         // ★ 落点排序要认**这块屏**(2026-09-22 病例:全局 MRU 会把另一块屏的"最近用过"
         //   带过来 ⇒ 落点跳到错误的 App ✗)。`contextScreen` 就是本局的屏(ADR-0001 ✓)
@@ -718,41 +864,10 @@ final class PanelController: ObservableObject {
         // T87 v3 起剪枝改 `reapAlive()`(后台、全量保活):死窗条目本就不会被展示,
         // 同步剪枝真正服务的是内存与在途批次作废,都不需要同步;顺手修掉
         // "开局把别屏窗的图全扔了 ⇒ 换屏唤起闪『截图中…』"(用户实测病例)。
-        let allWindows = groups.flatMap { $0.windows }
-        Snapshotter.shared.reapAlive()
-        // **正在显示的那一组排最前面**:卡片要等的就是它那一张。
-        // 共 30 扇窗时串行拍完要一两秒,顺序直接决定"第一眼有没有图"
-        let shown = groups.indices.contains(appIndex) ? groups[appIndex].windows : []
-        let shownIDs = Set(shown.map(\.wid))
-        // 两批预截**分流**(2026-09-16 用户裁决:"针对当前唤起选中的 app 实时填充,别的走异步替换")
-        // → **T86 升级为"唤起零拍"**(用户裁决:"拍图跟唤起面板渲染能彻底做成异步的吗"):
-        //
-        //   · 开局**不发任何拍照单**:缓存的图(跨会话保活 + 关面板预拍 + 失焦预拍供着)
-        //     第一帧直接上屏。T85 账:冷局首图 +416ms 全落在入场动画里;热局这条 force 单
-        //     也是白拍 —— 图已在缓存,新图盖上肉眼看不出变化,反而多一次重绘。
-        //
-        //   · "显示即重拍"契约**整体挪到 +0.45s**(入场弹簧沉降之后),只挪时机不砍:
-        //     其余组照旧 TTL 补拍;显示组照旧 force 重拍 —— 应用内部的变化(换主题/切文件)
-        //     系统不发事件,仍要在"被显示"后抓一次,只是晚 0.45s,与"其余组"同一待遇。
-        //
-        //   · 头 0.45s 里卡片显示缓存旧图(跨会话保活 + 上局剪枝),不会闪"截图中…"。
-        //     缓存缺失的窗(冷启动 sweep 没赶上/新开的窗)逐张回填(Snapshotter 已改
-        //     逐张回主,单次合并 <1ms,不再有整批合并的爆发)。
-        //
-        // 世代守卫:中途开了新一局就作废这一单,免得与新一局的预截白拍两遍;
-        // dismiss 自己会把 beginGeneration +1,所以"面板已关"也自动作废,不用另判 isVisible。
-        // ★ ② 开局面板**只补"真的没有图"的那些窗**(2026-09-24):
-        //   账:`[打卡] 首图上屏 +211 / +254 / +475 / +579 / +611ms(本批 1 张)` —— 缺图那扇窗
-        //   要等到 `recaptureDelay`(0.45s)那一趟才拿到图 ⇒ 用户正盯着的那张卡一直是"截图中…"
-        //   `maxAge: .infinity` ⇒ 只拍**缓存里压根没有**的窗(命中与过期的都不拍 ⇒
-        //   T86 那条"唤起零拍"的意思照旧成立:别为了刷新去重拍已有的图)
-        Snapshotter.shared.precapture(shown, maxAge: .infinity)
-        Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) }, maxAge: .infinity)
-        let shownGeneration = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.recaptureDelay) { [weak self] in
-            guard !stale, let self, shownGeneration == self.beginGeneration else { return }
-            Snapshotter.shared.precapture(allWindows.filter { !shownIDs.contains($0.wid) })
-            Snapshotter.shared.precapture(shown, force: true)
+        if !revealDeferred {
+            scheduleSessionPrecapture(generation: generation, stale: stale)
+        } else {
+            Snapshotter.shared.reapAlive()
         }
         let ms = (CFAbsoluteTimeGetCurrent() - beganAt) * 1000
         if !stale {
@@ -800,7 +915,12 @@ final class PanelController: ObservableObject {
         }
         // (说话局"托盘绝不参与"的守卫住在 previewFrame —— 那是托盘上屏的唯一门口,
         //  这里打补丁拦不住 showPanel 末尾那次 updatePreview 的回拉)
-        showPanel(beganAt: beganAt, enumerateMs: ms)
+        if revealDeferred && generation == beginGeneration && !pendingLaunchRing && hintText == nil {
+            pendingShowParams = (beganAt: beganAt, enumerateMs: ms)
+        } else {
+            cancelPendingReveal()
+            showPanel(beganAt: beganAt, enumerateMs: ms)
+        }
     }
 
     /// 本局的"放得下"账:**收紧 cap + 托盘最大布局**,同一份数学两个调用点 ——
@@ -1043,28 +1163,6 @@ final class PanelController: ObservableObject {
                          maxRows: PanelMetrics.trayMaxRows)
     }
 
-    /// 入场浮出:0 → 1,按帧推(见 `entryProgress` 的注释)
-    func startEntryFloat() {
-        entryTimer?.cancel()
-        entryFloat.progress = 0
-        let t0 = CACurrentMediaTime()
-        let dur: CFTimeInterval = 0.26
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.02, repeating: 1.0 / 60.0)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            let p = min(1, (CACurrentMediaTime() - t0) / dur)
-            self.entryFloat.progress = CGFloat(1 - pow(1 - p, 2))   // easeOut
-            if p >= 1 {
-                self.entryFloat.progress = 1
-                self.entryTimer?.cancel()
-                self.entryTimer = nil
-            }
-        }
-        entryTimer = timer
-        timer.resume()
-    }
-
     private func showPanel(beganAt: CFAbsoluteTime, enumerateMs: Double) {
         buildPanelIfNeeded()
         lastPointerMoveAt = 0                       // 开局面板底下的停驻不算"动过"(键盘=唤起者,后动)
@@ -1077,7 +1175,9 @@ final class PanelController: ObservableObject {
             ? chipCenterFrame(for: paddedSize())
             : centerFrame(for: paddedSize())
         guard let panel, let target else { return }
+        sessionShowedPanel = true
         isVisible = true
+        ThumbnailRefresher.shared.setPanelVisible(true)
         // ★ 一局的不变量基线(见 GlanceCore/SessionInvariants):开局存一份,**之后只比不改** ✓
         //   ★ 规则(冒烟三轮才定死):开局那 0.6s 内窗口要经过"0x0 → 芯片(552) → 全量(1259)"两次布局 ✗,
         //     那都是**开门过程**,不是"尺寸漂了" ⇒ 开局静默,0.6s 之后才开始比 ✓
@@ -1115,101 +1215,91 @@ final class PanelController: ObservableObject {
             : ""))
 
         // 入场动效在 SwiftUI 层(demo .switcher-wrap 的 scale .90→1 + 渐入),窗口只负责就位
-        // ★★ 残帧对策(2026-11-09 用户实拍:唤起那一拍,**面板矩形内是上一个 App 身后的像素**
-        //   —— 玻璃材质的背景采样跨会话没失效:两扇窗进程级复用,NSGlassEffectView 的
-        //   backdrop 快照还停在上一局。对策:换一块新玻璃(新视图 = 新采样),
-        //   玻璃在 SwiftUI 侧挂 .id(glassEpoch),这里递增 ⇒ 本局装配全新的玻璃视图 ✓
-        //   ⚠️ 必须在 alpha=0 那一拍之前递增(新玻璃的第一帧被 alpha 0 门挡住,不会白闪)
-        glassEpoch &+= 1
-        // ★★ 白光对策(不依赖"找出凶手",见 docs/白光排查记录.md):
-        // 窗口先以 **alpha 0** 上屏 ⇒ 合成器会把这一帧**真的合成一次**(含材质),
-        // 下一拍再拉到 1 ⇒ 用户看到的**第一帧**就是画好的内容,而不是"玻璃已上屏、内容还没到"。
-        // ⚠️ 这不是入场动效(没有被看见的渐变):0→1 只隔一拍(~16ms),
-        //    与"面板要已经在"这条纪律不冲突 —— 用户感知不到那一拍。
-        // 面板要上屏了 ⇒ 允许池子起流(散场时 stopAll 会落闸,见 `LivePreviewPool.accepting`)
+        // ★★ 残帧根治(2026-11-21 用户实拍:快速切换 / App 卡顿 / CPU 负载高时,
+        //   环 + 托盘组成的整个"坦克形"面板区域透穿显示上一个 App 对应位置的真内容):
+        //   559a295 加了 `glassEpoch` + 主面板 `alpha=0` 一拍门,但留下三条漏路:
+        //     ① `updatePreview()` 在同一拍把 `previewPanel.alphaValue = 1` 并立即 `orderFront`,
+        //        托盘窗完全没走 `alpha=0` 首帧门;
+        //     ② 改 `@Published glassEpoch` 只将 `NSHostingView` 标为 dirty,在高负载/掉帧下
+        //        `layoutSubtreeIfNeeded() + displayIfNeeded()` 并不能保证 SwiftUI 的 Metal/CA
+        //        事务已提交到 WindowServer 的窗口 backing store,下一拍 `DispatchQueue.main.async`
+        //        直接拉回 `alpha=1` 时新帧可能仍未落入 backing,合成器直接把上一局烘焙的旧帧吐出;
+        //     ③ `appIndex.didSet` 此前撤掉了 `updatePreview()`,导致 `showPanel` 里先拿旧组的
+        //        托盘几何画了一遍,末尾才调 `updatePreview()`。
+        //   对策:
+        //     · 唤起/换组时同步递增 `glassEpoch`,并在窗口显示前对两扇窗的 `hostingView` 强制执行
+        //       `CATransaction.begin() -> layoutSubtreeIfNeeded() -> displayIfNeeded() -> CATransaction.commit() -> CATransaction.flush()`,
+        //       把 SwiftUI 新树与新 `NSGlassEffectView` 的 CA 提交同步推入 WindowServer;
+        //     · 主面板与托盘窗(常规局)**同拍**先以 `alphaValue = 0` 就位并同步 flush,
+        //       下一拍再一并拉回可见(恢复渐入或 `alpha = 1`);
+        //     · 收场 `orderOut` 前先把两扇窗 `alphaValue = 0`,确保 WindowServer 侧残存的最后一帧也是全透明。
+        // ★ `glassEpoch` 已在上一局 `teardownPanel` 退场 flush 后递增并完成离屏重置，
+        //   开局 `showPanel` 不再同步拆建 `.id(glassEpoch)` 视图树，避免与首帧 `fadeInWindow` 抢拍。
+        let showGen = beginGeneration
         LivePreviewPool.shared.setAccepting(true)
-
 
         panel.alphaValue = 0
         setFrameIfNeeded(panel, target)
         SessionMarks.step("置框")     // 🔬 细账(2026-10-09):拆"开窗"这一段
-        // ★★ T91:**先画这一帧,再上屏** —— 顺序反了就是那道白光。
-        //
-        // 病例(2026-09-17,用户实报「重启之后第一次唤起面板, 会闪一下, 有一道白光」):
-        // 我们一直是"先 orderFront、内容后画"⇒ 屏幕上先出现一块**空的玻璃**
-        // (浅色外观 + 材质 = 一道白光),下一帧才补上图标。
-        // 它**不是帧率问题**:`[帧] … 长帧 0(0%)` —— 不卡,是顺序。所以帧探针抓不到,躲到现在。
-        // `display()` 是同步的:在这里先把这一帧真画出来,窗口的**第一帧**就已经带着内容了。
-        // 代价是几毫秒(本来就要画),换来"上屏即完整"。
-        panel.contentView?.layoutSubtreeIfNeeded()
-        panel.displayIfNeeded()
-        if isTraceEnabled { probeContentReady(panel) }   // 🔬 白光排查:上屏前量一次内容
-        // ★★ T91 修「环一闪而过」(2026-09-17):说话局把上屏挪一拍。
-        // hintText 与 orderFront 在同一拍里,SwiftUI 那一帧(芯片)还没提交进后备存储,
-        // 先上屏的会是上一局画好的旧视图(环)。正常召唤仍走同步:**零延迟是常态的纪律**,
-        // 只有"说话局"这个例外晚一拍 —— 那一局只是说一句话,16ms 没人感觉得到。
-        // ⚠️ 散场守卫必须带:这一拍里若 dismiss 过,绝不能把已拆的窗再 orderFront 回来。
-        // ★ 渐入的**起点**:必须在 orderFront **之前**写好(当拍、无动画)
+
+        // ★ 入场淡入统一只走窗口 `alphaValue`（`fadeInWindow`），不再叠加 SwiftUI 内容 `.opacity(entryFade)`，
+        //   避免 `PreviewPanelView` 在首帧把内容置成全透明、与 `flushPanelBackingStores` 抢拍露出空壳。
         var popInstant = Transaction()
         popInstant.disablesAnimations = true
         trayShownOnce = false        // 新一局:托盘"首次上屏"这一笔重新记(见上面那行日志 ✓)
-        withTransaction(popInstant) { entryFadeProgress = summonFadeEnabled ? 0 : 1 }
-        if hintText != nil {
-            DispatchQueue.main.async { [weak self, weak panel] in
-                guard let self, let panel, self.isVisible else { return }
-                panel.orderFrontRegardless()
-            }
+        withTransaction(popInstant) { entryFadeProgress = 1 }
+        updatePreview(initialSummon: true)
+        if isTraceEnabled { probeContentReady(panel) }   // 🔬 白光排查:上屏前量一次内容
+        if windowsOnly {
+            // ⌘` 窗口局不显示主环，根本不把主面板排进 WindowServer 在屏列表，避免空玻璃层占屏。
+            panel.alphaValue = 0
+            panel.ignoresMouseEvents = true
         } else {
             panel.orderFrontRegardless()
         }
         SessionMarks.step("上屏")     // 🔬 细账:orderFront + 首轮布局
-        // 入场浮出(芯片 / 轨道):上屏之后再起跳,按帧推 ⇒ 稳定可见 ✓
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.isVisible else { return }
-            self.startEntryFloat()
-        }
-        // ★ 起跳**延后一拍**(DispatchQueue.main.async):避开 `orderFront → 首轮布局 → 首帧`
-        //   那个"Update Constraints in Window pass"递归窗口 ✓ 代价 ~16ms(肉眼几乎看不出 ✓)
-        if summonFadeEnabled {
-            // nil = 系统「减弱动态效果」开着(尊重系统 ✓)⇒ 当拍到位
-            if let anim = MotionPolicy.entrance(PanelMotion.summonFade) {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.isVisible else { return }
-                    withAnimation(anim) { self.entryFadeProgress = 1 }
-                }
-            } else {
-                entryFadeProgress = 1     // 系统减弱动态 ⇒ 当拍到位(不欠任何动画 ✓)
-            }
-        }
-        // ★ 上屏之后立刻起跳(一记带极小过冲的弹簧 ⇒ 读作"Q 弹",不是"晃" ✓)
 
-        DispatchQueue.main.async { [weak self, weak panel] in
-            guard let panel else { return }
+        // ★ 等待本轮 RunLoop 的 NSDisplayCycle + CA 事务（kCFRunLoopBeforeWaiting）真正完成
+        //   SwiftUI ViewGraph 重建并提交到 WindowServer 后，再刷 backing 并抬起窗口 alpha，
+        //   杜绝 DispatchQueue.main.async 抢跑在 DisplayCycle 之前导致未渲染帧/空壳暴露 ✓
+        scheduleAfterDisplayCommit { [weak self, weak panel] in
+            guard let self, let panel, panel === self.panel,
+                  self.isVisible, self.beginGeneration == showGen, !self.groups.isEmpty else { return }
+            if !self.windowsOnly {
+                self.flushPanelBackingStores(includeTray: true)
+            }
             // ★ 入场渐入 = **窗口 alpha**(不是内容 opacity,见 PanelView 那条病例)
             //   ⚠️ 不要用 `NSAnimationContext + animator()`:对这扇无边框窗口**根本不跑**
             //      (实测:加完就"闪现"出来,没有任何渐入 ✗)⇒ 自己按 ~8ms 一步推过去 ✓
-            if self?.windowsOnly == true {
+            if self.windowsOnly {
                 // ⌘` 的"只有窗口"那一局:**不上屏环**(长条整块不出现)⇒ 一直 alpha 0 ✓
                 // 托盘照常上屏(它是另一个窗口,位置本来就按环的几何算 ⇒ 不会跳)✓
                 panel.alphaValue = 0
                 panel.ignoresMouseEvents = true
-            } else if self?.summonFadeEnabled == true {
-                self?.fadeInWindow(panel)
+                self.updatePreview()
+            } else if self.summonFadeEnabled {
+                self.fadeInWindow(panel)
+                if let previewPanel = self.previewPanel, !(self.trayChrome?.isContentHidden ?? true) {
+                    self.fadeInWindow(previewPanel)
+                }
             } else {
                 panel.alphaValue = 1
+                if let previewPanel = self.previewPanel, !(self.trayChrome?.isContentHidden ?? true) {
+                    previewPanel.alphaValue = 1
+                }
             }
-            self?.bumpIdle()          // 表一 ④:从"看得见"那一刻开始计时
+            self.bumpIdle()          // 表一 ④:从"看得见"那一刻开始计时
             // 🔬 连拍放在这里:拍的是"第一次被看见的那几帧",不是 alpha 0 的那几帧
             // ⚠️ 2026-09-21:重型探针**单独门禁**(原来只挂 `isTraceEnabled`)。
             // 病例:为了白光排查,这里一次唤起连抓 12 帧 `CGWindowListCreateImage`(单次 10–50ms ✗),
             // 而 debug.trace 一开它就一直在跑 ⇒ 唤起/早期交互的卡顿有它一份,还污染所有测量。
             // 纪律:重型诊断必须有自己的开关 + 默认关(见 AGENTS.md「诊断开关」)。
             if isTraceEnabled, DebugFlags.screenProbe {
-                self?.probeShownFrames(panel)
+                self.probeShownFrames(panel)
             }
             // 🔬 120Hz 调查:面板上屏后做一次 A/B(只在 debug.hzProbe 打开时,一次性)
             if let hv = panel.contentView { HzCompare.shared.run(panelView: hv) }
-            PanelScreen.update(self?.contextScreen)
+            PanelScreen.update(self.contextScreen)
         }
         // 打**延迟**而不是时间点:绝对时间戳对"这次慢不慢"毫无用处(上一版就栽在这),
         // 要看的是"从按键到上屏多少毫秒、其中枚举占多少"
@@ -1228,11 +1318,10 @@ final class PanelController: ObservableObject {
         }
         installOutsideClickMonitor()
         installEscapeMonitor()
-        updatePreview()
 
         // 起点已就位:首帧提交后把上浮归零 —— "通用"那一层,任何时候都发生
         DispatchQueue.main.asyncAfter(deadline: .now() + PanelMotion.entryDelay) { [weak self] in
-            guard let self, self.isVisible else { return }
+            guard let self, self.isVisible, self.beginGeneration == showGen else { return }
             self.selectionArmed = true // 之后会话内的选中变化照常走弹簧
             // ★ 2026-09-22 用户实报「托盘冒头比 app 上浮快,等 app 上浮完成才能遮住它,不要让它露出来」:
             //   根因是**两者的运动不是同一种**——图标上浮是两根弹簧叠加
@@ -1371,6 +1460,7 @@ final class PanelController: ObservableObject {
     }
 
     func dismiss(reason: String) {
+        cancelPendingReveal()
         hintWork?.cancel(); hintWork = nil; hintText = nil
         // ⌘` 的"只有窗口"会话结束 ⇒ 复位(下一局按常规档位)✓
         windowsOnly = false
@@ -1398,10 +1488,11 @@ final class PanelController: ObservableObject {
         // ★★ 2026-10-25(用户实报「按 ` 切窗口,面板看着缩小了一下」):
         //   散场这一拍,托盘还要被重算/重排一次(换组那一瞬的名单/尺寸),而 orderOut
         //   要等到后面 teardown 才发生 ⇒ 用户看到面板**先缩小、再消失** ✗
-        //   ⇒ 轨道样式下散场就**当拍收窗**(硬切):冻结帧 + 立刻 orderOut,
+        //   ⇒ 轨道样式下散场就**当拍收窗**(硬切):冻结帧 + 立刻 alpha 0 + orderOut,
         //     中间的重新布局一帧都不许上屏 ✓
         if WindowLayout.current == .rail {
             holdTrayFrame(seconds: 0.5)
+            previewPanel?.alphaValue = 0
             previewPanel?.orderOut(nil)
         }
         // 关闭期间别再吃 hover / 点击(外面那圈透明呼吸区也在放事件)
@@ -1432,57 +1523,132 @@ final class PanelController: ObservableObject {
     /// `generation` 是保险:这张拆迁单发出后,若又开了一局(`beginGeneration` 已变),
     /// 它既不能拆窗(窗正被新一局用着),也不能通知触发层收尸 —— 通知了就是把新一局
     /// 的状态机从 navigating 拉回 idle,接下来的 ⌘Tab 会全部漏给系统。
+    /// 等待当前 RunLoop 的 `NSDisplayCycle` / CoreAnimation `beforeWaiting` 提交真正落盘后再执行回调。
+    /// CoreAnimation 提交运行在 `order = 2_000_000`；`CFIndex.max` 严格排在其后，保证 SwiftUI 新树已写入图层。
+    private func scheduleAfterDisplayCommit(_ block: @escaping @Sendable @MainActor () -> Void) {
+        let observer = CFRunLoopObserverCreateWithHandler(
+            kCFAllocatorDefault,
+            CFRunLoopActivity.beforeWaiting.rawValue,
+            false,
+            CFIndex.max
+        ) { obs, _ in
+            if let obs { CFRunLoopRemoveObserver(CFRunLoopGetMain(), obs, .commonModes) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { block() }
+            }
+        }
+        if let observer {
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { block() }
+            }
+        }
+    }
+
+    /// 强制将主面板与托盘窗的 SwiftUI 视图树、新 `NSGlassEffectView` 及 CoreAnimation 事务同步提交到窗口后备存储。
+    ///
+    /// 为什么只调 `layoutSubtreeIfNeeded() + displayIfNeeded()` 不够(2026-11-21 残帧根治):
+    ///   · `@Published glassEpoch` 更新后,`NSHostingView` 把 SwiftUI 树重建与 Metal/CA 图层更新排在当前 CA 事务中;
+    ///   · 在 CPU 高负载或前台 App 卡顿的场景下,若不显式 `CATransaction.flush()`,WindowServer 侧窗口的
+    ///     backing store 仍停留在上一局最后一次烘焙的图像(含上一局采样进玻璃着色器的旧 App 背景像素);
+    ///   · 显式执行布局 + 绘制 + `CATransaction.flush()`,确保新玻璃与新视图在 `alpha` 拉回可见前已真实写入后备存储。
+    func flushPanelBackingStores(includeTray: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let panel {
+            panel.contentView?.needsLayout = true
+            panel.contentView?.needsDisplay = true
+            panel.layoutIfNeeded()
+            panel.displayIfNeeded()
+            panel.invalidateShadow()
+        }
+        if includeTray, let previewPanel, !(trayChrome?.isContentHidden ?? true) {
+            previewPanel.contentView?.needsLayout = true
+            previewPanel.contentView?.needsDisplay = true
+            previewPanel.layoutIfNeeded()
+            previewPanel.displayIfNeeded()
+            previewPanel.invalidateShadow()
+        }
+        CATransaction.commit()
+        CATransaction.flush()
+    }
+
     private func teardownPanel(generation: Int) {
         guard generation == beginGeneration else {
             print("[T6] 过期的退场拆迁单(已开新局),作废")
             return
         }
         endActivity()
-        FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
         PanelMetrics.sessionCap = .greatestFiniteMagnitude // 会期结束,限额随之失效(不留给设置页读到旧值)
         PanelMetrics.trayCap = .greatestFiniteMagnitude    // 托盘那把尺子同样收掉 ✓
-        // ★ 取证:收窗**之前**两扇窗各是什么状态(下次再看到"残留"时,这一行能分清
-        //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
-        trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
-        // 环与托盘**并进同一次 flush**(见 ChromeWindow.teardown 的病例 ✓)
-        // ⚠️ 2026-10-08 拿掉 `disableScreenUpdatesUntilFlush()`:
-        //   它当初是为了"环与托同批消失"(消掉 16ms 的残留 ✓),但它把这次 orderOut 压到
-        //   "下一次 flush" —— 那一刻若没有 flush,环就可能**留在屏上**,而 `isVisible` 已经是 false ✗
-        //   (用户实报的症状正好是"环盖着一切、切谁都像没反应" ✓)。两扇窗在同一个 runloop 里
-        //   连着 orderOut 本来就会被合成器并进一批 ⇒ 保留那点收益不值这个风险 ✓
-        panel?.orderOut(nil)
-        // 🔬 2026-10-08(用户实报「开了 Glance 设置面板之后, 切换选中唤不起任何窗」):
-        //   日志里每一发 `[T7] 已聚焦` 都**成功** ⇒ 嫌疑在"环没被真正收走"这一侧 ✗
-        //   ★ 这里原本**只有托盘有兜底**(见下面 0.25s 那一发),**主面板没有** ✗ ——
-        //     而 `disableScreenUpdatesUntilFlush()` 会把这次 orderOut 压到"下一次 flush",
-        //     那一刻若没有 flush,环就可能留在屏上(层级 .popUpMenu ⇒ 盖住所有普通窗 ✗)
-        //     ⇒ 症状正好是"切谁都没反应、设置窗也出不来" ✓
-        glog("[窗口] 收场后 环 isVisible=\(panel?.isVisible ?? false) alpha=\(panel?.alphaValue ?? -1)")
-        // ★ 2026-09-21 修我自己引入的 bug:标记必须与 orderOut **成对**清掉。
-        //   病例(用户实报「本次不显示预览窗了」):第一次收场把托盘 orderOut 了,而标记没清 ✗
-        //   ⇒ 之后每一局都以为"它已经在台上" ⇒ **再也不 orderFront** ⇒ 托盘永不出现 ✓。
-        //   ★ 这个坑现已由 ChromeWindow 从结构上消掉(placed/teardown 成对,写在同一个类里)✓
-        trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
-        // ★ 兜底:0.25s 后再确认一次"托盘窗真下去了" —— 未知的迟到路径也不至于留窗 ✓
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, !self.isVisible else { return }
-            if self.previewPanel?.isVisible == true {
-                glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
-                self.previewPanel?.orderOut(nil)
+        let didShow = sessionShowedPanel || panel?.isVisible == true || previewPanel?.isVisible == true
+        sessionShowedPanel = false
+        if didShow {
+            FrameProbe.shared.stop() // 面板退场 = 本轮采样结束,直接打一行帧间隔结论
+            // ★ 取证:收窗**之前**两扇窗各是什么状态(下次再看到"残留"时,这一行能分清
+            //   是"有一扇本来就没收"还是"合成器把两次提交拆开了" ✓)
+            trace("[T6] 收场:环 visible=\(panel?.isVisible ?? false) · 托 visible=\(previewPanel?.isVisible ?? false)")
+            // ★ 残帧根治(2026-11-22):复用窗的 WindowServer 后备存储与 NSGlassEffectView backdrop 会跨会话保留上一局像素。
+            //   收场时同步压 alpha=0 + orderOut + close() + CATransaction.flush()，彻底销毁本局两扇 NSPanel，
+            //   下局使用全新未上屏过的 NSPanel / NSHostingView，物理杜绝 WindowServer 吐旧像素 ✓
+            let retiredPanel = panel
+            let retiredPreview = previewPanel
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            retiredPanel?.alphaValue = 0
+            retiredPanel?.ignoresMouseEvents = true
+            retiredPanel?.orderOut(nil)
+            retiredPanel?.close()
+            glog("[窗口] 收场后 环 isVisible=\(retiredPanel?.isVisible ?? false) alpha=\(retiredPanel?.alphaValue ?? -1)")
+            trayChrome?.teardown()                       // 真的收窗 + 清账(与 place 配对)
+            retiredPreview?.close()
+            CATransaction.commit()
+            CATransaction.flush()
+            panel = nil
+            hostingView = nil
+            previewPanel = nil
+            previewHostingView = nil
+            trayChrome = nil
+            // ★ 兜底:0.25s 后再确认一次已退役的两扇窗真从 WindowServer 撤下 ✓
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak retiredPanel, weak retiredPreview] in
+                if let retiredPreview, retiredPreview.isVisible {
+                    glog("[T6] ⚠️ 收场后托盘窗还在台上 ⇒ 强制收掉(兜底)")
+                    retiredPreview.alphaValue = 0
+                    retiredPreview.orderOut(nil)
+                    retiredPreview.close()
+                    CATransaction.flush()
+                }
+                if let retiredPanel, retiredPanel.isVisible {
+                    glog("[T6] ⚠️ 收场后主面板还在台上 ⇒ 强制收掉(兜底)")
+                    retiredPanel.alphaValue = 0
+                    retiredPanel.orderOut(nil)
+                    retiredPanel.close()
+                    CATransaction.flush()
+                }
             }
-            // ★ 2026-10-08:**主面板也要这条兜底**(它与托盘是同一族病,之前只补了托盘 ✗)
-            if self.panel?.isVisible == true {
-                glog("[T6] ⚠️ 收场后主面板还在台上 ⇒ 强制收掉(兜底)")
-                self.panel?.orderOut(nil)
-            }
+        } else {
+            trace("[T6] 快切静默收场:面板未曾上屏(零窗体开销)")
         }
-        panel?.ignoresMouseEvents = false
-        previewPanel?.ignoresMouseEvents = false
+        var resetFade = Transaction()
+        resetFade.disablesAnimations = true
+        withTransaction(resetFade) { entryFadeProgress = 1 }
+        lastPreviewBundleID = nil
         groups = []
+        glassEpoch &+= 1
         lastPointerSample = nil   // 结束采样:下一局第一帧不把跨局位移当成"指针动了"
         stopHoverPolling()
+        ThumbnailRefresher.shared.setPanelVisible(false)
         teardown = nil
         onSessionEnd?()
+        if didShow {
+            // 空闲预建下一局的洁净空窗（只建 SwiftUI 宿主，绝不 orderFront —— 不采样任何屏幕像素 ✓）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                guard let self, !self.isVisible else { return }
+                self.buildPanelIfNeeded()
+                self.buildPreviewPanelIfNeeded()
+            }
+        }
         // **关面板预拍**(T86):窗一拆完,把当前屏幕状态全量拍一遍(TTL 过滤,谁新谁不拍)。
         // 此刻屏幕上就是用户刚看到的内容,拍的图对下一次唤起 100% 新鲜 —— 下次唤起第一帧
         // 全走缓存。延 0.25s 让拆窗收尾先落地;面板若已重开(快速连按)则跳过,新一局有自己的节奏
@@ -1606,14 +1772,25 @@ final class PanelController: ObservableObject {
     /// (用户实报「没有淡入的效果了,像是闪现出来的」✗)⇒ 按帧推,8ms 一步 ✓
     /// 为什么不用内容 `.opacity`:内容一透明,图标背后的托底就透出来(见 PanelView 那条病例)✗
     private func fadeInWindow(_ w: NSPanel, duration: Double = 0.13) {
+        let gen = beginGeneration
         w.alphaValue = 0
         let t0 = CACurrentMediaTime()
         func step() {
-            guard isVisible, w.isVisible else { w.alphaValue = 1; return }
+            // ★★ 2026-11-22 残帧与幽灵驻留修复:
+            //   ① 绝不用 `w.isVisible` 当判据(在 borderless + nonactivatingPanel + level=.popUpMenu
+            //      的托盘窗上常常误报 false ✗);
+            //   ② 绝不在 `!isVisible`(本局已在 130ms 内提前松手收场)时写 `w.alphaValue = 1`!
+            //   ③ 同时校验 `w` 仍是当前会话的在任面板，绝不触碰已退役关闭的旧窗 ✓
+            guard isVisible, gen == beginGeneration,
+                  (w === panel || w === previewPanel) else { return }
             let t = min(1, (CACurrentMediaTime() - t0) / duration)
             w.alphaValue = CGFloat(1 - pow(1 - t, 3))     // easeOut
             if t < 1 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: step)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.008) { [weak self, weak w] in
+                    guard let self, let w, self.isVisible, gen == self.beginGeneration,
+                          (w === self.panel || w === self.previewPanel) else { return }
+                    step()
+                }
             } else {
                 w.alphaValue = 1
             }
@@ -1711,6 +1888,15 @@ final class PanelController: ObservableObject {
     /// 窗口本来就是 borderless + nonactivatingPanel,不上屏没有副作用;这一次上屏是完全透明的。
     private func warmFirstFrame() {
         guard let panel else { return }
+        // ⚠️ 2026-11-14 审查发现:这里原本不判面板是否已在台上。保温的目的地是"冷窗"——
+        //   若用户在预热时机(+0.15s)前已经唤起了面板,这段会把**正在使用的面板**压黑、
+        //   orderOut 再收回 —— 一局当场消失。保温只对"还没上过屏的窗"有意义。
+        if panel.isVisible || previewPanel?.isVisible == true {
+            glog("[保温] 跳过:面板已在台上(用户已唤起),不可拆台")
+            // 图标解码仍要做 —— 它与窗口可见性无关,是"首次画到屏幕"的另一半成本。
+            warmIconsInBackground()
+            return
+        }
         // ⚠️ 2026-09-17 修正:第一次写成"启动途中就 orderFrontRegardless" —— 实机 Console 里
         // 立刻出现三条 `unable to send initialization message … Attempting to send message using a
         // canceled session`(窗口服务/XPC 会话那时还没建好);而且**闪光依旧** ⇒ 那个动作既惹事又没用。
@@ -1730,20 +1916,54 @@ final class PanelController: ObservableObject {
             w.orderFrontRegardless()
             w.orderOut(nil)
             w.alphaValue = savedAlpha
+            w.close()
         }
-        glog("[保温] 首帧合成已预热(屏幕内 + 全透明,用户看不见)")
-        // 图标的首次解码 —— "白光"的另一半。列一份名单画一遍,解码就发生了
-        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        for app in DockAppsProvider.launchables(excluding: running) { Self.decodeIcon(app.icon) }
-        for app in NSWorkspace.shared.runningApplications {
-            if let icon = app.icon { Self.decodeIcon(icon) }
+        // 启动预热窗已完成首帧着色器/布局预热，立即销毁并重建从未上屏过的洁净空窗 ✓
+        self.panel = nil
+        self.hostingView = nil
+        self.previewPanel = nil
+        self.previewHostingView = nil
+        self.trayChrome = nil
+        buildPanelIfNeeded()
+        buildPreviewPanelIfNeeded()
+        glog("[保温] 首帧合成已预热(屏幕内 + 全透明，已替换为洁净未上屏窗口)")
+        warmIconsInBackground()
+    }
+
+    /// 图标的首次解码 —— "白光"的另一半。列一份名单画一遍,解码就发生了。
+    /// 从 warmFirstFrame 拆出来:图标解码与窗口可见性无关,面板已在台上时也要做。
+    private func warmIconsInBackground() {
+        // ⚠️ 2026-11-13 病例:这段原先在主线程同步跑,某次启动后主线程在这里卡死 6.5h。
+        // ★ 2026-11-20 进一步挪干净:旧版切后台前仍在主线程同步跑 `DockAppsProvider.launchables`
+        //   (冷启动会同步解析 Dock plist + LaunchServices)和全系统 `runningApplications.compactMap(\.icon)`
+        //   (包含上百个后台守护进程,同步触发 IconServices XPC)。
+        //   现在全部移入后台 utility 队列:顺手预热 Dock 候选/在跑缓存与常规 App 的 `IconProvider`,
+        //   主线程零阻塞 ✓
+        DispatchQueue.global(qos: .utility).async {
+            let candidates = DockAppsProvider.computeCandidates()
+            let runningSet = DockAppsProvider.computeRunningSet()
+            let launchableIcons = candidates
+                .filter { !runningSet.contains($0.id) && !runningSet.contains($0.path) }
+                .map(\.icon)
+            for icon in launchableIcons { Self.decodeIcon(icon) }
+            // 只预热常规 GUI 应用(`.regular`),不碰上百个后台 daemon 进程
+            for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+                guard let icon = app.icon else { continue }
+                Self.decodeIcon(icon)
+                IconProvider.prewarm(pid: app.processIdentifier, bundleID: app.bundleIdentifier, image: icon)
+            }
+            DispatchQueue.main.async {
+                DockAppsProvider.storeCandidates(candidates)
+                DockAppsProvider.storeRunningSet(runningSet)
+            }
+            glog("[保温] 首帧已预热(布局 + 图标解码)—— 冷启动的第一次唤起不再交这笔钱")
         }
-        glog("[保温] 首帧已预热(布局 + 图标解码)—— 冷启动的第一次唤起不再交这笔钱")
     }
 
     /// 把 NSImage 真正解码一次:画进一张 1pt 的离屏位图。
     /// 预热必须花在**启动时**,不能花在唤起那一帧 —— 这是这个仓库对"唤起要快"的一贯口径。
-    private static func decodeIcon(_ image: NSImage) {
+    /// nonisolated:只碰离屏位图与 NSGraphicsContext 的线程本地状态,不碰任何主线程语义 ✓
+    private nonisolated static func decodeIcon(_ image: NSImage) {
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                                          isPlanar: false, colorSpaceName: .deviceRGB,
@@ -1754,15 +1974,19 @@ final class PanelController: ObservableObject {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    private var didInstallKeyLogging = false
+
     /// key 状态变化账(2026-09-19):验证「点托盘 → 长条丢 key → 玻璃变浅 + 首击被吞」的理论
     private func installKeyTransitionLogging() {
+        guard !didInstallKeyLogging else { return }
+        didInstallKeyLogging = true
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
-            center.addObserver(forName: name, object: nil, queue: .main) { note in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 // `queue: .main` 只保证"送到主队列";闭包本身是 @Sendable ⇒
                 // 读主线程隔离状态必须**显式**声明(否则两条 warning ✗)
                 MainActor.assumeIsolated {
-                    guard let w = note.object as? NSWindow, w is GlancePanel else { return }
+                    guard let self, let w = note.object as? NSWindow, w is GlancePanel else { return }
                     let role = w == self.panel ? "长条" : w == self.previewPanel ? "托盘" : "其它"
                     glog("[T6] key 变化: \(name == NSWindow.didBecomeKeyNotification ? "获得" : "失去") → \(role)(win=\(w.windowNumber))")
                 }
@@ -1771,13 +1995,14 @@ final class PanelController: ObservableObject {
     }
 
     private func buildPanelIfNeeded() {
-        installKeyTransitionLogging()
         guard panel == nil else { return }
+        installKeyTransitionLogging()
         panel = makeChromePanel(keyable: false)
         let hosting = ClickThroughHostingView(rootView: PanelView(controller: self))
         hosting.pad = PanelMetrics.shadowPadStrip // 透明呼吸区不吃点击
         hosting.autoresizingMask = [.width, .height]
         panel!.contentView = hosting
+        panel!.contentMinSize = .zero
         self.hostingView = hosting
     }
 
@@ -1788,6 +2013,7 @@ final class PanelController: ObservableObject {
             backing: .buffered,
             defer: false
         )
+        p.isReleasedWhenClosed = false
         p.keyable = keyable
         p.isFloatingPanel = true
         p.level = .popUpMenu
@@ -1983,6 +2209,9 @@ final class PanelController: ObservableObject {
     /// **那扇窗是 App 自己的确认框**(modal alert),AX 的 close 对它无效 —— 它压根关不掉。
     /// 所以"先摘"必须像 `verifyQuit` 一样**复核**:真没了才留摘除的样子,还在就**放回原位**。
     var purgedWIDs: Set<CGWindowID> = []
+    /// 开启「显示最小化窗口」时，按 M 后短时（0.9s）锁住该窗为 `isMinimized = true` 且排在尾部，
+    /// 防止 0.18s 重枚举撞上 macOS 最小化动画尚未播完而把它弹回队首。
+    var optimisticMinimizedWIDs: Set<CGWindowID> = []
     /// **本局被我们缩小(Cmd+M)过的窗与 App**(2026-09-22 用户实报)。
     ///
     /// 病例:「唤起面板的时候, cmd m 会缩小, 这时候面板上的 app 是没变化的, 松开之后会立马把缩小的窗口
@@ -2081,9 +2310,18 @@ final class ChromeWindow {
     ///   而主面板那次没人再上屏 ⇒ 症状正是"**环没了、托盘还在**" ✓
     ///   ⇒ 加**会话闸**:收场之后、下一局 `beginSession()` 之前,`place()` 一律 no-op ✓
     ///   (连 `hidden` 都不碰:会话结束后它就该保持隐藏 ✓)
-    func place() {
+    /// - Parameter keepAlphaZero: 开局首拍传 `true`,让窗口以 `alpha = 0` 上屏完成首帧合成,
+    ///   下一拍再由 `showPanel` 统一拉回可见(与主面板同拍走 `alpha = 0` 门,消除托盘残帧 ✓)。
+    func place(keepAlphaZero: Bool = false) {
         guard !sessionEnded else { return }
-        if hidden { setContentHidden(false) }
+        if hidden {
+            hidden = false
+            panel.ignoresMouseEvents = false
+            if !keepAlphaZero { panel.alphaValue = 1 }
+        }
+        if keepAlphaZero {
+            panel.alphaValue = 0
+        }
         guard !placed else { return }
         placed = true
         panel.orderFrontRegardless()
@@ -2113,18 +2351,11 @@ final class ChromeWindow {
         sessionEnded = true          // ★ 收场 ⇒ 迟到的 place() 不许再上屏(见 place 的病例 ✓)
         placed = false
         hidden = false
-        panel.alphaValue = 1
+        // ★ 2026-11-21 残帧修复:收场时把 alpha 置 0 再 orderOut(旧版置 1 导致带旧像素入库,
+        //   下一局 orderFront 时一旦主线程高负载没及时刷完新帧,WindowServer 就会直接把旧帧亮出来 ✗)
+        panel.alphaValue = 0
         panel.ignoresMouseEvents = false
-        // ★ 2026-09-22 用户实报「预览容器会在环之后才消失, 看着跟有残留一样」:
-        //   环与托盘是**两扇窗**,两次 `orderOut` = **两次独立提交** ⇒ 合成器可能有一帧
-        //   只收走了环 ✗(16ms 的残留,肉眼刚好看得见)。
-        //   `disableScreenUpdatesUntilFlush()` 把这次改动**并进下一次 flush** ⇒ 与环同批消失 ✓
         panel.orderOut(nil)   // ⚠️ 不再 disableScreenUpdatesUntilFlush(见 teardownPanel 的病例 ✓)
-        // 🔬 2026-10-08 诊断(用户实报「开了 Glance 设置面板之后, 切换选中唤不起任何窗」):
-        //   日志里每一发 `[T7] 已聚焦` 都是**成功**的 ⇒ 嫌疑落在"环/托没被真正收走"这一侧 ✗
-        //   这一行就是判据:**收场之后 `isVisible` 必须是 false**(true = orderOut 没生效/被延后 ✓)
-        //   `disableScreenUpdatesUntilFlush()` 会把这次改动压到"下一次 flush"——
-        //   若那一刻根本没有 flush,窗口就可能留在屏上 ✗(本行专为验它)
         glog("[窗口] 收场后 \(role) isVisible=\(panel.isVisible) alpha=\(panel.alphaValue)")
     }
 }
@@ -2136,21 +2367,4 @@ final class GlancePanel: NSPanel {
     var keyable: Bool = true
     override var canBecomeKey: Bool { keyable }
     override var canBecomeMain: Bool { false }
-}
-
-// MARK: - 入场浮出的进度模型
-
-import SwiftUI
-
-/// **入场浮出**的进度(0…1),由 `PanelController.startEntryFloat()` 按帧推。
-///
-/// 为什么单独一个对象(2026-10-27,用户:「多窗口芯片的登场动画不流畅」):
-/// 之前进度放在 `PanelController` 的 `@Published` 上 ⇒ 每 8ms 一次发布,
-/// 而**环(长条)和托盘都观察同一个 controller** ⇒ 每一拍两边都整体重算一遍,
-/// 托盘里还挂着卡片内容 ⇒ 掉帧、看起来一顿一顿 ✗
-/// ⇒ 进度挪进这个只有"浮出那一小块"观察的小对象里:
-///   每拍只重算那一块(把轨道抬 10pt、改透明度),环和其他卡片完全不动 ✓
-final class EntryFloatModel: ObservableObject {
-    /// 1 = 到位
-    @Published var progress: CGFloat = 1
 }

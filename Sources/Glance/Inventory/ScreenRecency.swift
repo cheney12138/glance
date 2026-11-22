@@ -16,6 +16,8 @@ final class ScreenRecency {
     private init() {}
 
     private let lock = NSLock()
+    /// 专用串行后台队列:保住激活先后序,同时把 `CGWindowListCopyWindowInfo` 移出主线程 ✓
+    private let queue = DispatchQueue(label: "glance.recency", qos: .utility)
     /// 屏名(localizedName)→ pid(新 → 旧)
     private var byScreen: [String: [pid_t]] = [:]
     private var observing = false
@@ -27,7 +29,10 @@ final class ScreenRecency {
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            self?.note(pid: app.processIdentifier)
+            let pid = app.processIdentifier
+            self?.queue.async { [weak self] in
+                self?.note(pid: pid)
+            }
         }
     }
 

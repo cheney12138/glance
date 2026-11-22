@@ -22,8 +22,10 @@ extension PanelController {
         previewPanel!.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
         let hosting = ClickThroughHostingView(rootView: PreviewPanelView(controller: self, snapshotter: Snapshotter.shared))
         hosting.pad = PanelMetrics.shadowPadPop
+        hosting.padTop = 0
         hosting.autoresizingMask = [.width, .height]
         previewPanel!.contentView = hosting
+        previewPanel!.contentMinSize = .zero
         previewHostingView = hosting
     }
 
@@ -208,11 +210,14 @@ extension PanelController {
     }
 
 
-    func updatePreview() {
+    func updatePreview(initialSummon: Bool = false) {
+        // ★★ 2026-11-22 门口守卫:非首次预摆(`!initialSummon`)且会话已不在台上(`!isVisible`)时一律早退,
+        //   绝不允许迟到的异步回调在 `teardownPanel` 之后触碰 `previewPanel.alphaValue` 或窗框 ✓
+        guard initialSummon || isVisible else { return }
         // ★ 上屏前**先用池子里的上一帧垫上**(同一条管线 ⇒ 之后切到新的实时帧看不出变化)。
         //   病例(2026-10-20 用户实测):「一个一个切过去到 Sublime 正常,**直接跳过去**就闪」——
         //   直跳时新组的卡没有任何实时帧 ⇒ 只能先画静帧,首帧到了再切 ⇒ 半透明窗 alpha 差现形 ✗
-        for w in (currentGroup?.windows ?? []) where LivePreviewPool.shared.box(for: w.wid).image == nil {
+        for w in (currentGroup?.windows ?? []) where !w.isMinimized && LivePreviewPool.shared.box(for: w.wid).image == nil {
             if let cached = LivePreviewPool.shared.cachedFrame(for: w.wid) {
                 LivePreviewPool.shared.box(for: w.wid).image = cached
             }
@@ -258,7 +263,8 @@ extension PanelController {
             //   代价:第一次进某个 app,卡片会先显示静默态(实测首帧 36–74ms)✓ 可接受。
             // ★ A 修(2026-09-24):盒子随名单一起交给池 —— 出流像素规格的**输入**与卡片盒
             //   同一份账(`record.bounds` ⇒ `PanelMetrics.thumbSize` ✓),池不再从 SCWindow.frame 重算 ✗
-            let items = (currentGroup?.windows ?? []).map {
+            // 最小化窗不向 LivePreviewPool 发起 SCStream 录屏流（复用已有静帧或灰显图标）
+            let items = (currentGroup?.windows ?? []).filter { !$0.isMinimized }.map {
                 (wid: $0.wid, aspect: $0.aspect,
                  box: PanelMetrics.thumbSize(real: $0.bounds.size, aspect: $0.aspect))
             }
@@ -311,8 +317,13 @@ extension PanelController {
                         entryFadeProgress, trayShownOnce ? "否" : "是"))
         }
         trayShownOnce = true
-        // ★★★ 2026-10-27 定稿(用户:「接受不了(延迟), 撤回吧, 只保留对 ⌘` 卡片唤起的处理」):
-        //   "等图才显示"那套**只留给窗口局**;常规 ⌘Tab 恢复**当拍显示**(一个像素的延迟都不加)✓
+        // ★★★ 2026-10-27 定稿 + 2026-11-21 残帧根治:
+        //   · 窗口局(⌘`):等图才显示;
+        //   · 常规局开局首拍(`initialSummon == true`):与主面板同拍以 **alpha 0** 上屏,
+        //     配合 `flushPanelBackingStores` 把新玻璃与新树真正刷入 WindowServer 的 backing store,
+        //     下一拍再由 `showPanel` 的 `DispatchQueue.main.async` 与主面板一并拉回可见(渐入或 alpha 1),
+        //     彻底堵死"托盘首拍直接 alpha=1 上屏吐出上一局残帧"的漏路 ✓
+        let holdAlphaZeroForSummon = initialSummon && !windowsOnly
         if windowsOnly {
             let selWid: CGWindowID? = {
                 guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
@@ -325,15 +336,23 @@ extension PanelController {
                 return false
             }()
             let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
-            if hasImage || waited > 0.4 {
+            if !initialSummon, hasImage || waited > 0.4 {
+                if previewPanel.alphaValue < 0.5 {
+                    flushPanelBackingStores(includeTray: true)
+                }
                 previewPanel.alphaValue = 1
             } else {
                 previewPanel.alphaValue = 0
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
-                    guard let self, self.isVisible else { return }
-                    self.updatePreview()
+                if !hasImage {
+                    let waitGen = beginGeneration
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                        guard let self, self.isVisible, waitGen == self.beginGeneration else { return }
+                        self.updatePreview()
+                    }
                 }
             }
+        } else if holdAlphaZeroForSummon {
+            previewPanel.alphaValue = 0
         } else {
             previewPanel.alphaValue = 1
         }
@@ -357,9 +376,9 @@ extension PanelController {
             }
         }
         __mark("setFrame")
-        // ★★ 2026-10-26 换组残帧(用户实报的"坏电视色块"):换到另一个 App 的那一拍,
-        //   窗口的 backing store 里还留着上一组的像素 ⇒ 闪一块彩色的乱码 ✗
-        //   ⇒ 换组就**强制整窗重绘**(影子和内容一起):这是最便宜、且不依赖"猜是哪一层的"做法 ✓
+        // ★★ 2026-10-26 换组残帧(用户实报的"坏电视色块"):
+        //   换到另一个 App 的那一拍,标记托盘内容重绘与阴影失效,交由正常 CA 提交合入下一帧,
+        //   不在 hover 途中强插同步 `CATransaction.flush()` 抢断视图重排。
         let thisBundle = currentGroup?.bundleID
         if thisBundle != lastPreviewBundleID {
             lastPreviewBundleID = thisBundle
@@ -375,7 +394,7 @@ extension PanelController {
         //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套
         //   borderless + nonactivatingPanel + level=.popUpMenu 的组合上它**不可靠**(常常报 false),
         //   于是每次更新都重排一次窗口。⇒ 改为**自己记账**:上屏一次就记下,只有 orderOut 才清掉。
-        trayChrome?.place()                          // 一整局只 orderFront 一次(其余靠 alpha)
+        trayChrome?.place(keepAlphaZero: initialSummon) // 一整局只 orderFront 一次(其余靠 alpha)
         __mark("orderFront")
         // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
         let __tr = CFAbsoluteTimeGetCurrent()
@@ -417,14 +436,12 @@ extension PanelController {
         guard isVisible else { return }
         samplePointer()                                        // 托盘帧拍每帧路过:顺手采样指针位移
         guard pointerMayTakeOver() else { return }             // 键盘后动中,指针停着不许抢(与 hover 同一道闸)
-        // 托盘两种内容(窗口卡 / 启动图标行)共用同一套卡壳几何,只有名单不同 —— 几何算一份
-        let count: Int; let names: [String]
-        if entrySelected {
-            count = launchables.count; names = launchables.map(\.name)
-        } else if let g = currentGroup {
-            count = g.windows.count; names = g.windows.map(\.title)
-        } else { return }
-        // 同上:只有一格时也要能选中它(循环才需要 > 1)
+        // ★★ 2026-10-13 定案:窗口卡高亮已完全交回视图层 `.onHover`(避免双写入者错位),
+        //   本函数仅负责启动区(`entrySelected == true`)的指针重定位;窗口卡路径直接早退,
+        //   省掉 60Hz 定时器每 16ms 重复跑一次 `cardSizes` + `trayLayout` + `rowHeights` ✗。
+        guard entrySelected else { return }
+        let count = launchables.count
+        let names = launchables.map(\.name)
         guard count > 0 else { return }
         let p = NSEvent.mouseLocation
         // 窗框 ≠ 玻璃(窗口按整局最大布局开,内容底部居中)→ 必须用内容矩形
@@ -434,77 +451,17 @@ extension PanelController {
         let x = p.x - glass.minX - PanelMetrics.trayPadX
         let yUp = p.y - glass.minY - PanelMetrics.trayPadBottom - PanelMetrics.trayBottomBreath
         guard x >= 0, yUp >= 0 else { return }
-        if entrySelected {
-            // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
-            let (rows, cols) = launchLayout(count: count)
-            // 同一个颠倒(见窗口卡那段的病例):行号要从**顶**往下数 ✓
-            let bandFromBottom2 = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
-            let r = max(0, max(rows, 1) - 1 - bandFromBottom2)
-            let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
-            guard launchables.indices.contains(i), i != launchIndex else { return }
-            bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
-            launchIndex = i
-            // ★ 悬停触感(2026-09-22 用户实报「预览容器的 hover 没做震感吗」):
-            //   托盘**实际走的是帧拍这条路**(逐格 `.onHover` 早就"实测会哑" ⇒ 见 hoverWindow 的注释),
-            //   第一版把触感挂在 `hoverWindow` 里 ⇒ 等于挂在了用不到的那条路上 ✗
-            //   托盘两种内容(窗口卡 / 启动图标行)都算"预览容器" ⇒ 同一个事件 ✓
-            Haptics.fire(.hoverPreviewThumb)
-            trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
-        } else {
-            // 窗口卡:T88 卡宽随窗比例,按**每张卡的实际宽**走查命中;
-            // 行的分布与 thumbGrid 的 VStack/HStack 完全一致(按数量均分、末行左对齐)
-            guard let g = currentGroup else { return }
-            let sizes = Self.cardSizes(g.windows)
-            let widths = sizes.map(\.width)            // 与视图/尺寸账同一把尺子(不再走槽宽)
-            let (rows, cols) = trayLayout(widths: widths)
-            // 行高是"逐行最大卡高"(卡片大小不一)⇒ 不能用常量行距去整除 y ✗
-            // ★★ 2026-10-13 病例(用户实报:「鼠标在第一排第二个选不中, 选中的是第二排」✓):
-            //   `yUp` 是**从内容底往上**量的,所以下面循环数出来的行号是**从下往上**的 ✗
-            //   而视图(VStack)的行是**从上往下**排的 ⇒ 两排时整块**上下颠倒** ✗
-            //   ⇒ 循环得到的是"离内容底第几条带",真正的行号 = rows − 1 − 带号 ✓
-            var bandFromBottom = 0
-            var rowTop: CGFloat = 0
-            let rowH = Self.rowHeights(sizes, rows: rows, cols: cols)
-            for k in 0..<max(rows, 1) where yUp >= rowTop + rowH[k] + PanelMetrics.trayRowGap {
-                rowTop += rowH[k] + PanelMetrics.trayRowGap
-                bandFromBottom = k + 1
-            }
-            let r = max(0, max(rows, 1) - 1 - min(max(rows, 1) - 1, bandFromBottom))
-            let start = r * cols
-            let end = min(start + cols, widths.count)
-            guard start < end else { return }
-            var cursor: CGFloat = 0
-            var hit: Int?
-            for j in start..<end {
-                let w = widths[j]
-                // ★★ 2026-10-13 病例(用户:「预览窗口边缘选中错位到相邻的这个问题还是存在」✓):
-                //   卡片之间那道缝(thumbGap)原来**整条判给下一张** ✗
-                //   ⇒ 在第一张卡的右侧边缘扫过时,高亮会跳到第二张 ✓(点击路径一直是"归最近那张" ✓
-                //     见 thumbGrid 的"行级点击"注释 —— 两条路口径不一致本身就是病 ✗)
-                //   ⇒ 缝以中线为界:左半归左边那张、右半归右边那张 ✓
-                if x < cursor + w + PanelMetrics.thumbGap / 2 { hit = j; break }
-                cursor += w + PanelMetrics.thumbGap
-            }
-            hit = hit ?? (end - 1)      // 行最右缘 ⇒ 归最后一张(也是"最近"的那张 ✓)
-            // 卡片高亮已交回 `.onHover` ⇒ 这里只留"未命中"的日志(不再写 winIndex ✓)
-            guard hit != nil else {
-                // 玻璃内但没命中卡片(点在 padding/行间隙):节流打一行,给"点击吞没"定位用
-                if CFAbsoluteTimeGetCurrent() - Self.lastCardMissLog > 0.5 {
-                    Self.lastCardMissLog = CFAbsoluteTimeGetCurrent()
-                    trace("[T6] 卡片未命中 (x=\(Int(x)) yUp=\(Int(yUp)) 行=\(r) start=\(start) end=\(end))")
-                }
-                return
-            }
-            // ★★ 2026-10-13 病例(用户第五次报,并红框标出范围:「指针移动到红框的范围内之后,
-            //   就会选中到右边的卡片」✓):
-            //   托盘卡片的高亮有**两个写入者** —— 视图的 `.onHover`(按卡片真实帧 ✓ 最准)
-            //   与本函数(按指针坐标重算 ✗)。两者只要差几十 pt,就会在卡内偏右的地方先跳过去 ✗
-            //   量过两次都对不上(2026-10-13 那两轮:视图行左缘 122.5 vs 命中假设 122.9 只差 0.4pt,
-            //   但用户现场仍能稳定复现 ⇒ 说明差在**别处**(行内偏移/换组后的旧帧),而这条重算本来就
-            //   是"内容在指针底下换了"的兜底 —— 为了兜一个罕见场景,天天让用户吃"选错卡"的亏 ✗
-            //   ⇒ 卡片高亮**只认 `.onHover`**(用户眼睛看到的那张 ✓),本函数不再写它 ✓
-            //   代价:换组后指针不动时,高亮会停在旧卡上,直到指针动一下 ✓(可接受 ✓ 点击路径不受影响 ✓)
-        }
+        // 启动行:格距 = icon + iconGap,行距 = icon + trayRowGap(与 pollLaunchHover 同一套数学)
+        let (rows, cols) = launchLayout(count: count)
+        // 行号要从**顶**往下数 ✓
+        let bandFromBottom2 = min(max(rows, 1) - 1, Int(yUp / (PanelMetrics.icon + PanelMetrics.trayRowGap)))
+        let r = max(0, max(rows, 1) - 1 - bandFromBottom2)
+        let i = r * cols + min(cols - 1, RingGrid.index(atX: x, icon: PanelMetrics.icon, gap: PanelMetrics.iconGap))
+        guard launchables.indices.contains(i), i != launchIndex else { return }
+        bumpIdle()   // 帧拍选中了新格子 = 用户在动它(hover 事件哑掉时,这是"活着"的唯一证据)
+        launchIndex = i
+        Haptics.fire(.hoverPreviewThumb)
+        trace("[T6] 视图挪位后指针重定位(启动区): [\(i + 1)/\(count)] \(names[i])")
     }
 
     nonisolated(unsafe) static var lastCardMissLog: CFAbsoluteTime = 0

@@ -49,7 +49,9 @@ final class HotkeyTapCenter {
         /// (2026-09-15 分家:原先是同一个 case,导致两个键做同一件事)
         case cycleWindowPrev
         case cycleWindowNext
-        /// 数字键:直接选中当前 App 的第 N 扇窗(1-based 在这里转成 0-based)
+        /// 数字键:直接选中环上第 N 个 App(主环 = 已启动组,启动环 = 未启动 App)
+        case pickApp(Int)
+        /// ⇧+数字:直接选中当前 App 的第 N 扇窗(原数字键语义,2026-11-12 让位给 pickApp)
         case pickWindow(Int)
         case confirm          // ⌥ 释放:确认(聚焦选中窗)
         case cancel           // Esc:放弃
@@ -59,6 +61,7 @@ final class HotkeyTapCenter {
         case minimizeWindow   // M:最小化选中窗(T12)
         case toggleFullscreen // F:选中窗进出全屏(T29,AltTab 同键)
         case hideApp          // H:隐藏选中 App(T29,AltTab 同键)
+        case openCheatSheet   // ? / /:收起当前局并打开快捷键速查窗
     }
 
     private(set) var state: State = .idle
@@ -124,6 +127,9 @@ final class HotkeyTapCenter {
     private static let keyM: Int64 = 0x2E
     private static let keyF: Int64 = 0x03
     private static let keyH: Int64 = 0x04
+    /// `/` (`kVK_ANSI_Slash = 0x2C`): 导航态按 `?` (`⇧/`) 或 `/` 打开快捷键速查窗。
+    /// 修饰键门禁天然放行当前触发修饰键（如按住 ⌘ 不松）与 ⇧，并吞掉按键不透传给底层 App。
+    private static let keySlash: Int64 = 0x2C
     /// 导航期被吞的固定键:方向/Esc/Enter + Q/W/M 破坏性键盘操作(CONTEXT.md)+ 数字 1…9
     /// ⚠️ 唯一的例外是**截图会话里的回车**:那一发不吞(它是截图工具的"完成"),见 `handleReturn()`
     ///
@@ -133,7 +139,7 @@ final class HotkeyTapCenter {
     /// 按 2 不选中,还把 "2" 放行给底下的 App)。
     /// `Set([...])` 必须显式写:直接写数组字面量再 `.union` 会被推成 `[Int64]`(实测编译错)。
     private static let navKeys: Set<Int64> =
-        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keySpace, keyQ, keyW, keyM, keyF, keyH, keyGrave])
+        Set([keyLeft, keyRight, keyDown, keyUp, keyEsc, keyReturn, keySpace, keyQ, keyW, keyM, keyF, keyH, keyGrave, keySlash])
             .union(digitKeys.keys)
     /// **⌘ + 动作键**(全匹配)⇒ 作用在"选中的那个 App / 那一扇窗"上。
     ///
@@ -214,6 +220,7 @@ final class HotkeyTapCenter {
         // 标记文件还在 = 上次确实是被强杀带走的(见 `NativeHotkeys` 的"脏退出标记"):明说一句,
         // 否则"⌘Tab 死了"这件事在日志里完全不可见,只能靠猜。
         if NativeHotkeys.consumeTakeoverMarker() {
+            DiagnosticRingBuffer.shared.markDirtyExitRecovered()
             print("[T13] 上次退出没来得及归还原生热键(强杀)——本次启动已自愈")
         }
         NativeHotkeys.restoreAll()
@@ -280,6 +287,15 @@ final class HotkeyTapCenter {
     /// PermissionMonitor 权限从齐变缺时调用:拆掉全部 tap + 拒绝一切重开。
     /// 修复后 GlanceApp onChange 会走 start() 重装(权限恢复时)。
     private(set) var permissionGateOpen = true
+
+    /// 供顶层诊断采集器读取各 CGEventTap 的实时启停态（只读，不暴露内部 port）。
+    var diagnosticTapState: DiagnosticReport.TapState {
+        DiagnosticReport.TapState(
+            flags: flagsTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false,
+            mouse: mouseTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false,
+            nav: navTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
+        )
+    }
 
     /// 权限门禁:关上 = 拆 tap + 任何重开调用都被拒
     func closePermissionGate() {
@@ -394,6 +410,9 @@ final class HotkeyTapCenter {
         return mods
     }
 
+    /// 最近一次 `navTap` 处理掉触发键续按的时间戳（双保险去重，防 Secure Input 解除临界拍双跳）
+    private var lastNavRepeatAt: CFAbsoluteTime = 0
+
     /// Carbon 热键事件回调(主线程,由主 runLoop 的事件分发器投递)
     fileprivate func handleHotKey(_ id: UInt32, pressed: Bool) {
         // 释放不参与语义:确认由"修饰键释放"决定(hold 语义)
@@ -409,14 +428,28 @@ final class HotkeyTapCenter {
         // ★ 久闲后的第一发触发键:先问一句"多指设备还活着吗"——
         //   合盖一夜后 Multitouch 回调会死,而自愈原来住在喂帧路径里(没帧 ⇒ 永远不触发 ✗)
         ThreeFingerTap.shared.recoverIfStale()
+        // ★ 2026-11-21 病例(用户实报「重启后 ⌘Tab 能唤起但 Tab 无法移动」):
+        //   实机铁证(`trace.log` 2204s→2522s + `ioreg`):Google Chrome(pid=1021) 占着 macOS
+        //   Secure Event Input(`IsSecureEventInputEnabled() == true`),WindowServer 静默屏蔽全部
+        //   `CGEventTap` 的 `keyDown`(`navTap` 0 回调、且不发 tapDisabled),但 Carbon `kEventHotKeyPressed`
+        //   与 `flagsTap` 照常送达每一次续按(`2522554ms / 2522704ms / 2522854ms`)。
+        //   旧版 `guard state != .navigating else { return }` 把这些续按全部丢掉 ⇒ 面板能开但按 Tab 不动 ✗。
+        //   正常态(Secure Input 关且 navTap 活跃):`navTap` 吞掉 Tab 走 repeat 路径,Carbon 不重复动作;
+        //   盲态(Secure Input 开 / navTap 未启用 / navTap 为空):`navTap` 必然收不到 keyDown,
+        //   直接由 Carbon 兜底驱动 `.next` / `.prev`,并加 40ms 去重窗防临界双跳 ✓。
+        if state == .navigating {
+            let secure = IsSecureEventInputEnabled()
+            let navDisabled = navTap.map { !CGEvent.tapIsEnabled(tap: $0) } ?? true
+            if (secure || navDisabled), CFAbsoluteTimeGetCurrent() - lastNavRepeatAt > 0.04 {
+                DiagnosticRingBuffer.shared.recordSecureInputFallback()
+                glog("[热键] Carbon 续按兜底 → \(hotKey == .reverse ? "prev" : "next")(secure=\(secure) navDisabled=\(navDisabled))")
+                emit(hotKey == .reverse ? .prev : .next)
+            }
+            return
+        }
         // ★ 热键开面板会**大声报一行**(手势那条另有日志);两条互斥出现 ⇒ 一眼知道是谁按的 ✓
         //   (Carbon 回调只给 id,给不出"物理上是哪颗键"—— 但注册的和弦启动时已报 ✓)
         glog("[热键] \(hotKey == .reverse ? "反向" : "正向") 触发键开面板 — 进之前的状态=\(state)")
-        // **只在"开局"这一发用它**。实机病:同一个和弦按住期间,系统不会重复投递 `kEventHotKeyPressed`
-        // (按住 ⌘ 连按 Tab,只来第一发)→ 于是"继续按 Tab 移动"在旧版里彻底不动(用户实机反馈)。
-        // 循环移动改回 navTap 接(会话期它本来就在收 keyDown),这里会话已在跑就什么都不做,
-        // 也顺手避免了"Carbon 重复投递 + navTap 各动一次"的双跳。
-        guard state != .navigating else { return }
         setState(.navigating)
         // 方向要传下去:「唤起即切换」开着时,正向落"上一个 App"、反向落"最后一个"
         let forward = hotKey != .reverse
@@ -634,6 +667,7 @@ final class HotkeyTapCenter {
         let config = TriggerConfig.load()
         // 触发键在导航期 = **循环移动**(开头那一发由 Carbon 负责,见 `handleHotKey`)
         if keyCode == config.keyCode {
+            lastNavRepeatAt = CFAbsoluteTimeGetCurrent()
             trace("trigger repeat kc=\(keyCode) shift=\(event.flags.contains(.maskShift))")
             emit(event.flags.contains(.maskShift) ? .prev : .next)
             return true
@@ -677,6 +711,10 @@ final class HotkeyTapCenter {
             let back = event.flags.contains(.maskShift)
             emit(back ? .cycleWindowPrev : .cycleWindowNext)
         case Self.keyEsc: setState(.idle); emit(.cancel)
+        case Self.keySlash:
+            pinnedSession = false
+            setState(.idle)
+            emit(.openCheatSheet)
         case Self.keyQ: emit(.quitApp)
         case Self.keyW: emit(.closeWindow)
         case Self.keyM: emit(.minimizeWindow)
@@ -692,7 +730,19 @@ final class HotkeyTapCenter {
             // ⇧` = 反向,与触发键的 ⇧ 反向约定一致
             emit(event.flags.contains(.maskShift) ? .cycleWindowPrev : .cycleWindowNext)
         default:
-            if let n = Self.digitKeys[keyCode] { emit(.pickWindow(n - 1)); return true }
+            if let n = Self.digitKeys[keyCode] {
+                // ★ 2026-11-12(用户:「按数字键选中的app」):**裸数字 = 选 App**
+                //   (主环选第 N 个组 / 启动环选第 N 个未启动 App);
+                //   原来的「数字 = 选当前 App 的第 N 扇窗」**不废**,挪到 ⇧+数字
+                //   (2026-09-15 用户要求的功能,别丢 ✓ 两套语义同一批键,靠修饰键分家 ✓)
+                //   开关关着 ⇒ 裸数字吞但 no-op:会话期导航键本就独占键盘(与 Tab 同一套约定 ✓)
+                if event.flags.contains(.maskShift) {
+                    emit(.pickWindow(n - 1))
+                } else if Keys.digitPicksApp {
+                    emit(.pickApp(n - 1))
+                }
+                return true
+            }
             break
         }
         return true
@@ -746,6 +796,7 @@ final class HotkeyTapCenter {
             trace("[T13] tap 停用回显(自己关的,常态,已忽略)")
             return false
         }
+        DiagnosticRingBuffer.shared.recordTapDisabled(byTimeout: byTimeout)
         if state == .navigating {
             print("[T13] ⚠️ 导航中 tap 被系统停用(\(byTimeout ? "超时" : "用户输入")) → 关门")
         }
@@ -768,6 +819,7 @@ final class HotkeyTapCenter {
         }
         for tap in [flagsTap, mouseTap].compactMap({ $0 }) where !CGEvent.tapIsEnabled(tap: tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
+            DiagnosticRingBuffer.shared.recordTapReattach()
             print("[T13] 只读 tap 已重新启用(权限在,常态超时重开)")
         }
         updateNavTap()
@@ -818,7 +870,8 @@ final class HotkeyTapCenter {
         case .lastGroup: return "→ → 跳到最右的 App"
         case .cycleWindowPrev: return "⇧` → 当前 App 上一个窗口"
         case .cycleWindowNext: return "` → 当前 App 下一个窗口"
-        case .pickWindow(let n): return "\(n + 1) → 直接选中第 \(n + 1) 扇窗"
+        case .pickApp(let n): return "数字 → 选中环上第 \(n + 1) 个 App"
+        case .pickWindow(let n): return "⇧数字 → 直接选中第 \(n + 1) 扇窗"
         case .confirm: return "⌥ 释放 → 确认(T7 聚焦此处)"
         case .cancel: return "Esc → 放弃(面板关闭,不聚焦)"
         case .yieldToCapture: return "回车落在截图会话 → 只关面板、不聚焦(T32;这一颗不吞)"
@@ -827,6 +880,7 @@ final class HotkeyTapCenter {
         case .minimizeWindow: return "M → 最小化选中窗(T12)"
         case .toggleFullscreen: return "F → 全屏切换(T29)"
         case .hideApp: return "H → 隐藏 App(T29)"
+        case .openCheatSheet: return "? / / → 打开快捷键速查"
         case .enterLaunchRing: return "↓ → 换环:把环换成未启动的 App(T91)"
         case .leaveLaunchRing: return "↑ → 换环:换回已启动的 App 组(T91)"
         }

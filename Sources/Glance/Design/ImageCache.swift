@@ -23,11 +23,14 @@ final class ImageCache<Key: Hashable, Value> {
 
     private let lock = NSLock()
     private var store: [Key: Value] = [:]
+    private var order: [Key] = []
+    private let maxEntries: Int?
     /// 正在算的钥匙(单飞账)。**只允许在本文件里登记/释放** ✓
     private var inFlight: Set<Key> = []
     private let queue: DispatchQueue
 
-    init(label: String, qos: DispatchQoS = .utility) {
+    init(label: String, qos: DispatchQoS = .utility, maxEntries: Int? = nil) {
+        self.maxEntries = maxEntries
         queue = DispatchQueue(label: label, qos: qos)
     }
 
@@ -53,7 +56,16 @@ final class ImageCache<Key: Hashable, Value> {
             guard let self else { return }
             let out = make()                            // 全部变换都在后台 ✓
             self.lock.lock()
-            if let out { self.store[key] = out }        // 失败就不存(下次还能再试 ✓)
+            if let out {
+                if self.store[key] == nil { self.order.append(key) }
+                self.store[key] = out                   // 失败就不存(下次还能再试 ✓)
+                if let cap = self.maxEntries {
+                    while self.order.count > cap {
+                        let old = self.order.removeFirst()
+                        self.store.removeValue(forKey: old)
+                    }
+                }
+            }
             self.inFlight.remove(key)                   // ★ 成功/失败**都**释放 ⇒ 不会永久卡住 ✓
             self.lock.unlock()
         }
@@ -69,6 +81,7 @@ final class ImageCache<Key: Hashable, Value> {
     func reset() {
         lock.lock()
         store.removeAll()
+        order.removeAll()
         inFlight.removeAll()
         lock.unlock()
     }

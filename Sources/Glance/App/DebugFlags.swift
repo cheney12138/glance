@@ -149,6 +149,12 @@ enum DebugFlags {
         (UserDefaults.standard.object(forKey: Keys.debugSummonPopMs) as? NSNumber)?.intValue ?? 120
     }
 
+    /// 快捷键超快切换时的面板延迟上屏阈值（毫秒，默认 130；设 0 关闭延迟，与原生 ⌘Tab 快速直切一致）。
+    static var summonRevealDelayMs: Int {
+        let raw = (UserDefaults.standard.object(forKey: Keys.debugSummonRevealDelayMs) as? NSNumber)?.intValue ?? 130
+        return max(0, raw)
+    }
+
 
     /// **换环翻牌的总时长**(毫秒;默认 180 ✓ 0 = 当拍换)。
     /// 病例(2026-10-08):翻牌以前走 `.transition` ⇒ 被系统「减弱动态效果」自己降级成淡切,
@@ -183,6 +189,7 @@ enum DebugFlags {
         ("debug.ringFlipDurationMs", ringFlipDurationMs != 180, "换环翻牌时长 = \(ringFlipDurationMs)ms(默认 180)"),
         (Keys.debugMainThreadWatchdog, !mainThreadWatchdog, "主线程看门狗**被关掉了** ⇒ 下次卡死抓不到栈 ✗(默认开 ✓)"),
         ("debug.summonPopMs", summonPopMs != 120, "入场渐入时长 = \(summonPopMs)ms(默认 120)"),
+        ("debug.summonRevealDelayMs", summonRevealDelayMs != 130, "快切不弹面板阈值 = \(summonRevealDelayMs)ms(默认 130)"),
         (Keys.debugGlassStyleLight, glassStyleLight != "clear", "浅色玻璃风格 = \(glassStyleLight)"),
         ("debug.glassVeilAlpha", glassVeilAlpha != 0.04, "玻璃纱 α = \(glassVeilAlpha)(默认 0.04)"),
         ("debug.glassRimAlpha", glassRimAlpha != 0.48, "亮棱 α = \(glassRimAlpha)(默认 0.48 · 原生等值是 0.55)"),
@@ -306,8 +313,8 @@ enum DebugFlags {
             print("[重型开关] debug.tapUndoDriftPt = \(tapUndoDriftPt)pt(默认 40, 设 0 = 关)—— 生效后撤销的位移下限")
             print("[重型开关]   排查完请复位:defaults delete com.cheney12138.macswitcher \(Keys.debugTapUndoDriftPt)")
         }
-        if tapMinContactSize != 0.6 {
-            print("[⚠️ 重型开关] debug.tapMinContactSize = \(tapMinContactSize)(默认 0.6, 设 0 = 关)—— 点按触点重量下限")
+        if tapMinContactSize != TapRound.Policy.standard.minContactSize {
+            print("[⚠️ 重型开关] debug.tapMinContactSize = \(tapMinContactSize)(默认 \(TapRound.Policy.standard.minContactSize), 设 0 = 关)—— 点按触点重量下限")
             print("[⚠️ 重型开关]   排查完请复位：defaults delete com.cheney12138.macswitcher \(Keys.debugTapMinContactSize)")
         }
         if tapMinDurationMs != 30 {

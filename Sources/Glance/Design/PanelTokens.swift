@@ -541,12 +541,65 @@ enum PanelColors {
     static let entrySeparator = dynamic(ink(0.30), white(0.34))
     /// 分割线的选中/悬停态(v10 预留;v11 分割线不做选中表达,暂不接线)
     static let entrySeparatorHot = dynamic(ink(0.58), white(0.70))
-    /// **幽灵贴**(T84):托盘启动行的「壳」(v15 起入口槽不用它 —— 那里是纯点阵,无底座)。
-    /// 比 puck 收一档 —— 壳是**座位**,不是主角:坐进去的图标必须比壳先被看见
+    /// **幽灵贴**(T84 留档):旧版给未启动行每格都垫一块灰底壳 —— 9 块灰块紧贴显得沉重且淹没选中态，
+    /// 已改为“未选休眠去饱和 + 选中唤醒 + 镂空玻璃滑块(`launchPuck*`)”。保留令牌供历史参考。
     static let ghostTile = dynamic(white(0.42), slate(138, alpha: 0.62))
-    /// 瓷贴发丝边(v14):浅色暗发丝收形;**深色透明** —— 白色受光唇/亮边让瓷贴读起来
-    /// 像一枚 App 窗口(用户裁定去掉),深色的"这是入口"由底色差自己交代
     static let ghostTileBorder = dynamic(ink(0.10), NSColor.clear)
+    /// **舌头滑块统一色板**(`PuckPalette`):启动环(`.running`)与未启动环(`.launch`)共用同一套
+    /// 「原生 `.glassEffect(.clear)` 折射基底 + 4 象限稳态玻璃层（浅/深主题 × 纯白/文字/深背景）」：
+    /// · 浅色主题：顶柔和乳白（柔化背后黑色文字、防透字打架）→ 底微冷灰（纯白底也能立出体积）+ 0.75pt 细压边 + 8pt 底弧内影 + 外投影；
+    /// · 深色主题：弃用发白的 `.regular`，用 `.clear` 折射 + 足够亮度的烟熏冷灰面（确保深色背景里绝不隐身）+ 亮顶受光唇 + 亮发丝边。
+    struct PuckPalette {
+        let top: Color
+        let bottom: Color
+        let lip: Color
+        let border: Color
+        let bellyShadow: Color
+    }
+
+    static var puckPaletteRunning: PuckPalette {
+        let gain = CGFloat(DebugFlags.puckBrightness)
+        return PuckPalette(
+            // 浅色主题：「纯净透白晶面玻璃 + 双层紧贴接触影」（纯白底与深色底同极性：滑块始终亮于面板）
+            // 深色主题：「高稳态烟熏黑曜玻璃 + 亮白折光棱 + 双层紧贴影」：
+            //   把原本过透的 slate(172→136 @ 0.46/0.38) 压深并提高稳态不透明度到 slate(108→80 @ 0.64/0.58)，
+            //   大幅收窄黑底(L≈85)与白底(L≈106)的亮度漂移，同时把折光棱提亮到 white(0.26)，
+            //   让纯白与深色背景下都呈现一致的烟熏玻璃质感与清晰高光边，窗数白点对比度也全程稳住。
+            top: dynamic(white(0.72 * gain), slate(108, alpha: 0.64)),
+            bottom: dynamic(white(0.52 * gain), slate(80, alpha: 0.58)),
+            lip: dynamic(white(0.92), white(0.58)),
+            border: dynamic(white(0.46), white(0.26)),
+            bellyShadow: dynamic(NSColor.black.withAlphaComponent(0.04),
+                                 NSColor.black.withAlphaComponent(0.16))
+        )
+    }
+
+    static var puckPaletteLaunch: PuckPalette {
+        let gain = CGFloat(DebugFlags.puckBrightness)
+        return PuckPalette(
+            top: dynamic(white(0.58 * gain), slate(102, alpha: 0.46)),
+            bottom: dynamic(white(0.40 * gain), slate(76, alpha: 0.40)),
+            lip: dynamic(white(0.82), white(0.46)),
+            border: dynamic(white(0.38), white(0.22)),
+            bellyShadow: dynamic(NSColor.black.withAlphaComponent(0.03),
+                                 NSColor.black.withAlphaComponent(0.12))
+        )
+    }
+
+    /// 滑块紧贴接触影（1.8pt）：
+    /// · 浅色主题：在纯白底上用柔和物理接触影托出纯白晶面轮廓，替代硬暗发丝边；
+    /// · 深色主题：接管近边缘的利落立体感，配合收轻后的抬升影消除白底下的宽大片暗晕。
+    static let puckContactShadow = dynamic(NSColor.black.withAlphaComponent(0.16),
+                                           NSColor.black.withAlphaComponent(0.30))
+
+    /// macOS 14–25 降级液态玻璃补光令牌（macOS 26+ 由原生 `.glassEffect(.clear)` 承担，不触发）：
+    /// · `puckLegacyDome`：上半弧柔光高光，补足缺少原生透镜折射时的玻璃通透立体感；
+    /// · `puckLegacyFresnelPeak` / `Mid`：对角菲涅尔高光棱（左上/右下亮、其余柔收，对齐原生液态玻璃实测光路）；
+    /// · `puckLegacyInnerCaustic`：贴边向内衰减的柔亮内焦散边，避免退化成干瘪平面渐变。
+    static let puckLegacyDome = dynamic(white(0.24), white(0.16))
+    static let puckLegacyFresnelPeak = dynamic(white(0.72), white(0.44))
+    static let puckLegacyFresnelMid = dynamic(white(0.14), white(0.08))
+    static let puckLegacyInnerCaustic = dynamic(white(0.26), white(0.14))
     /// 窗数点:浅色 ink .55(暗点,坐在亮玻璃上);深色白 .72 ——
     /// 旧版 .65 压在半透明玻璃上实得 L≈175,泛灰不清爽,深色的点必须更亮更纯
     static let dot = dynamic(ink(0.55), white(0.72))
@@ -773,10 +826,9 @@ enum PanelElevation {
         // 深色 .40 → **.55**:长条是 .62,托盘是贴在长条头顶的"子板",层级要低一档但仍在同一族里
         // 同一物理:托盘是同一块玻璃,一并对齐;它的影子落在长条上,正好把两块的接缝交代出来
         case .tray: Layer(y: 6, radius: 8, light: 0.11, dark: 0.55)
-        // puck:浅色按实验台 P2 收成"贴身影"。深色 .22 → **.45** ——
-        // 深色托底现在是 L=138 的**亮板**,底下必须有一道够黑的影子,它才"浮"在玻璃之上;
-        // .22 的黑在 L=78 的玻璃上几乎不留痕,托底会读成"贴纸"
-        case .puck: Layer(y: 5, radius: 7, light: 0.14, dark: 0.45)
+        // puck:浅/深都走「1.8pt 紧贴接触影(puckContactShadow) + 7pt 抬升影(这里)」双层体系：
+        // 深色抬升影从 0.45 收到 0.28，由紧贴接触影承担边缘利落度，消除白底上大片发虚暗晕
+        case .puck: Layer(y: 5, radius: 7, light: 0.14, dark: 0.28)
         // icon:浅色 .18(实评"底下的阴影在白底下看着像缺了一块")。
         // 深色 .30 → **.45**:图标坐在 L=138 的亮托底上,影子不够就飘着
         case .icon: Layer(y: 5, radius: 5, light: 0.18, dark: 0.45)
@@ -849,6 +901,8 @@ struct TrafficLights: View {
     /// **红灯禁用**(2026-09-18 用户裁定):Glance 自己的窗(设置/权限)在预览卡上的
     /// 红灯置灰、点了没反应 —— 切换器不能从面板上关掉自己的窗再"自杀"
     var closeDisabled: Bool = false
+    /// **黄灯禁用**：该窗已经处于最小化状态，不再重复触发最小化
+    var minimizeDisabled: Bool = false
     /// 哪一粒被直接踩到(nil = 没踩到整组):
     /// 整组里**任意一粒**被悬停 → 三粒一起出符号;只有被直接踩到的那一粒放大
     @State private var hoveredDot: Int?
@@ -857,7 +911,7 @@ struct TrafficLights: View {
         // spacing 归零、每粒自带 3pt 内边:间距不变(11+6),但两粒之间的缝也算"踩到"
         HStack(spacing: 0) {
             light(PanelColors.tlClose, "xmark", closeDisabled ? "Glance 的窗口不能在这里关闭" : "关闭窗口", 0, close, disabled: closeDisabled)
-            light(PanelColors.tlMin, "minus", "最小化窗口", 1, minimize)
+            light(PanelColors.tlMin, "minus", minimizeDisabled ? "窗口已最小化" : "最小化窗口", 1, minimize, disabled: minimizeDisabled)
             light(PanelColors.tlZoom, "arrow.up.left.and.arrow.down.right", "缩放窗口", 2, zoom)
         }
         // 内边对齐 demo `.lights`(4.5/8):每粒灯自带 3pt 命中垫 ⇒ 这里补 1.5/5 即视觉 4.5/8
