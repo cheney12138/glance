@@ -662,3 +662,28 @@ base64 必须是 **44 个字符**(含 `=` 补位)—— 43 个字符 base64 解�
 **复现口径**:开 trace(`defaults write com.cheney12138.macswitcher debug.trace -bool true`
 后重启 App,日志落 `~/Library/Logs/Glance/trace.log`),连续做 5 次快速选词 ⇒
 日志里只应有 `鼠标按下…让给系统` 行,不应再出现 `→ 唤起(钉住)` ✗/✓ 对照。
+
+## 21. 坦克形残帧与面板卡死:收场后异步回拉 + 切焦未 flush(2026-11-22)
+
+**病例**:用户实报两种同一根因的症状:
+1. 快速切换或高负载时,整个“坦克形”面板(上方 `previewPanel` + 下方 `panel`)偶发卡在屏上,里面不显示图标和缩略图,而是透出上一个 App 对应区域的像素;
+2. 打开「快速上手引导页 / Glance 设置页」后按 `⌘Tab` 切到 CatPaw IDE 时,底层焦点和菜单栏已切到 CatPaw IDE,但坦克面板死死卡在顶层,框内显示的全是 Glance 设置面板的帧内容。
+
+**实锤日志(`~/Library/Logs/Glance/trace.log` 第 36656–36670 行,61ms 快切)**:
+```
+[2191917ms] [T6] 确认:面板关闭
+[2191918ms] [窗口] 收场后 环 isVisible=false alpha=0.0
+[2191918ms] [窗口] 收场后 托 isVisible=false alpha=0.0
+[2191923ms] [T7] 已聚焦: Sublime Text
+[2191926ms] [T8] 枚举到达 +69ms(上屏用的是陈旧名单,这里只刷新内容)   ← 已关窗+已切焦后仍回来!
+[2191930ms] [托盘] 上屏 · 入场进度 1.00 · 首次=否                        ← 在 isVisible=false 下重新触发 updatePreview ✗
+```
+
+**真因(多条竞态叠加)**:
+1. `PanelController.begin(reverse:)` 的 `if stale` 后台枚举回主线程时没校验 `generation == self.beginGeneration && self.isVisible`,且 `PanelTrayWindow.updatePreview` 入口无 `initialSummon || isVisible` 守卫,收场后仍重填 `groups` 并改写 `previewPanel.alphaValue = 1`;
+2. `fadeInWindow(_:duration:)` 旧版早退写成 `guard isVisible, w.isVisible else { w.alphaValue = 1; return }`,在 `<130ms` 快切退场后下一拍 8ms 回调反向把 `alphaValue` 拉回 `1`(此时 SwiftUI 内容与 `groups` 已空,`.clear` 玻璃壳只剩背后窗口像素);`showPanel()` 的 `DispatchQueue.main.async` 也未绑定 `beginGeneration`;
+3. `teardownPanel` 做 `orderOut(nil)` 后未同步 `CATransaction.flush()`,紧接 `WindowFocuser.focus` 切去目标 App 时 WindowServer 还未撤窗,当从 Glance 自己的设置/引导窗切走时把设置页采样像素冻在屏上;
+4. Glance 自家非 `GlancePanel` 窗口打开/关闭未触发 `refreshStaleListSoon()`。
+
+**修法与防线**:见 [开发手册 · 面板生命期与防残帧审查清单](开发手册-面板与窗口生命期.md) 与 [CHANGELOG.md](../CHANGELOG.md)。
+**判读口径**:`[窗口] 收场后 环/托 isVisible=false alpha=0.0` 之后,同一局不得再出现 `[T8] 枚举到达` 或 `[托盘] 上屏`。
