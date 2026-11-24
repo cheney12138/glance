@@ -103,6 +103,8 @@ struct GlanceApp: App {
                     ScreenRecency.shared.start()
                     // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
                     ThumbnailRefresher.shared.start()
+                    // 僵尸查看器自动退出:预览 / QuickTime / 文本编辑关光全部窗口并切走后自动安静退出
+                    ZombieAppReaper.shared.start()
                     // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
                     //   (Trigger 不许反向依赖 App 层 ⇒ 只能在 App 层装配,见 SameAppScreenCycler 头注 ✓)
                     hotkeys.onSameAppScreenCycle = { forward in
@@ -157,7 +159,10 @@ struct GlanceApp: App {
                     hotkeys.onElsewhereInput = { [weak panelController] in
                         panelController?.dismissForOutsideInput()
                     }
-                    panelController.onSessionEnd = { [weak hotkeys] in hotkeys?.endSession() }
+                    panelController.onSessionEnd = { [weak hotkeys] in
+                        hotkeys?.endSession()
+                        ZombieAppReaper.shared.sweepSoon(delay: 0.15)
+                    }
                     panelController.onOpenCheatSheet = { showCheatSheet() }
                     if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
                 }

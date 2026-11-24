@@ -78,11 +78,11 @@ struct ShortcutCheatSheetView: View {
                 Divider().overlay(SettingsTheme.hairline)
 
                 column(title: "窗口动作", items: [
-                    .init(key: "Q", label: "退出选中 App"),
-                    .init(key: "W", label: "关闭选中窗口"),
-                    .init(key: "M", label: "最小化选中窗口"),
-                    .init(key: "H", label: "隐藏选中 App"),
-                    .init(key: "F", label: "选中窗口进出全屏"),
+                    .init(key: "⌘Q", label: "退出选中 App"),
+                    .init(key: "⌘W", label: "关闭选中窗口"),
+                    .init(key: "⌘M", label: "最小化选中窗口"),
+                    .init(key: "⌘H", label: "隐藏选中 App"),
+                    .init(key: "⌘F", label: "选中窗口进出全屏"),
                     .init(key: "⌘+点击", label: "单窗落焦（不级联拉起）"),
                     .init(key: "? / /", label: "打开本速查卡"),
                 ])

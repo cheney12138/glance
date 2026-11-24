@@ -188,6 +188,10 @@ enum Keys {
     static let switchDigitPicksApp = "switch.digitPicksApp"
     /// `switch.includeMinimized`:是否在本屏切换列表尾部收录已最小化的窗口（沿用遗照灰，选中单窗还原；默认关）
     static let switchIncludeMinimized = "switch.includeMinimized"
+    /// `ring.autoQuitZombies`:「预览」等文档/查看型僵尸应用关光窗口并切走后自动安静退出
+    static let ringAutoQuitZombies = "ring.autoQuitZombies"
+    /// `ring.autoQuitZombieBundles`:可选追加的 0 窗自动退出 bundleID 列表
+    static let ringAutoQuitZombieBundles = "ring.autoQuitZombieBundles"
 
     // MARK: trigger —— 触发键
 
@@ -238,6 +242,21 @@ extension Keys {
 
     static var includeMinimized: Bool {
         UserDefaults.standard.object(forKey: switchIncludeMinimized) as? Bool ?? KeyDefaults.includeMinimized
+    }
+
+    static var autoQuitZombies: Bool {
+        UserDefaults.standard.object(forKey: ringAutoQuitZombies) as? Bool ?? KeyDefaults.autoQuitZombies
+    }
+
+    static let defaultZombieViewerBundleIDs: Set<String> = [
+        "com.apple.Preview",
+        "com.apple.QuickTimePlayerX",
+        "com.apple.TextEdit",
+    ]
+
+    static var zombieViewerBundleIDs: Set<String> {
+        let extra = UserDefaults.standard.stringArray(forKey: ringAutoQuitZombieBundles) ?? []
+        return extra.isEmpty ? defaultZombieViewerBundleIDs : defaultZombieViewerBundleIDs.union(extra)
     }
 
     static var onboardingCompleted: Bool {
@@ -314,6 +333,8 @@ enum KeyDefaults {
     static let digitPicksApp = true
     /// 在本屏切换列表尾部收录已最小化窗口（默认关，零额外枚举开销）
     static let includeMinimized = false
+    /// 关光全部窗口并切走后自动安静退出僵尸查看器（默认开：预览 / QuickTime / 文本编辑）
+    static let autoQuitZombies = true
     /// 双击 ⌥ 把指针(和键盘焦点)送到另一块屏。**开**:多屏用户的高频痛点 ✓(双击误触概率低)
     static let doubleOptionJumps = true
     /// 悬浮触感。**开**:唯一保留的触感,回答"我到底换到下一格了吗" ✓(强度另有一档设置)

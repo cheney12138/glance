@@ -92,6 +92,7 @@ struct SettingsView: View {
     @State private var launchEditor: LaunchListEditor.Kind?
     @AppStorage(Keys.panelPinOnRelease) private var pinPanel = KeyDefaults.pinOnRelease
     @AppStorage(Keys.switchIncludeMinimized) private var includeMinimized = KeyDefaults.includeMinimized
+    @AppStorage(Keys.ringAutoQuitZombies) private var autoQuitZombies = KeyDefaults.autoQuitZombies
     /// 默认 true = 本 App 自己放行完整动效(macOS 没有 per-app 的 reduce-motion 豁免 API)
     @AppStorage(Keys.motionAlwaysAnimate) private var alwaysAnimate = KeyDefaults.alwaysAnimate
     @AppStorage(Keys.panelSummonPop) private var summonPop = KeyDefaults.summonPop
@@ -378,6 +379,10 @@ struct SettingsView: View {
                 SettingsRow(title: "显示最小化窗口",
                             desc: "在本屏切换列表尾部保留已最小化窗口（灰显），选中后单窗还原。") {
                     BeamSwitch(isOn: $includeMinimized)
+                }
+                SettingsRow(title: "自动退出无窗僵尸应用",
+                            desc: "如「预览」「QuickTime」「文本编辑」关光所有窗口并切走后，自动安静退出。") {
+                    BeamSwitch(isOn: $autoQuitZombies)
                 }
                 SettingsRow(title: "保持面板打开",
                             desc: "关闭后松开按键即确认,面板随之关闭。",
@@ -1070,12 +1075,12 @@ struct ShortcutPane: View {
                 }
             }
             SettingsGroup(label: "窗口操作", icon: "macwindow.on.rectangle", anchor: SettingsView.Page.shortcut.anchor("窗口操作")) {
-                SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "操作完成后面板保持打开。") {
-                    KeyCapCluster(spec: "Q / W / M")
+                SettingsRow(title: "退出 App / 关窗 / 最小化", desc: "操作完成后面板保持打开；三指唤起需按 ⌘+对应键。") {
+                    KeyCapCluster(spec: "⌘Q / ⌘W / ⌘M")
                 }
                 SettingsRow(title: "全屏 / 隐藏 App", desc: "隐藏后应用仍在列表中,但不再显示窗口预览。",
                             hairline: false) {
-                    KeyCapCluster(spec: "F / H")
+                    KeyCapCluster(spec: "⌘F / ⌘H")
                 }
             }
         }

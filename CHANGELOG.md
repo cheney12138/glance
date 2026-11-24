@@ -2,6 +2,16 @@
 
 本文件记录 Glance 的版本演进与未发版开发分支改动（格式参考 Keep a Changelog，每条重要缺陷修复都会同时在代码注释、[调试病例库](docs/debugging.md) 与 [开发手册](docs/开发手册-面板与窗口生命期.md) 留下判读口径）。
 
+## [Unreleased]
+
+### Added
+- **0 窗僵尸查看器自动安静退出**：新增 `ZombieAppReaper.swift`、`AXWindowList.hasZeroRealWindows` 与设置项「自动退出无窗僵尸应用」（`ring.autoQuitZombies`，默认开启）；针对 `预览`、`QuickTime Player`、`文本编辑`，在关光全部实窗并切走后约 `0.6s` 自动安静 `terminate`，过渡期内亦不再占据切换器列表。
+
+### Fixed
+- **修复三指唤起 / 钉住态下裸按 `Q / W / M / F / H` 误触发窗口动作**：`HotkeyTap.swift` 对动作键收紧门禁，三指/四指唤起或已松开触发修饰键时仅响应全匹配 `⌘Q / ⌘W / ⌘M / ⌘F / ⌘H`，单独按字母直接按别处输入收起面板并放行；同步更新设置页与快捷键速查键位文案。
+
+---
+
 ## [v1.2.0] - 2026-11-22
 
 ### Added

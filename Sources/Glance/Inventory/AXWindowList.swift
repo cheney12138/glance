@@ -128,6 +128,49 @@ enum AXWindowList {
         return out
     }
 
+    /// 保守判定某进程是否已彻底“0 实窗”（专用于僵尸查看器自动退出，宁漏杀不误杀）：
+    /// 1. 需要 AX 授权且 `kAXWindowsAttribute` 查询成功（失败/超时一律返回 false）；
+    /// 2. 只要存在任一最小化窗、标准窗、弹窗/Sheet、主窗或有标题窗，即返回 false；
+    /// 3. 全 Space `CGWindowList` 若存在未归入已知无标题 `AXUnknown` 空壳的普通图层窗（≥50×50 且可见），亦返回 false。
+    static func hasZeroRealWindows(ofPID pid: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, enumerationTimeout)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success else {
+            return false
+        }
+        let axWindows = (value as? [AXUIElement]) ?? []
+        var ghostWIDs = Set<CGWindowID>()
+        for window in axWindows {
+            if bool(window, kAXMinimizedAttribute) == true { return false }
+            let subrole = string(window, kAXSubroleAttribute)
+            let isMain = bool(window, kAXMainAttribute) ?? false
+            let title = string(window, kAXTitleAttribute) ?? ""
+            let isGhost = (subrole == kAXUnknownSubrole && !isMain && title.isEmpty)
+            if !isGhost { return false }
+            var wid: CGWindowID = 0
+            if _AXUIElementGetWindow(window, &wid) == .success, wid != 0 {
+                ghostWIDs.insert(wid)
+            }
+        }
+        guard let allInfos = CGWindowListCopyWindowInfo([], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        for info in allInfos {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid,
+                  let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width >= 50, bounds.height >= 50 else { continue }
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            if alpha <= 0.05 { continue }
+            if !ghostWIDs.contains(wid) { return false }
+        }
+        return true
+    }
+
     private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }

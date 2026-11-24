@@ -700,6 +700,17 @@ final class HotkeyTapCenter {
             if pinnedSession { onElsewhereInput?() }
             return false   // 照旧放行,不吞
         }
+        // ★ 2026-11-24 修复(用户实报「三指唤起时单独按 q 就退出了,期望是 cmd q/w/h/m」):
+        //   三指/四指钉住态(`pinnedSession`)或松开触发修饰键(`pinOnRelease`)下，
+        //   Q/W/M/F/H 只认 ⌘+键(已在上方 cmdActionKeys 处理)或正在按住触发修饰键(如 ⌥Tab 按住 ⌥)；
+        //   绝不认裸按的 q/w/m/f/h —— 在钉住态视同"打别的字",关面板并放行 ✓。
+        if Self.cmdActionKeys[keyCode] != nil {
+            let holdingTriggerMod = !pinnedSession && !config.modifierMask.isEmpty && modSet == config.modifierMask
+            guard holdingTriggerMod else {
+                if pinnedSession { onElsewhereInput?() }
+                return false
+            }
+        }
         // ★ 截图会话:整套导航键让权(T32)。放在 trace 之前 —— 这一支的整条路都与面板无关了
         if captureSessionTookOver(keyCode: keyCode) { return false }
         trace("navKey kc=\(keyCode)")

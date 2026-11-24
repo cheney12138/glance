@@ -62,6 +62,7 @@
 		AA0000000000000000000D05 /* ShortcutCheatSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D06 /* ShortcutCheatSheetView.swift */; };
 		AA0000000000000000000D07 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D08 /* OnboardingView.swift */; };
 		AA0000000000000000000D09 /* SettingsToys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D0A /* SettingsToys.swift */; };
+		AA0000000000000000000D0B /* ZombieAppReaper.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000D0C /* ZombieAppReaper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -119,6 +120,7 @@
 		AA0000000000000000000D06 /* ShortcutCheatSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutCheatSheetView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000D08 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000D0A /* SettingsToys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsToys.swift; sourceTree = "<group>"; };
+		AA0000000000000000000D0C /* ZombieAppReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZombieAppReaper.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -253,6 +255,7 @@
 				5A0000000000000000000C2 /* ScreenScopedSwitching.swift */,
 				AA0000000000000000000111 /* DebugFlags.swift */,
 				AA0000000000000000000D04 /* DiagnosticCollector.swift */,
+				AA0000000000000000000D0C /* ZombieAppReaper.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -404,6 +407,7 @@
 				AA0000000000000000000D05 /* ShortcutCheatSheetView.swift in Sources */,
 				AA0000000000000000000D07 /* OnboardingView.swift in Sources */,
 				AA0000000000000000000D09 /* SettingsToys.swift in Sources */,
+				AA0000000000000000000D0B /* ZombieAppReaper.swift in Sources */,
 				5A00000000000000000000A7 /* PanelTokens.swift in Sources */,
 				5A0000000000000000000C1 /* ImageCache.swift in Sources */,
 				5A0000000000000000000C5 /* IconTint.swift in Sources */,

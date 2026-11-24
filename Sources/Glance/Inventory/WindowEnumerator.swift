@@ -338,6 +338,8 @@ enum WindowEnumerator {
         //   照旧任何语境屏都展示。有屏全屏时无窗条目整体退环(F2/F4 铁律,见上)
         let excludedSystemApps: Set<String> = ["com.apple.dock", "com.apple.controlcenter", "com.apple.notificationcenterui"]
         let contextScreenName = screen.localizedName
+        let autoQuitZombies = Keys.autoQuitZombies
+        let zombieBundles = autoQuitZombies ? Keys.zombieViewerBundleIDs : []
         for app in runningApps {
             guard app.activationPolicy == .regular,
                   app.processIdentifier != ownPID,
@@ -345,6 +347,9 @@ enum WindowEnumerator {
                   !excludedSystemApps.contains(app.bundleIdentifier ?? ""),
                   !app.isTerminated else { continue }
             if fullscreenActive { continue }                       // 全屏屏不收无窗条目(F2/F4)
+            if autoQuitZombies, !app.isActive, let bid = app.bundleIdentifier, zombieBundles.contains(bid) {
+                continue                                           // 僵尸查看器待后台自动退出期间不再占切换器位置 ✓
+            }
             if let ls = lastScreen(ofBundle: app.bundleIdentifier), ls != contextScreenName {
                 continue                                           // 有记忆但不是这块屏:不进
             }
