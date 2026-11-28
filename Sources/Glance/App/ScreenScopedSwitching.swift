@@ -302,6 +302,15 @@ enum MoveFocusedWindowToNextScreen {
     /// 两个 B 段"屏外泊车"循环同时磨同一个窗,能把窗留在屏外或尺寸磨花。
     /// ⇒ in-flight 守卫:一局未完,新按下直接忽略(不排队 —— 排队会把 1.7s 的延迟叠成 3.4s,更糟)。
     private static var inFlight = false
+
+    /// 目标屏"可用区"的**留白钩子**(常驻程序坞换屏后,条带会占掉那块屏底部一条 ⇒ 窗口不该落进去)。
+    ///
+    /// 为什么是钩子而不是直接问 `DockController`:本文件在 App 层,**可以**引 Dock ——
+    /// 但 `DockController` 的几何是运行时状态(条带在哪块屏、是否正在进场/出场),
+    /// 由 `GlanceApp` 在装配处注入更省事,也让这里保持无副作用、可缺省(nil ⇒ 退回系统可见区 ✓)。
+    /// 返回 `nil` = 这块屏没有常驻条带占位,按 `WindowEnumerator.quartzVisibleFrame` ✓
+    @MainActor
+    static var reservedVisibleFrameProvider: ((_ screen: NSScreen) -> CGRect?)?
     @MainActor
     static func run() async {
         guard !inFlight else {
@@ -349,6 +358,10 @@ enum MoveFocusedWindowToNextScreen {
         //   默认档从「一律撑满」改成「按占比自适应」(ScreenMovePolicy.adaptive):
         //   小窗保持原尺寸(按相对位置落),大窗才撑满 ✓。门槛 = 设置项(快捷键页,`Keys.moveFillMinRatio`)
         let srcVisible = WindowEnumerator.quartzVisibleFrame(of: src)
+        // ★ 常驻程序坞(ADR-0018)占住那块屏时,条带会占掉底部一条 ⇒ 目标可见区要**减去它**,
+        //   否则撑满的窗口会被压在条带后面(标题栏/内容被遮)。`DockController` 给的是
+        //   "Quartz 可见区 − 条带" 的矩形;没占位(或自动隐藏模式)则返回 nil ⇒ 退回系统可见区 ✓
+        let dstVisible = reservedVisibleFrameProvider?(dst) ?? WindowEnumerator.quartzVisibleFrame(of: dst)
         let fill: Bool
         switch ScreenMovePolicy.defaultPlacement {
         case .fillScreen: fill = true
@@ -360,7 +373,7 @@ enum MoveFocusedWindowToNextScreen {
         }
         let target = ScreenMovePolicy.targetFrame(current: win.bounds,
                                                  source: srcVisible,
-                                                 target: WindowEnumerator.quartzVisibleFrame(of: dst),
+                                                 target: dstVisible,
                                                  placement: fill ? .fillScreen : .keepSize)
         // 屏数 >2 时,这行日志就是"循环对不对"的唯一凭据 ⇒ 必须写明"第 i/N 块屏" ✓
         let ratio = win.bounds.width * win.bounds.height / max(srcVisible.width * srcVisible.height, 1)

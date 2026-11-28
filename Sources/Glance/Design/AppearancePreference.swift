@@ -28,5 +28,10 @@ enum AppearancePreference {
         case dark: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         default: NSApplication.shared.appearance = nil // nil = 跟随系统
         }
+        // 触发所有已预热的离屏面板（如 ⌘Tab 主面板、程序坞面板）立刻标脏重绘，
+        // 防止切深浅模式后旧窗口残留上一种外观的后备存储。
+        for window in NSApplication.shared.windows {
+            window.contentView?.needsDisplay = true
+        }
     }
 }

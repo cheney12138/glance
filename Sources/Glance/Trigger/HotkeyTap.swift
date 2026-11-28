@@ -199,6 +199,10 @@ final class HotkeyTapCenter {
     /// 与上面的调试旋钮分开:`pinPanel` 是"按住也钉住"(调试),这个是"本来就没握住"。
     private var pinnedSession = false
 
+    /// 当前这一局是不是**手势钉住**的(没有可松的键)。
+    /// 只读出口:面板那边要据此区分"这里该不该等松手确认"(与 `state` 一起读)。
+    var isPinnedSession: Bool { pinnedSession }
+
 
     // MARK: - 生命周期
 
@@ -603,7 +607,9 @@ final class HotkeyTapCenter {
         // 三指拖移被系统消费的签名(合成拖动就是"按住左键移动" ✓)。真轻点不产生
         // 任何鼠标事件 ⇒ 不会误记 ✓。方法内部自带手指数门禁,平时零开销 ✓
         ThreeFingerTap.shared.noteMouseDownWhileTouching()
-        ThreeFingerTap.shared.reviveIfFramesDead()   // 点击无帧 = 投递死亡铁证 ⇒ 当场重挂 ✓
+        // ⚠️ 2026-11-28: 不再在 `leftMouseDown` 里调 `reviveIfFramesDead()`！
+        //   外接普通鼠与跨屏键鼠共享工具的左键点击均无 MT 帧，曾导致一晚误判自重启 25 次 + 菜单栏黑闪；
+        //   投递死亡检测已收口到 `ThreeFingerTap` 自己的真硬件触控板滚动监听（`hasPreciseScrollingDeltas` + active phase + `sourcePID == 0`）✓
         if event.flags.contains(.maskCommand), state != .navigating {
             onCmdClick?(event.location)
         }

@@ -168,6 +168,110 @@ extension View {
     }
 }
 
+/// 环玻璃容器（⌘Tab 主环与程序坞条带共用，对齐舌头滑块 `Puck` 的 4 象限稳态液态玻璃配方）：
+/// - **macOS 26+**：原生 `.glassEffect(.clear, in: shape)` 提供真实边缘光学折射，
+///   内叠通透稳态微渐层 + 顶受光唇 + 8pt 底弧内影 + 0.75pt 无模糊利落折光发丝边，
+///   外叠 1.8pt 紧贴接触影 + 14pt 抬升影（纯白/深色背景边缘皆清晰利落，且不盖过上方滑块亮度）。
+/// - **macOS 14–25**：自动回退为 `NSVisualEffectView` 真实桌面毛玻璃 + 同源 4 象限稳态层 +
+///   与 `PuckView` 一致的光学补偿层（上半弧穹顶柔光 + 对角菲涅尔折光棱 + 柔和内焦散边）+ 双层外投影，
+///   老系统无需私有 API、零崩溃且保留精致玻璃质感。
+struct RingGlassSurface<Content: View>: View {
+    let cornerRadius: CGFloat
+    let size: CGSize
+    let epoch: Int
+    /// 小胶囊态（如 ⌘Tab 无未启动应用提示芯片）收轻抬升影，避免小体量挂大重影
+    var compactShadow: Bool = false
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let liftShadow = compactShadow ? PanelColors.ringGlassLiftShadowCompact : PanelColors.ringGlassLiftShadow
+        let liftRadius: CGFloat = compactShadow ? 8 : 14
+        let liftY: CGFloat = compactShadow ? 3 : 6
+
+        // 全部走 `PanelColors.dynamic(...)`（`NSColor(name:)`），不读 `@Environment(\.colorScheme)`，
+        // 保证预热过的离屏 ⌘Tab 面板与程序坞在浅/深模式切换后像素级对齐。
+        let steadyBody = shape
+            .fill(LinearGradient(
+                colors: [PanelColors.ringGlassTop, PanelColors.ringGlassBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            ))
+            .overlay(
+                shape
+                    .strokeBorder(PanelColors.ringGlassLip, lineWidth: 1)
+                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
+            )
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    colors: [.clear, PanelColors.ringGlassBellyShadow],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 8)
+            }
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(PanelColors.ringGlassBorder, lineWidth: 0.75))
+            .allowsHitTesting(false)
+
+        if #available(macOS 26.0, *) {
+            content()
+                .frame(width: size.width, height: size.height)
+                .background(steadyBody)
+                .glassEffect(.clear, in: shape)
+                .id(epoch)
+                .shadow(color: PanelColors.ringGlassContactShadow, radius: 1.8, x: 0, y: 1)
+                .shadow(color: liftShadow, radius: liftRadius, x: 0, y: liftY)
+        } else {
+            ZStack {
+                GlassBackground(cornerRadius: cornerRadius)
+                    .id(epoch)
+                legacyGlassOverlay(steadyBody, shape: shape, height: size.height)
+                content()
+            }
+            .frame(width: size.width, height: size.height)
+            .clipShape(shape)
+            .shadow(color: PanelColors.ringGlassContactShadow, radius: 1.8, x: 0, y: 1)
+            .shadow(color: liftShadow, radius: liftRadius, x: 0, y: liftY)
+        }
+    }
+
+    /// macOS 14–25 光学补偿层（同 `PuckView.legacyGlassOverlay`）：
+    /// 上半弧穹顶柔光 + 贴边内焦散柔亮边 + 对角菲涅尔高光棱。
+    private func legacyGlassOverlay<Base: View>(_ base: Base,
+                                                shape: RoundedRectangle,
+                                                height: CGFloat) -> some View {
+        let fresnel = LinearGradient(
+            stops: [
+                .init(color: PanelColors.puckLegacyFresnelPeak, location: 0.0),
+                .init(color: PanelColors.puckLegacyFresnelMid, location: 0.34),
+                .init(color: PanelColors.puckLegacyFresnelMid, location: 0.66),
+                .init(color: PanelColors.puckLegacyFresnelPeak, location: 1.0),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        return base
+            .overlay(alignment: .top) {
+                LinearGradient(colors: [PanelColors.puckLegacyDome, .clear],
+                               startPoint: .top,
+                               endPoint: .bottom)
+                    .frame(height: max(height * 0.42, 16))
+            }
+            .overlay(
+                shape
+                    .inset(by: 1.0)
+                    .strokeBorder(PanelColors.puckLegacyInnerCaustic, lineWidth: 1.2)
+                    .blur(radius: 0.7)
+            )
+            .overlay(
+                shape.strokeBorder(fresnel, lineWidth: 1.0)
+            )
+            .clipShape(shape)
+            .allowsHitTesting(false)
+    }
+}
+
 final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     required init(rootView: Content) {
         super.init(rootView: rootView)
@@ -225,8 +329,14 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
         let top = padTop ?? pad
         guard pad > 0 || top > 0 else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
+        // ★ 2026-11-28 病例修复(用户实报「三指唤起后，点芯片轨道打不开」):
+        //   `NSHostingView.isFlipped == true`（原点在左上角，Y 向下递增）。
+        //   旧写法恒用 `y = bounds.minY + pad`，在 `padTop = 0`（托盘顶缘无呼吸区、仅底缘留 96pt 阴影）时
+        //   把 96pt 透明呼吸区错扣到了**顶部** 0…96pt，导致托盘上半截（含芯片轨道上方多枚芯片）
+        //   全部被 `hitTest` 拒掉返回 nil ✗。按 `isFlipped` 分支后顶/底扣边严格对齐 ✓。
+        let minY = isFlipped ? (bounds.minY + top) : (bounds.minY + pad)
         let hitRect = NSRect(x: bounds.minX + pad,
-                             y: bounds.minY + pad,
+                             y: minY,
                              width: max(0, bounds.width - pad * 2),
                              height: max(0, bounds.height - pad - top))
         guard hitRect.contains(local) else { return nil }

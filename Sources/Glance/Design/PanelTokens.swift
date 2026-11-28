@@ -592,6 +592,37 @@ enum PanelColors {
     static let puckContactShadow = dynamic(NSColor.black.withAlphaComponent(0.16),
                                            NSColor.black.withAlphaComponent(0.30))
 
+    /// **环玻璃统一色板**（⌘Tab 主环与程序坞条带共用，走 `NSColor(name:)` 动态色）：
+    /// 病例(2026-11-25):`RingGlassSurface` 原用 `@Environment(\.colorScheme)` 判深浅 ——
+    /// 预热过的离屏 `GlancePanel` 在设置页切外观后偶发滞留旧 `colorScheme`，导致 ⌘Tab 与程序坞
+    /// 一浅一深不对齐；全切回 `dynamic(...)` 后两环按绘制期 `effectiveAppearance` 实时同步。
+    /// 深色档采用比旧版更沉稳的烟熏深灰玻璃（对齐底部程序坞的深色观感），浅色档保持清透亮玻璃。
+    static let ringGlassTop = dynamic(white(0.30), slate(30, alpha: 0.56))
+    static let ringGlassBottom = dynamic(white(0.16), slate(18, alpha: 0.50))
+    static let ringGlassLip = dynamic(white(0.82), white(0.42))
+    static let ringGlassBorder = dynamic(NSColor.black.withAlphaComponent(0.09), white(0.24))
+    static let ringGlassBellyShadow = dynamic(NSColor.black.withAlphaComponent(0.03),
+                                              NSColor.black.withAlphaComponent(0.18))
+    static let ringGlassContactShadow = dynamic(NSColor.black.withAlphaComponent(0.14),
+                                                NSColor.black.withAlphaComponent(0.38))
+    static let ringGlassLiftShadow = dynamic(NSColor.black.withAlphaComponent(0.12),
+                                             NSColor.black.withAlphaComponent(0.34))
+    static let ringGlassLiftShadowCompact = dynamic(NSColor.black.withAlphaComponent(0.08),
+                                                    NSColor.black.withAlphaComponent(0.24))
+
+    /// 环尾液态玻璃文件夹图标动态色（同走 `NSColor(name:)`，杜绝离屏 `colorScheme` 滞后）
+    static let dockFolderTop = dynamic(white(0.62), white(0.16))
+    static let dockFolderTopHover = dynamic(white(0.78), white(0.22))
+    static let dockFolderBottom = dynamic(white(0.30), white(0.07))
+    static let dockFolderBottomHover = dynamic(white(0.44), white(0.11))
+    static let dockFolderRimTop = dynamic(white(0.85), white(0.24))
+    static let dockFolderRimTopHover = dynamic(white(0.95), white(0.38))
+    static let dockFolderRimBottom = dynamic(NSColor.black.withAlphaComponent(0.10), white(0.06))
+    static let dockFolderShadow = dynamic(NSColor.black.withAlphaComponent(0.10),
+                                          NSColor.black.withAlphaComponent(0.28))
+    static let dockFolderGlyph = dynamic(NSColor.black.withAlphaComponent(0.62), white(0.82))
+    static let dockFolderGlyphHover = dynamic(NSColor.black.withAlphaComponent(0.80), white(0.96))
+
     /// macOS 14–25 降级液态玻璃补光令牌（macOS 26+ 由原生 `.glassEffect(.clear)` 承担，不触发）：
     /// · `puckLegacyDome`：上半弧柔光高光，补足缺少原生透镜折射时的玻璃通透立体感；
     /// · `puckLegacyFresnelPeak` / `Mid`：对角菲涅尔高光棱（左上/右下亮、其余柔收，对齐原生液态玻璃实测光路）；
@@ -712,6 +743,45 @@ enum PanelColors {
     /// 未选中态的边(2026-10-25,V3 方案):只是**压薄一档**,不是换色 ——
     /// 用户口径「我不太喜欢这种高光的边框」⇒ 未选中不做任何亮边/强调环 ✓
     static let chipBorderOff = dynamic(ink(0.055), white(0.055))
+
+    /// 侧边程序坞「收起态芯片叠卡」的分层不透明材质（2026-11-27 实机病例修复）：
+    /// 旧版直接拿 `chipBg`（alpha 0.90）配 `.opacity(1 / 0.88 / 0.72)` 叠三层 ⇒
+    /// ① 后两张卡的轮廓与边线会透过前卡 10% 透明底显出「X 光重影带」；
+    /// ② 第 3 层因 alpha 降到 0.65，在浅色窗口上被冲成浅灰、反而比前两层更亮，深度彻底倒置 ✗。
+    /// 改为按纵深（0=顶层、1=中层、2=底层）逐级压暗的**实色阶** + 逐级收敛发丝边 + 层间接触阴影，
+    /// 无论背后是纯白还是纯黑壁纸，三层明暗永远严格递增（前亮后暗 / 浅色前白后灰）且零透底重影 ✓
+    static func chipStackBg(depth: Int) -> Color {
+        switch depth {
+        case 0:
+            return dynamic(NSColor(white: 0.985, alpha: 1), slate(34, alpha: 1))
+        case 1:
+            return dynamic(NSColor(white: 0.93, alpha: 1), slate(24, alpha: 1))
+        default:
+            return dynamic(NSColor(white: 0.875, alpha: 1), slate(15, alpha: 1))
+        }
+    }
+
+    static func chipStackBorder(depth: Int) -> Color {
+        switch depth {
+        case 0:
+            return dynamic(ink(0.11), white(0.16))
+        case 1:
+            return dynamic(ink(0.085), white(0.10))
+        default:
+            return dynamic(ink(0.065), white(0.065))
+        }
+    }
+
+    static func chipStackShadow(depth: Int) -> Color {
+        switch depth {
+        case 0:
+            return dynamic(NSColor(white: 0, alpha: 0.14), NSColor(white: 0, alpha: 0.48))
+        case 1:
+            return dynamic(NSColor(white: 0, alpha: 0.11), NSColor(white: 0, alpha: 0.36))
+        default:
+            return dynamic(NSColor(white: 0, alpha: 0.08), NSColor(white: 0, alpha: 0.24))
+        }
+    }
     /// **非选中卡的磨砂半径**(pt,2026-10-25)。
     /// 目的不是"糊一下好看",而是让"实时流 / 静帧"在未选中卡上**分不出来**
     /// (只给选中那张起流 ⇒ 22 条流降到 1 条,见 `LivePreviewPool.reconcile` 的账)。

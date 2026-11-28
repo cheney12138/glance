@@ -32,6 +32,13 @@ public enum WindowTally {
         public var gap: CGFloat
         /// 1 = 原始尺寸;小于 1 = 自适应收窄过
         public var scale: CGFloat
+
+        public init(dot: CGFloat, dashWidth: CGFloat, gap: CGFloat, scale: CGFloat) {
+            self.dot = dot
+            self.dashWidth = dashWidth
+            self.gap = gap
+            self.scale = scale
+        }
     }
 
     public struct Metrics: Equatable, Sendable {

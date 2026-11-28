@@ -297,6 +297,8 @@ extension PanelController {
             //   每次窗口排序 4–24ms,且都落在滑块弹簧正在跑的那一帧 ⇒ 掉帧。
             //   ⇒ 改用 **alpha 0 + 忽略鼠标**:窗口留在台上,显/隐只是图层属性(微秒级 ✓)。
             //   真正的 orderOut 只留在**整局收场**那一处(现在由 ChromeWindow 的 teardown 承担)。
+            // ★ 2026-11-26:这一拍把托盘隐藏了 ⇒ "渐入途中"作废(否则渐入定时器会把隐藏的它又拉高 ✗)
+            isFadingInPreview = false
             trayChrome?.setContentHidden(true)      // 内容隐藏 = 只改图层属性(不再收窗,见 ChromeWindow)
             return
         }
@@ -312,18 +314,20 @@ extension PanelController {
         // ★ 2026-10-08 可观测:托盘上屏这一拍,人眼看到的"它是不是从淡到实"取决于
         //   ① 此刻入场进度(entryFadeProgress,0 = 全透明)② 它是不是第一次上屏。
         //   这两件事以前只能靠盯屏猜 ⇒ 打一行(只在**真正转场**时打,不是每帧 ✓)
-        if isTraceEnabled, previewPanel.alphaValue < 0.5 || !trayShownOnce {
+        // ★★ 2026-11-26 统一门禁:首帧显影前(开局首拍 / 显影门未兑现)托盘只能用"预显 alpha"就位,
+        //   否则未提交首帧的托盘会被提前拉上屏 —— 就是那块纯灰/黑"坦克矩形"的来源之一 ✗
+        let holdPreReveal = (initialSummon || awaitingFirstReveal) && !windowsOnly
+        if isTraceEnabled, !trayShownOnce || (!holdPreReveal && !isFadingInPreview && previewPanel.alphaValue < 0.5) {
             glog(String(format: "[托盘] 上屏 · 入场进度 %.2f · 首次=%@(与环同一个源 ✓)",
                         entryFadeProgress, trayShownOnce ? "否" : "是"))
         }
         trayShownOnce = true
-        // ★★★ 2026-10-27 定稿 + 2026-11-21 残帧根治:
+        // ★★★ 2026-10-27 定稿 + 2026-11-26 首帧显影门:
         //   · 窗口局(⌘`):等图才显示;
-        //   · 常规局开局首拍(`initialSummon == true`):与主面板同拍以 **alpha 0** 上屏,
-        //     配合 `flushPanelBackingStores` 把新玻璃与新树真正刷入 WindowServer 的 backing store,
-        //     下一拍再由 `showPanel` 的 `DispatchQueue.main.async` 与主面板一并拉回可见(渐入或 alpha 1),
-        //     彻底堵死"托盘首拍直接 alpha=1 上屏吐出上一局残帧"的漏路 ✓
-        let holdAlphaZeroForSummon = initialSummon && !windowsOnly
+        //   · 常规局:开局首拍(**显影门未兑现前**)只以 `preRevealAlpha` 就位 ——
+        //     肉眼不可见(不提前亮未渲染帧 ✓),但非零 ⇒ WindowServer 不把窗口当"零透明"而跳过
+        //     `.glassEffect` / Metal 首帧合成 ✓;真正显影交给 `showPanel` 显影门里的 `fadeInWindow`;
+        //   · 渐入途中(`isFadingInPreview`):alpha 由 `fadeInWindow` 独家驱动,这里绝不许覆盖 ✗
         if windowsOnly {
             let selWid: CGWindowID? = {
                 guard let g = currentGroup, g.windows.indices.contains(winIndex) else { return nil }
@@ -336,13 +340,15 @@ extension PanelController {
                 return false
             }()
             let waited = CFAbsoluteTimeGetCurrent() - trayGateStartAt
-            if !initialSummon, hasImage || waited > 0.4 {
+            if !initialSummon, !awaitingFirstReveal, hasImage || waited > 0.4 {
                 if previewPanel.alphaValue < 0.5 {
-                    flushPanelBackingStores(includeTray: true)
+                    // ★ 只把布局收口,不再 `flushPanelBackingStores` 反向标脏(2026-11-26)
+                    previewPanel.layoutIfNeeded()
                 }
                 previewPanel.alphaValue = 1
             } else {
-                previewPanel.alphaValue = 0
+                // 没图/显影门未兑现:隐身预热(非零 alpha,见 `preRevealAlpha`)
+                previewPanel.alphaValue = Self.preRevealAlpha
                 if !hasImage {
                     let waitGen = beginGeneration
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
@@ -351,8 +357,10 @@ extension PanelController {
                     }
                 }
             }
-        } else if holdAlphaZeroForSummon {
-            previewPanel.alphaValue = 0
+        } else if holdPreReveal {
+            previewPanel.alphaValue = Self.preRevealAlpha
+        } else if isFadingInPreview {
+            // 渐入途中:不覆盖 alpha(否则会把`fadeInWindow`刚顶上去的值又砸回去 ✗)
         } else {
             previewPanel.alphaValue = 1
         }
@@ -394,7 +402,11 @@ extension PanelController {
         //   病因:用 `previewPanel.isVisible` 当"已经在台上"的判据 —— 在这套
         //   borderless + nonactivatingPanel + level=.popUpMenu 的组合上它**不可靠**(常常报 false),
         //   于是每次更新都重排一次窗口。⇒ 改为**自己记账**:上屏一次就记下,只有 orderOut 才清掉。
-        trayChrome?.place(keepAlphaZero: initialSummon) // 一整局只 orderFront 一次(其余靠 alpha)
+        // ★ 2026-11-26:显影之前的首拍必须把窗口**押在预显 alpha**(不是 1,也不是 0 ——
+        //   0 会被 WindowServer 当成"没东西"而推迟首帧合成)
+        let placeHoldAlpha: CGFloat? = (holdPreReveal || (windowsOnly && previewPanel.alphaValue < 0.5))
+            ? Self.preRevealAlpha : nil
+        trayChrome?.place(holdAlpha: placeHoldAlpha) // 一整局只 orderFront 一次(其余靠 alpha)
         __mark("orderFront")
         // 帧变了 = 卡片在指针底下挪了位,必须自己重判一次(见 resyncSelectionUnderPointer 的病例)
         let __tr = CFAbsoluteTimeGetCurrent()

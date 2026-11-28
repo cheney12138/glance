@@ -98,16 +98,16 @@ enum WindowEnumerator {
     /// 否则 Swift 6 语言模式下是**错误** ✗(现在是警告 ✓)
     nonisolated private static let ownershipThreshold: CGFloat = 0.2
 
-    static func enumerate(owning screen: NSScreen?) -> [AppGroup] {
+    static func enumerate(owning screen: NSScreen?, includeMinimized: Bool = Keys.includeMinimized) -> [AppGroup] {
         guard let screen else { return [] }
-        return orderByMRU(rawGroups(on: screen), on: screen)
+        return orderByMRU(rawGroups(on: screen, includeMinimized: includeMinimized), on: screen)
     }
 
     /// 枚举里**与主线程无关**的那一半:CGWindowList 与 NSWorkspace 都是线程安全的读操作。
     /// 拆出来是为了能在后台跑 —— 这几十毫秒压在事件 tap 的回调里,系统会判回调超时把 tap 停用,
     /// 漏出去的那几颗 ⌘Tab 就是“用着用着变成原生切换器”的现场(实机量到 begin 后主线程被占 ~110ms)。
     /// 剩下的排序证据(`MruEvidence`)是主线程状态,由 `orderByMRU` 在主线程补上。
-    nonisolated static func rawGroups(on screen: NSScreen) -> [AppGroup] {
+    nonisolated static func rawGroups(on screen: NSScreen, includeMinimized: Bool = Keys.includeMinimized) -> [AppGroup] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         guard let infos = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
@@ -220,7 +220,7 @@ enum WindowEnumerator {
         // 开启后仅收录「归属当前屏 ∧ AX 明确报 kAXMinimized == true」的窗口（排在同 App 可见窗尾部），
         // 严格排除其他 Space 的正常窗，不破按屏隔离（ADR-0008）。
         var minimizedPIDsAdded: Set<pid_t> = []
-        if Keys.includeMinimized,
+        if includeMinimized,
            let allInfos = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
             let onScreenWIDs = Set(candidates.map(\.wid))
             // 注意:有些 App 的最小化窗在 CGWindowList(.optionOnScreenOnly) 里依然出现(动画中或系统缓存),

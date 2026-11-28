@@ -49,145 +49,72 @@ struct PanelView: View {
     @ObservedObject var controller: PanelController
 
     var body: some View {
-        ZStack {
-            // 说话时:同一块玻璃,形状变成胶囊(芯片样式) —— 材质不变,只改形状。
-            // 圆角 = 玻璃高的一半(真胶囊)。⚠️ 别在这里减 shadowPadStrip:hintContentSize
-            // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
-            // 上一版减了,算出负圆角喂给 NSGlassEffectView,玻璃形状当场失真
-            // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
-            GlassBackground(cornerRadius: controller.hintText == nil
-                            ? PanelMetrics.rPanel
-                            : PanelMetrics.hintContentSize.height / 2)
-                // ★ 残帧对策(2026-11-09):玻璃每局重建(新视图 = 重新采样身后的画面,
-                //   不吐上一局的 backdrop 快照);世代号在 showPanel 里递增,
-                //   alpha=0 门挡住新玻璃的第一帧 ⇒ 不白闪
-                .id(controller.glassEpoch)
-            // ★ **玻璃纱**(2026-10-08):浅色一道很淡的中性灰(深色透明),铺在**玻璃之上、图标之下** ✓
-            //   目的:把基色从 0.89 压到 ≈0.84,贴住原生的两点反解(见 PanelColors.glassVeil 的推导 ✓)
-            //   ⚠️ 必须挂在玻璃**之后**、内容**之前** —— 否则要么压到图标,要么盖在玻璃底下看不见 ✓
-            .overlay(
-                RoundedRectangle(cornerRadius: controller.hintText == nil
-                                 ? PanelMetrics.rPanel
-                                 : PanelMetrics.hintContentSize.height / 2,
-                                 style: .continuous)
-                    .fill(PanelColors.glassVeil)
-                    .allowsHitTesting(false)
-            )
-            // ★★ **玻璃反光边**(2026-10-08)—— 三条否掉的错路都记在这,别再走:
-            //   ① 2026-09-15:`strokeBorder` **均匀实线** ⇒ 「还是有边框看着」✗
-            //   ② 本日第一稿:细 stroke + 模糊 ⇒ 「**像是描的边**, 没有手机**曲面屏**那种自然向下过渡」✗
-            //      —— stroke 的亮度是**恒定**的:它只在那一圈上"亮",没有"离边缘越远越淡"这件物理 ✗
-            //   ③ 本日第二稿:`fill(.clear).shadow(.inner(...))` ⇒ 编译过了,但实测贴边只 **+0.019** ✗
-            //      —— 内阴影挂在**透明填充**上几乎不变现(它需要一层"面"才落得下来)✗
-            //   ⇒ 正解 = **层叠的圈**:贴边一圈最亮,往里逐圈更淡更宽 ⇒ 合成出来就是"向内衰减的过渡" ✓
-            //     与原生剖面同形(顶 +0.22 / 底 +0.215 / 左上 +0.25,整周均匀 ✓,紧贴内侧再 −0.04 ✓)
-            //     代价:三圈描边(不触发任何离屏光栅化 ⇒ 比 .blur/.shadow 便宜 ✓;模糊只给一点点)
-            .overlay(GlassRim(cornerRadius: controller.hintText == nil
-                              ? PanelMetrics.rPanel
-                              : PanelMetrics.hintContentSize.height / 2))
-            glassTopEdge
-// ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
-//   病例:加了"选中图标颜色晕染"之后,未启动环里它也出现,但**位置错位** ✗
-//   原因:两个环是**同一条 strip** 加开关(`entrySelected` ✓),而这团光的位置按**主环几何**算 ✓
-// ⚠️⚠️ 第二版(踩过):我先写成 `if sheen && !entrySelected` —— 换环那一刻**视图树变了** ⇒ 触发一次重排 ✗
-//   ⇒ 正是 v1 抖动那一族(见本文件 182/204 行那两条诊断 ✓),而且刚好发生在"切环"那一下 ✗
-//   ⇒ 改成"**视图一直在,只是不画**":布局零变化 ✓ 未启动环里也不出现 ✓
-//   (设置里那个总开关仍用 `if`:会话级、极低频 ✓;换环是高频 ✓ 两者不能混为一谈)
-if sheen {
-                SheenOverlay(
-                    active: controller.isVisible,
-                    enabled: !controller.entrySelected,
-                    center: { [weak controller] in controller?.sheenCenterInContent() },
-                    tint: { [weak controller] in controller?.sheenTint },
-                    owner: { [weak controller] in controller?.sheenTintOwner ?? "?" }
-                )
-            }
+        // 说话时:同一块玻璃,形状变成胶囊(芯片样式) —— 材质不变,只改形状。
+        // 圆角 = 玻璃高的一半(真胶囊)。⚠️ 别在这里减 shadowPadStrip:hintContentSize
+        // 是**玻璃**的账,窗口的呼吸区在 .padding(shadowPadStrip) 那一层(见文件尾)——
+        // 上一版减了,算出负圆角喂给玻璃视图,形状当场失真
+        // (「尺寸账两本」的又一份病例,见 PanelTokens.hintContentSize 的注释)
+        let corner = controller.hintText == nil
+            ? PanelMetrics.rPanel
+            : PanelMetrics.hintContentSize.height / 2
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        let size = controller.contentSize()
 
-            iconStrip
-                // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
-                // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)。
-                // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
-                // 这层只管竖直,不然左右各叠一层就是双重边距
-                .padding(.vertical, PanelMetrics.rowPadY)
-                // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
-                // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
-                .opacity(controller.hintText == nil ? 1 : 0)
-                // ★★ 2026-10-08 换环翻牌**不再挂在这条图标行上** ✗ ——
-                //   原来这里是 `.id(entrySelected) + .transition(SegmentFlip)`:
-                //   ① 翻的只有**图标条** ⇒ 用户实评「环先变形到位、然后只翻图标 ⇒ 翻了个寂寞」✗
-                //   ② `.transition` 会被系统「减弱动态效果」**自己**降级,Glance 的设置管不到 ✗
-                //   ⇒ 现在改成"**整条环(玻璃 + 图标)当一块牌翻**":角度是控制器里的参数,
-                //     挂在**环里那块容器**上(`RingFlipEffect`,见文件尾 ✓ 与托底 PuckView 同一套哲学)
+        // ★ 2026-11-25 统一环玻璃（与程序坞 & 舌头滑块同源 `RingGlassSurface`）：
+        //   - macOS 26+：原生 `.glassEffect(.clear, in: shape)` + 4 象限稳态玻璃层 + 0.75pt 无模糊折光边 + 双层外投影；
+        //   - macOS 14–25：自动回退 `NSVisualEffectView` + 同源稳态层 + 穹顶/菲涅尔/内焦散光学补偿层。
+        RingGlassSurface(
+            cornerRadius: corner,
+            size: size,
+            epoch: controller.glassEpoch,
+            compactShadow: controller.hintText != nil
+        ) {
+            ZStack {
+                // ★ 2026-09-24:未启动环**不要**这团光(用户裁定「意义不大」✓)
+                // ⚠️ 视图一直在、只是不画(enabled: !entrySelected):布局零变化 ✓
+                // 单独裁切到圆角形状,防高光溢出玻璃外缘(同时不裁切外层 `.glassEffect` 光学折射棱)
+                if sheen {
+                    SheenOverlay(
+                        active: controller.isVisible,
+                        enabled: !controller.entrySelected,
+                        center: { [weak controller] in controller?.sheenCenterInContent() },
+                        tint: { [weak controller] in controller?.sheenTint },
+                        owner: { [weak controller] in controller?.sheenTintOwner ?? "?" }
+                    )
+                    .clipShape(shape)
+                }
 
-            // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
-            // 上一轮把尺寸和形状做了、**文字漏了** —— 于是"芯片出来了, 没文案"。
-            // v2(2026-09-18「太大太重」):12pt regular + 14/6 内边距,配 168×36 的玻璃
-            // (尺寸在 PanelMetrics.hintContentSize,别在这里另立一本)
-            if let hint = controller.hintText {
-                Text(hint)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
+                iconStrip
+                    // 上下对称:选中态"往上长"的那一段由**克制幅度**承担,不由边距承担
+                    // (加边距会让未选中时的长条白厚一圈,见 PanelTokens.iconLift 的取舍)。
+                    // 水平内边距由 iconStrip 自己给(左 rowPadX / 右随启动区变,见那里)——
+                    // 这层只管竖直,不然左右各叠一层就是双重边距
+                    .padding(.vertical, PanelMetrics.rowPadY)
+                    // T91 表三:说话时环整条退场(窗口只剩芯片那么大)。退场是**当帧**的
+                    // (showHint 不带动画写状态):弹簧拖着的淡出就是用户实拍的「环一闪而过」
+                    .opacity(controller.hintText == nil ? 1 : 0)
+
+                // T91 表三(用户口径):没有可启动的 App ⇒ **只要一枚芯片**。
+                if let hint = controller.hintText {
+                    Text(hint)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
         }
-        .frame(width: controller.contentSize().width, height: controller.contentSize().height)
         // ★ 环变短要**平滑收窄**(用户 2026-10-20:「环的长度缩短没有动画,是直接生硬地缩短」)。
         //   只动 SwiftUI 的 frame(窗框在 fillHole 时故意不动)⇒ 碰不到 AppKit 的窗口 resize ✓
         // ★ 本局名单还在路上时不播"环变长/变短"动画(先上屏的是陈旧名单,真名单一到
         //   才把新开的 App 加进来 ⇒ 那段形变用户读作"卡在变"✗ 见 `listSettling`)
         .animation(controller.listSettling ? nil : controller.selectionAnimation(PanelMotion.slide),
                    value: controller.groups.count)
-        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous))
-        // 玻璃边:**软的受光唇**(删掉原来那条 1px 硬线 —— 见 PanelGlass.GlassEdge 的两张剖面表)
-        .glassEdge(cornerRadius: PanelMetrics.rPanel)
-        // 顶缘内阴影(demo inset 0 1px 0 --glass-inner-shadow):深色下这道暗线顺着圆角压住亮度
-        // (挂 `PanelEdgeStyle.drawsEdge`:用户要"完全去掉"时,这两道也要一起消失)
-        .overlay {
-            if PanelEdgeStyle.drawsEdge {
-                RoundedRectangle(cornerRadius: PanelMetrics.rPanel, style: .continuous)
-                    .strokeBorder(PanelColors.glassInner, lineWidth: PanelMetrics.hairline)
-                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .center))
-                    .allowsHitTesting(false)
-            }
-        }
         // 入场与退场**都不做动效**(v1.12 砍入场,2026-09-14 砍退场):
         // ⌘Tab 是效率动作,面板要"已经在",关闭要"已经没了"——两头都不该让用户等动画。
-        // ★★ T91 病例(2026-09-17,用户实报「重启之后**第一次**唤起面板, 会闪一下, 有一道白光」):
-        //
-        // 这里原来挂着 `.opacity(controller.isVisible ? 1 : 0)` —— 窗口的出现/消失**本来**由
-        // 控制器 orderFrontRegardless / orderOut 负责,这一层是多余的"双保险"。
-        // 它的代价正好落在"第一次"上:`isVisible = true` 写下去之后,SwiftUI 的那一帧**还没重算**
-        // ⇒ 窗口先上屏的是"玻璃 + 阴影",而**内容整层透明度还是 0** ⇒
-        // 屏幕上一块空的白色玻璃 = 用户说的"一道白光";下一帧图标才补上。
-        // 之后几次唤起之所以看不出来,是因为视图状态已经算过一帧了 —— 这就是"只在重启后第一次"。
-        //
-        // 结论:**视图不该再藏一层**。窗口在屏幕上 = 内容就可见。
-        // (将来若真要做退场淡出,请用窗口的 alphaValue,别回到这里。)
-        // 投影:长条用 .strip;芯片(说话局)换 .puck —— .strip 的深色 α .62 是大面板的配重,
-        // 小胶囊扛不住,读作"重"(用户 2026-09-18「太大太重」的后一半)。
-        // 用改参数而不是改修饰符链:视图身份不变,与"参数归零"同一条规矩(见 elevation 的注释)
-        .elevation(controller.hintText == nil ? .strip : .puck)
-        // 〔史〕唤起轻弹第三版曾在此拉宽度 —— 已定版为渐入(见下方 .opacity)✓ 留档:
-        //   ⚠️⚠️ 必须用 **transform**(`scaleEffect(x:y:)`),不许逐帧改 `frame` ✗ ——
-        //     第二版把弹写成"宽度每帧变一次" ⇒ 那是**逐帧布局** ⇒ 一唤起就踩
-        //     "Update Constraints in Window pass" 递归 ⇒ SIGABRT ✗(真机复现 ✓)
-        //     而等比 scaleEffect 那版连按 10 轮 0 崩 ✓ ⇒ 差别就在"布局 vs 绘制" ✓
-        // ★ 入场 = **整块渐入**(2026-10-08 定版):只动不透明度,**不动几何** ✓
-        //   理由:动几何会让"画面"与"命中区"在这 100 多毫秒里不一致 ✗(见 PanelController.entryFade)
-        // ★★ 2026-10-20(用户:「出场时 app 是透明的,会把后面的滑块边缘透出来」):
-        //   入场淡入**不再给内容层加 opacity** —— 内容一透明,图标背后的托底就透出来了
-        //   (仓库老病例:「图标一透明,它后面那一层就露出来了 ⇒ 读成碎图/见骨头」✗)。
-        //   ⇒ 淡入改成淡**窗口**(`panel.animator().alphaValue`):合成结果是整块不透明的,
-        //     内部互不透 ✓ 观感与原来一致的"渐入",但没有见骨头 ✓
-
-        // ⚠️⚠️ 换环翻牌**不在这一层做**(2026-10-08 修):
-        //   这里原来挂着 `.rotation3DEffect(ringFlipAngle)` —— 那是"整条环当一块牌翻"那一版的残留 ✗
-        //   它把**整块玻璃**一起转了 ⇒ 玻璃材质掉(变透明/暗板 ✗),而且它和下面 `RingFlipEffect`
-        //   里那层**同时**在转 ⇒ 用户那四格消元实验(3D/2D × 长度变/不变)**全部失效** ✗✗
-        //   ⇒ 翻牌只由 `RingFlipEffect` 作用在**环里那块容器**上;玻璃/阴影/受光边在这一层保持不动 ✓
+        // 投影已统一由 `RingGlassSurface` 双层外投影承担（compactShadow 对应芯片态）。
         .padding(PanelMetrics.shadowPadStrip) // 必须与 PanelController.paddedSize 口径一致
         // ★ 2026-09-22:窗框现在按"两环更宽者"开一局 ⇒ 环比窗框窄时,内容要**居中**摆放
         //   (玻璃仍按各自环宽画 ✓,只是它在窗里居中 ⇒ 换环时左右边缘一动不动 ✓)
@@ -280,7 +207,12 @@ if sheen {
                         selected: i == controller.appIndex && !controller.entrySelected,
                         // 开局第一帧/animation 关掉时给 nil:窗口是复用的,上一局的选中会在新一局开局时
                         // 从第 5 位"飞"回第 1 位。demo 的 positionPuck(_, animate:false) 同理
-                        motion: controller.selectionAnimation(PanelMotion.select)
+                        motion: controller.selectionAnimation(PanelMotion.select),
+                        // ★★ 2026-11-25 根因 C:后台图标落账的"令牌"。
+                        //   本格子是纯值参数子视图 ⇒ 父视图重算时把这一枚 Int 一并递进来,
+                        //   它一变 `body` 就会重算 ⇒ `IconProvider.art` 拿到刚落的真图标 ✓
+                        //   (不递这个 token 的话:后台 20ms 就把真 logo 落账了,屏幕却死死卡着白纸 ✗)
+                        iconRevision: controller.iconRevision
                     )
                     .frame(width: PanelMetrics.pitch, height: PanelMetrics.icon)
                     // 入场升起**只给选中的那一格**(与托底同一次 withAnimation、同一根 spring):
@@ -428,6 +360,10 @@ private struct IconCell: View {
     let selected: Bool
     /// 该用的动效(nil = 不动:"面板不在台上"或系统要求降级)
     let motion: Animation?
+    /// **图标版本号**(2026-11-25 根因 C):后台真的把图标落进账本时由控制器 +1。
+    /// 这个属性自己**不被读**,它只干一件事:把一个"会变的值"递进来 —— 本视图是纯值参数子视图,
+    /// 父视图重算时若所有参数一比特没变,SwiftUI 会跳过 `body` ⇒ 真 logo 永远画不上屏 ✗
+    let iconRevision: Int
 
     /// **光效总闸**(设置 → 通用 →「光效」):指针那团游走的柔光 + 这里的静态反光是同一件事的两半,
     /// 一起开、一起关(用户口径:"app 上的静态反光也关闭,一齐开启,或者关闭")。

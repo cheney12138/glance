@@ -27,13 +27,29 @@ enum DockAppsProvider {
     nonisolated(unsafe) private static var iconCache: [String: IconProvider.Art] = [:]
     nonisolated(unsafe) private static let iconLock = NSLock()
     /// 取图标与边距补偿(命中就回;未命中就后台加载并算 fillRatio 存入 ✓ 锁只圈字典、不圈加载 ✓)
-    nonisolated private static func cachedArt(_ path: String) -> IconProvider.Art {
+    /// - Returns: `art` 与 `isNew`(**这一条是不是首次加载**)。
+    ///   调用方拿到 `isNew` 就顺手把真图标预填进 `IconProvider` 的 bundleID 二级缓存 ——
+    ///   于是这个 App 一旦真跑起来,主环/程序坞**第一帧就有真 logo**(不再白纸一次 ✓)。
+    ///   每个 App 一辈子只 seed 一次(进程级缓存),成本可忽略 ✓
+    nonisolated private static func cachedArt(_ path: String) -> (art: IconProvider.Art, isNew: Bool) {
         iconLock.lock(); let hit = iconCache[path]; iconLock.unlock()
-        if let hit { return hit }
-        let icon = NSWorkspace.shared.icon(forFile: path)
-        let art = IconProvider.Art(image: icon, fill: IconProvider.fillRatio(of: icon))
+        if let hit { return (hit, false) }
+        let raw = NSWorkspace.shared.icon(forFile: path)
+        let crisp = IconProvider.crispImage(from: raw)
+        // `smallImage` = **原始多分辨率 .icns**(与 `IconProvider.Art` 的口径一致)⇒
+        // 15pt 迷你芯片能命中系统原生 32px 手绘表示,不拿 256px 大图硬降采样 ✓
+        let art = IconProvider.Art(image: crisp, smallImage: raw, fill: IconProvider.fillRatio(of: crisp))
         iconLock.lock(); iconCache[path] = art; iconLock.unlock()
-        return art
+        return (art, true)
+    }
+
+    /// 首次加载这条 App 的图标时,把真图标预填进 bundleID 二级缓存(非首次跳过 —— `isNew` ✓)。
+    /// ⚠️ 只有**合法 bundleID** 才预填:名单里有些 Dock 项的 id 会退化成 **path**,
+    ///   拿 path 当 key 填进去永远无人命中,徒增垃圾 ✓
+    nonisolated private static func seedIconCacheIfNeeded(_ art: IconProvider.Art, isNew: Bool, bundleID: String?) {
+        guard isNew, let bundleID, bundleID.contains(".") else { return }
+        IconProvider.seedBundleCache(bundleID: bundleID, image: art.image,
+                                     smallImage: art.smallImage, fill: art.fill)
     }
 
     /// **白名单**(2026-09-19):不在 Dock 常驻的 App 也进未启动环。存 bundle id(见 spec note 6)。
@@ -167,10 +183,13 @@ enum DockAppsProvider {
         var out: [LaunchableApp] = []
         var seen = Set<String>()
         for pinned in DockApps.parse(persistentApps: raw) {
-            let bid = pinned.bundleID ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.bundleIdentifier ?? pinned.path
+            let resolvedBundleID = pinned.bundleID
+                ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.bundleIdentifier
+            let bid = resolvedBundleID ?? pinned.path
             guard !blacklist.contains(bid), !seen.contains(bid) else { continue }
             seen.insert(bid)
-            let art = cachedArt(pinned.path)
+            let (art, isNew) = cachedArt(pinned.path)
+            seedIconCacheIfNeeded(art, isNew: isNew, bundleID: resolvedBundleID)
             let name = pinned.name
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: URL(fileURLWithPath: pinned.path))?.infoDictionary?["CFBundleName"] as? String
@@ -185,7 +204,8 @@ enum DockAppsProvider {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) else { continue }
             let path = url.path
             seen.insert(bid)
-            let art = cachedArt(path)
+            let (art, isNew) = cachedArt(path)
+            seedIconCacheIfNeeded(art, isNew: isNew, bundleID: bid)
             let name = Bundle(url: url)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String
                 ?? Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
                 ?? url.deletingPathExtension().lastPathComponent

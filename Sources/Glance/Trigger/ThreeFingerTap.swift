@@ -159,8 +159,12 @@ final class ThreeFingerTap {
     var isDiagnosticActive: Bool { started }
     /// 睡醒/屏变化的重挂只装一次 ✓
     private var observing = false
+    /// 真硬件触控板活动监听（滚动/压感/手势；仅用于 MT 投递死亡检测，彻底排除外接鼠与跨屏键鼠软件误判 ✓）
+    private var trackpadActivityMonitor: Any?
     /// 上次挂设备的时刻(久闲后的第一次唤起会用它做自愈判据 ✓)
     private var lastAttachAt: CFAbsoluteTime = 0
+    /// 上次发起"投递死亡"重挂的时刻(独立冷却 60s,不被睡醒/屏变/补挂阻塞 ✓)
+    private var lastDeadReviveAttemptAt: CFAbsoluteTime = 0
 
     /// **重挂设备的专用串行队列**(2026-10-09 病例:app 卡死 · 99% CPU · 连 ⌘Tab 都没了 ✗)
     ///
@@ -283,21 +287,31 @@ final class ThreeFingerTap {
         //   第一次实现用 lastFrameAt —— 实机一测**不触发** ✗ 因为**鼠标设备也在吐帧**
         //   (设备列表里不只有触控板 ✓)⇒ 时间戳被一路刷新 ⇒ 永远不到 30 分钟 ✓
         //   改成只看挂载时刻:久闲后的第一发触发键重挂一次(注册是亚毫秒级 ✓ 很便宜 ✓)
+        let now = CFAbsoluteTimeGetCurrent()
         attachStateLock.lock()
         let since = lastAttachAt
         attachStateLock.unlock()
-        let age = CFAbsoluteTimeGetCurrent() - since
+        let age = now - since
         guard age > Double(idleMin) * 60 else { return }
+        feedLock.lock()
+        let frameAt = lastFrameAt
+        feedLock.unlock()
+        // 此刻触控板仍在正常吐帧 ⇒ 通道活得好好的，不必白拆活句柄 ✓
+        guard frameAt == 0 || now - frameAt > 5.0 else { return }
         attachDevices(reason: String(format: "久闲 %.0f 分钟后自愈", age / 60))
     }
 
-    /// **点击但久无触摸帧 ⇒ 投递死亡铁证,当场重挂**(2026-10-08,放假合盖十几天后再哑)。
-    /// 依据:在触控板上物理点击**不可能**没有触点帧(手指必须先接触)⇒
-    /// 点击事件到了、帧却 2s 以上没来 = 投递死了 ✓(睡醒重挂都没救回来的那种 ✗)。
-    /// 误伤防护:鼠标设备也吐帧 ⇒ 用鼠标时 `lastFrameAt` 本来就一直新,不会触发 ✓;
-    /// 30s 内最多重挂一次(外接鼠标/盒盖机型的"本来就没帧"场景不刷屏 ✓)。
-    /// 在 `HotkeyTap.handleMouse` 里挂(点击必过 ✓ 挂载亚毫秒级 ✓)
+    /// **真硬件触控板活动（滚动/压感/手势）但久无触摸帧 ⇒ 投递死亡铁证,当场重挂**。
+    /// ★★ 2026-11-28 病例修复（外接鼠 / 跨屏键鼠共享工具频繁误杀自重启 + 菜单栏黑闪）：
+    ///   旧版挂在 `HotkeyTap.handleMouse(.leftMouseDown)` 上，错误假设「鼠标设备也吐 MT 帧」✗——
+    ///   只有 Apple Magic Mouse 吐 MT 帧；普通外接鼠（Logitech/Razer 等）与跨屏键鼠软件（Synergy/Deskflow/
+    ///   ShareMouse 等）的左键点击**零 MT 帧**，只要此前碰过或掌缘蹭过一次 MacBook 触控板，随后用外接鼠点几下就会被判
+    ///   「MT 投递整体已死」并强行自重启（一晚误重启 25 次，每次退出/重启触发 `killall Dock` 令菜单栏闪黑）。
+    ///   ⇒ 现仅由 `trackpadActivityMonitor` 确认是**真物理触控板硬件事件**（精密触控滚动 / Force Touch 压感 /
+    ///      触控板手势，且 `eventSourceUnixProcessID == 0`）时才调用，对外接鼠与跨屏键鼠 0 误伤 ✓；
+    ///      同时不再依赖 `frameAt > 0`（合盖启动后开盖首次用触控板也能兜底），且与睡醒/屏变/解锁重挂解耦冷却 ✓。
     func reviveIfFramesDead() {
+        guard started, enabled || enabledFour else { return }
         let now = CFAbsoluteTimeGetCurrent()
         feedLock.lock()
         let frameAt = lastFrameAt
@@ -317,27 +331,18 @@ final class ThreeFingerTap {
         //     上一版只认"重挂卡住",认不出"重挂成功却没帧" ⇒ 既救不了、又刷了 15 小时日志 ✗
         //   口径:重挂成功过、而 3s 内仍一条触点帧都没有 ⇒ 判"MT 投递整体已死" ⇒ **停手** ✓
         //     (不再投递重挂 —— 免得攒线程与刷屏 ✓;真恢复了(又有帧)会自动把旗标放下 ✓)
-        //   ⚠️ 防误伤(本仓老病例:外接鼠标 / 盒盖机型"本来就没帧" ✗):必须**曾经有过帧**才判死 ✓
-        //      —— 从没见过的机器(内建板根本没在用)不会走到这里 ✓
         // ★★ 2026-10-20(用户:「怎么有时候莫名其妙地自己重启」):判"投递已死"加两道刹车。
         //   ① **睡醒/换屏后的宽限 15s**:驱动醒来要缓几拍才吐帧,原来 3s 就宣判 ⇒ 一开盖就重启 ✗
-        //   ② 静默阈值 3s → **8s**:鼠标也在吐帧,真死的时候不会差这几秒 ✓
+        //   ② 静默阈值 3s → **8s**:真死的时候不会差这几秒 ✓
         // ★★ 2026-11-22 修复(用户实报「在设置面板里操作好像会崩溃,重启了好几次了」):
-        //   旧版 `if lastFrameAt > 0, attachSucceededAt > 0, silence > 8.0` 两处误杀:
-        //   ① `attachSucceededAt` 在启动时就会置 >0,只要曾经有过帧,触控板静默 8s 后首次点击
-        //      根本没先尝试 `attachDevices("投递死亡")` 就直接 `autoRelaunchIfNeeded` 杀进程;
-        //   ② 用户在设置/速查/引导/面板里点击时直接 `NSApp.terminate`,体感就是“点设置崩溃重启”。
-        //   收紧口径:① 必须是本次静默**之后**实际执行过投递死亡重挂(`reviveAttachAt > lastFrameAt`)
+        //   收紧口径:① 必须是本次静默**之后**实际执行过投递死亡重挂(`reviveAttachAt >= lastFrameAt`)
         //   且重挂完成 ≥3s 仍无任何新帧;② 本 App 在前台或任一可见窗口打开期间,**绝不**自动重启,
         //   启动后 60s 内也不自动重启 ✓。
-        // ★★ 2026-11-22 二修(日志铁证:MenuBarExtra 的 `NSStatusBarWindow` 常驻 `isVisible == true`,
-        //   导致旧版 `NSApp.windows.contains { $0.isVisible }` 恒为 true,设置关闭后也永远跳过自动重启;
-        //   且点击瞬时 `silence > 2s` 就直接 `unregister + MTDeviceStart` 在 40 分钟里反复触发 18 次,
-        //   反而在点击当中把活着的多点回调撕掉并堆叠泄露句柄):
+        // ★★ 2026-11-22 二修:
         //   ① 判"窗口打开"显式排除状态栏窗口(`.statusBar` / `NSStatusBarWindow`),只认前台交互/设置引导/切换面板;
-        //   ② 点击若距上一帧 > 5s,先延后 0.35s 复查:只要这次点击本身带来了触点帧就不做无谓重挂 ✓。
+        //   ② 触控板活动若距上一帧 > 5s,先延后 0.35s 复查:只要这次操作本身带来了触点帧就不做无谓重挂 ✓。
         let wakeGrace = now - lastWakeAt
-        if frameAt > 0, revivedAt > frameAt, now - revivedAt >= 3.0,
+        if revivedAt > 0, revivedAt >= frameAt, now - revivedAt >= 3.0,
            silence > 8.0, wakeGrace > 15 {
             let uiOpen = Self.hasInteractiveWindowOpen()
             if uiOpen {
@@ -361,26 +366,34 @@ final class ThreeFingerTap {
             }
             return
         }
+        // 睡醒/拔屏/解锁后给驱动 5s 缓冲，避免刚完成系统重挂立刻叠加第二次重挂 ✓
+        guard wakeGrace > 5.0 else { return }
         attachStateLock.lock()
-        let since = lastAttachAt
+        let sinceDeadRevive = lastDeadReviveAttemptAt
         attachStateLock.unlock()
-        guard silence > 5.0, now - since > 60, reviveVerifyWork == nil else { return }
-        let clickedAt = now
+        guard silence > 5.0, now - sinceDeadRevive > 60, reviveVerifyWork == nil else { return }
+        let triggeredAt = now
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.reviveVerifyWork = nil
             self.feedLock.lock()
             let latestFrameAt = self.lastFrameAt
             self.feedLock.unlock()
-            // 这次点击前后确实收到了新帧 ⇒ 只是敲键盘/阅读静默了一会儿,无需撕开重挂 ✓
-            guard latestFrameAt < clickedAt - 0.15 else { return }
-            let verifiedSilence = CFAbsoluteTimeGetCurrent() - latestFrameAt
+            // 这次触控板活动前后确实收到了新帧 ⇒ 只是静默了一会儿,无需重挂 ✓
+            guard latestFrameAt < triggeredAt - 0.15 else { return }
+            let now2 = CFAbsoluteTimeGetCurrent()
+            let verifiedSilence = now2 - latestFrameAt
             self.attachStateLock.lock()
-            let sinceLast = self.lastAttachAt
+            let sinceLast = self.lastDeadReviveAttemptAt
+            guard verifiedSilence > 5.0, now2 - sinceLast > 60 else {
+                self.attachStateLock.unlock()
+                return
+            }
+            self.lastDeadReviveAttemptAt = now2
             self.attachStateLock.unlock()
-            guard verifiedSilence > 5.0, CFAbsoluteTimeGetCurrent() - sinceLast > 60 else { return }
+            let silenceText = latestFrameAt > 0 ? String(format: "%.0fs静默", verifiedSilence) : "启动至今无帧"
             DiagnosticRingBuffer.shared.recordThreeFingerRevive()
-            self.attachDevices(reason: String(format: "点击后仍无帧(%.0fs静默·投递死亡)", verifiedSilence))
+            self.attachDevices(reason: "触控板操作后仍无帧(\(silenceText)·投递死亡)")
         }
         reviveVerifyWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
@@ -522,7 +535,12 @@ final class ThreeFingerTap {
         mutating func endRound() {
             tracker.endRound()
             lastSnapshot = TapRound.Snapshot()
+            didPrewarm = false
         }
+
+        /// 本轮是否已投递过"截图裁决预热"(见 `contactFrame` 里的按下预热段)
+        private(set) var didPrewarm = false
+        mutating func markPrewarmed() { didPrewarm = true }
 
         /// 标记"本轮已生效"(按压触发那条路用;抬手不再按点按重复计)
         mutating func markFired() { tracker.markFired() }
@@ -654,7 +672,6 @@ final class ThreeFingerTap {
         }
         attachInFlight = true
         attachStartedAt = CFAbsoluteTimeGetCurrent()
-        lastAttachAt = attachStartedAt                // 防抖从"投递"起算(排队也算 ✓)
         attachStateLock.unlock()
         if wedged {
             glog(String(format: "[指点按] ⚠️ 上一次重挂卡住 ≥%.0fs(MTDeviceStop 不返回)⇒ 换新队列重试 ✓",
@@ -694,21 +711,31 @@ final class ThreeFingerTap {
         guard let devices = sym.list() else { return }
         let count = CFArrayGetCount(devices)
         let isDeadRevive = reason.contains("投递死亡") || reason.contains("重试")
+        let isSystemRecovery = reason == "睡醒" || reason == "息屏唤醒" || reason == "会话解锁"
+            || reason == "屏参数变化" || reason.hasPrefix("久闲")
+        feedLock.lock()
+        let recentFrameAt = lastFrameAt
+        feedLock.unlock()
+        let recentlyActive = recentFrameAt > 0 && (CFAbsoluteTimeGetCurrent() - recentFrameAt) <= 5.0
+        // ★★ 2026-11-28 补漏(拔双屏 / 合盖切屏 / 锁屏久闲):
+        //   2026-11-20 按硬件 ID 去重后，睡醒/屏变/久闲对同 ID 内建板直接 `continue` 跳过(本次新增 0)，
+        //   若旧句柄已在合盖/拔屏/锁屏期间失效则彻底无法静默自愈 ✗。
+        //   ⇒ 改为：系统态恢复事件(`睡醒`/`息屏唤醒`/`会话解锁`/`屏参数变化`/`久闲`)在触控板静默(>5s 或无帧)时，
+        //      执行非阻塞 `unregister(old)` + 重新 `register/start(new)`(绝不碰会卡死的 `MTDeviceStop`)；
+        //      而 1.5s/4s/9s 睡醒补挂或触控板正在活跃吐帧时继续跳过，既不撕活句柄、也不堆叠回调线程 ✓。
+        let shouldRefreshExisting = isDeadRevive || (isSystemRecovery && !recentlyActive)
         var added = 0
         for i in 0..<count {
             guard let raw = CFArrayGetValueAtIndex(devices, i) else { continue }
             let p = UnsafeMutableRawPointer(mutating: raw)
             let devID = Self.deviceID(of: p)
-            // ★★ 2026-11-20 修复(日志铁证:2.5 小时后同一块触控板被重复挂载 5 份回调线程,每条日志刷 5 遍):
-            //   `MTDeviceCreateList()` 每次返回的 `MTDeviceRef` 都是**新指针**,
-            //   旧版 `attachedDevices.contains(where: { $0 == p })` 永远为 false ✗!
-            //   ⇒ 改按稳定硬件 ID(`MTDeviceGetDeviceID`)去重:
-            //     · 常态轻量重挂(久闲/屏变/睡醒补挂):同硬件 ID 已挂则直接跳过(真正做到"只补新面孔" ✓);
-            //     · 投递死亡/重试:先对旧句柄做非阻塞 `unregister`(不调会卡死的 `MTDeviceStop`),再挂新句柄 ✓
             if light, attachedDevices.contains(where: { $0.id == devID }) {
-                if !isDeadRevive { continue }
+                if !shouldRefreshExisting { continue }
                 for old in attachedDevices where old.id == devID {
                     sym.unregister?(old.ptr, Self.contactFrame)
+                    feedLock.lock()
+                    devIDByPtr.removeValue(forKey: UInt(bitPattern: old.ptr))
+                    feedLock.unlock()
                 }
                 attachedDevices.removeAll { $0.id == devID }
             }
@@ -722,22 +749,26 @@ final class ThreeFingerTap {
         }
         let attached = attachedDevices.count
         let completedAt = CFAbsoluteTimeGetCurrent()
-        lastAttachAt = completedAt
-        attachSucceededAt = completedAt
+        attachStateLock.lock()
+        if added > 0 {
+            lastAttachAt = completedAt
+            attachSucceededAt = completedAt
+        }
+        // 这一趟真的走到头了 ⇒ 清掉"楔住"预算(下一次死投递可以从头试 ✓)
+        attachWedgeRetries = 0
+        attachStateLock.unlock()
         if isDeadRevive {
             feedLock.lock()
             reviveAttachAt = completedAt
             feedLock.unlock()
         }
-        // 这一趟真的走到头了 ⇒ 清掉"楔住"预算(下一次死投递可以从头试 ✓)
-        attachStateLock.lock(); attachWedgeRetries = 0; attachStateLock.unlock()
         glog("[指点按] 挂载 \(attached) 个设备(列表 \(count) · 本次新增 \(added))(\(reason)\(light ? " · 轻量路(不拆旧 ✓)" : ""),拆旧 \(detached))· 三指=\(enabled ? "开" : "关")"
              + " · 四指=\(enabledFour ? "开" : "关")")
     }
 
     func noteWake() { lastWakeAt = CFAbsoluteTimeGetCurrent() }
 
-    /// 睡醒 / 屏参数变化 ⇒ 重挂(这两件正是"设备回调会死"的时刻 ✓)
+    /// 睡醒 / 息屏唤醒 / 解锁 / 屏参数变化 ⇒ 重挂(这些正是"设备回调会死"的时刻 ✓)
     private func observeWakeAndScreenChanges() {
         guard !observing else { return }
         observing = true
@@ -745,17 +776,51 @@ final class ThreeFingerTap {
         c.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             ThreeFingerTap.shared.noteWake()
             // ★ 醒来那一刻设备列表常常还没登记全(实测:睡前 2 个 ⇒ 醒来只挂到 1 个)⇒ 补挂几次。
-            //   轻量重挂现在是幂等的(只补新面孔)⇒ 多试没有副作用 ✓
+            //   首次(0s)静默时刷新内建板旧句柄；后续补挂(1.5/4/9s)仅补新面孔，无副作用 ✓
             for delay in [0.0, 1.5, 4.0, 9.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     ThreeFingerTap.shared.attachDevices(reason: delay == 0 ? "睡醒" : "睡醒补挂 \(Int(delay))s")
                 }
             }
         }
+        c.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { _ in
+            ThreeFingerTap.shared.noteWake()
+            ThreeFingerTap.shared.attachDevices(reason: "息屏唤醒")
+        }
+        c.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) { _ in
+            ThreeFingerTap.shared.noteWake()
+            ThreeFingerTap.shared.attachDevices(reason: "会话解锁")
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                               object: nil, queue: .main) { _ in
             ThreeFingerTap.shared.noteWake()
             ThreeFingerTap.shared.attachDevices(reason: "屏参数变化")
+        }
+        let trackpadMask: NSEvent.EventTypeMask = [
+            .scrollWheel, .pressure, .beginGesture, .magnify, .smartMagnify, .rotate, .swipe
+        ]
+        trackpadActivityMonitor = NSEvent.addGlobalMonitorForEvents(matching: trackpadMask) { [weak self] event in
+            guard let self, Self.isPhysicalTrackpadActivity(event) else { return }
+            self.reviveIfFramesDead()
+        }
+    }
+
+    /// 仅放行"必来自物理触控板/Apple 触控表面"的硬件事件，彻底排除非 Apple 外接鼠标与跨屏键鼠软件 ✓
+    private static func isPhysicalTrackpadActivity(_ event: NSEvent) -> Bool {
+        if let cg = event.cgEvent,
+           cg.getIntegerValueField(.eventSourceUnixProcessID) != 0 {
+            return false   // 跨屏键鼠/软件注入事件一律忽略 ✓
+        }
+        switch event.type {
+        case .scrollWheel:
+            return event.hasPreciseScrollingDeltas
+                && (event.phase == .began || event.phase == .changed)
+        case .pressure:
+            return event.stage >= 1
+        case .beginGesture, .magnify, .smartMagnify, .rotate, .swipe:
+            return true
+        default:
+            return false
         }
     }
 
@@ -880,7 +945,18 @@ final class ThreeFingerTap {
         // 帧又来了 ⇒ 说明投递活着 ⇒ 把"已判死 / 暂缓重启"的旗标放下(下次再死可以再判一次 ✓)
         if tap.mtDeliveryDead { tap.mtDeliveryDead = false }
         if tap.deferredRelaunchNotice { tap.deferredRelaunchNotice = false }
-        if tap.presses[devKey, default: Press()].feed(nFingers: Int(nFingers), data: data) > 0 {
+        let touching = tap.presses[devKey, default: Press()].feed(nFingers: Int(nFingers), data: data)
+        if touching > 0 {
+            // ★★ 2026-11-25 唤起延迟修复(根因与线程纪律见 `CaptureSessionProbe.prewarmAsync` 的头注):
+            //   三指轻点从**按下**到**抬手**天然有 50–180ms 的窗口 —— 趁这段时间把截图裁决的证据
+            //   在**后台**采好,抬手判卷那一步就稳定命中热缓存 ⇒ 不再在主线程同步查窗口服务器
+            //   (原先那一下是 5–40ms 的偶发卡顿,正好压在"抬手 → 面板上屏"那一拍上)✓
+            // ⚠️ 每轮**只投一次**:触控帧 ~120Hz,不设闸门会把后台队列刷爆 ✓
+            //   (`prewarmAsync` 自己也有一道节流,这里是第二道:按"哪一轮"记,而不是按帧)✓
+            if touching >= 3, tap.presses[devKey]?.didPrewarm == false {
+                tap.presses[devKey]?.markPrewarmed()
+                CaptureSessionProbe.prewarmAsync()   // 只投递,不阻塞(feedLock 在外层持有;两把锁不交叉)✓
+            }
             // ⚠️ 2026-09-22 这里原本有一条"**中途开火**":四指齐压满 0.25s 就当场生效(不必抬手)✗
             //   四指下滑的前 0.25s 与"四指按住"完全一样 ⇒ 拖/滑被误判(用户实报三次 ✓)。
             //   照 LumaRing 的做法:**只在全部手指离开那一帧判**(见下面的 `judge()` ✓)——
@@ -930,12 +1006,14 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("三指点按") { return }
-                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起(钉住)%@",
-                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 if tap.enabled {
                     DiagnosticRingBuffer.shared.recordThreeFingerFire(fourFinger: false)
                     tap.onFire?()
                 }
+                // ★ 2026-11-25:日志**挪到唤起之后** —— `glog` 是同步 stdout 写(可能几毫秒),
+                //   放在 `onFire?()` 之前会直接拖慢面板首帧。判卷本身已经在上面了(不影响可观测性)✓
+                glog(String(format: "[指点按] 三指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起(钉住)%@",
+                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 Haptics.fire(.summonThreeFinger)
                 ThreeFingerTap.logPostFirePointerDrift("三指点按")
                 ThreeFingerTap.cancelIfDragStarted(reason: "三指点按", deviceKey: devKey)
@@ -946,12 +1024,13 @@ final class ThreeFingerTap {
                 }
                 tap.lastTapAt = now
                 if ThreeFingerTap.gestureBlockedByCapture("四指点按") { return }
-                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起并直接进未启动环(钉住)%@",
-                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 if tap.enabledFour {
                     DiagnosticRingBuffer.shared.recordThreeFingerFire(fourFinger: true)
                     tap.onFireFour?()
                 }
+                // ★ 2026-11-25:同三指那一支 —— 日志让位给唤起首帧 ✓
+                glog(String(format: "[指点按] 四指 %.0fms[state %@] 位移 norm=%.4f abs=%.1f size=%.1f major=%.1f → 唤起并直接进未启动环(钉住)%@",
+                            held, states, norm, absMove, maxSize, maxMajor, graceNote))
                 Haptics.fire(.summonFourFinger)
                 ThreeFingerTap.logPostFirePointerDrift("四指点按")
                 // (四指**轻点**不挂"拖拽撤销":轻点之后拖东西是正当用法 ✓ 见上面的长注 ✓)

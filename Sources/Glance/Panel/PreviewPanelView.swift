@@ -1103,8 +1103,8 @@ private struct WindowThumb<Overlay: View>: View {
     /// 我们不用绿 —— 用户口径"依旧保持跟随系统色" ✓),只是从标题前面挪到胶囊右端。
     private var chip: some View {
         HStack(spacing: 5) {
-            // 走统一的 `IconProvider`(后台异步解析 + 主线程零 XPC ✓,2026-11-20 淘汰独立同步的 AppIconCache)
-            Image(nsImage: IconProvider.art(for: record.pid, bundleID: bundleID).image)
+            // 走统一的 `IconProvider`(后台异步解析 + 主线程零 XPC ✓)；15pt 迷你图标用原多分辨率 `.smallImage` 防过锐
+            Image(nsImage: IconProvider.art(for: record.pid, bundleID: bundleID).smallImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
@@ -1548,20 +1548,36 @@ final class LivePreviewPool: ObservableObject, @unchecked Sendable {
     ///   ⇒ 起流带着"出发时的代数",回来发现代数变了 ⇒ 自己停掉/不注册 ✓
     private var epoch = 0
 
-    func stopAll(reason: String) {
+    /// - Parameter deferStreamTeardown: 点击确认切换场景传 `0.25` —— t=0ms 立刻落闸并清空 `activeGens`/`handles`
+    ///   （零帧解码、零主线程投递），把系统级 `SCStream.stopCapture()` XPC 延后到目标窗抬起之后再拆，
+    ///   避免在 WindowServer 切焦临界 200ms 内与目标窗争抢合成器（2026-11-27 实测：Dock 停流撞切焦令 Chrome/ELYTerminal
+    ///   AX raise 中位翻倍、P90 飙到 530ms 并连带冻住主线程 510–532ms ✓）。
+    func stopAll(reason: String, deferStreamTeardown: TimeInterval = 0) {
         isAccepting = false        // ★ 当场落闸:**在**任何排队工作之前(见 isAccepting 的病例)
         gateLock.lock(); epoch += 1; gateLock.unlock()   // ★ 代数 +1:路上那些起流一律作废
         startDebounce?.cancel(); startDebounce = nil
         queue.async { [weak self] in
             guard let self else { return }
             self.frozenSize.removeAll()          // ★ 规格必须跟着清(否则下一次起流仍用旧屏的像素尺寸 ✗)
-            let n = self.handles.count
-            for (_, h) in self.handles { Task { try? await h.stream.stopCapture() } }
+            let streamsToStop = self.handles.values.map(\.stream)
+            let n = streamsToStop.count
             self.handles.removeAll(); self.wanted.removeAll(); self.activeGens.removeAll()
             self.startedAt.removeAll(); self.firstFrameLogged.removeAll()
             self.idleSince.removeAll(); self.pending.removeAll()
             self.gateRetryScheduled = false
-            glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.latest.count) 张")
+            if deferStreamTeardown > 0, !streamsToStop.isEmpty {
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + deferStreamTeardown) {
+                    Task {
+                        for stream in streamsToStop {
+                            try? await stream.stopCapture()
+                        }
+                    }
+                }
+                glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.latest.count) 张(延后 \(Int(deferStreamTeardown * 1000))ms 拆流)")
+            } else {
+                for stream in streamsToStop { Task { try? await stream.stopCapture() } }
+                glog("[直播] 全部停流(\(reason)) 共 \(n) 条 · 帧保留 \(self.latest.count) 张")
+            }
         }
     }
 
@@ -2469,7 +2485,7 @@ struct ChipRailGroup: View {
                         : 0
         let title = PanelLayout.title(WindowTitle.display(raw: w.title, bundleID: bundleID))
         return HStack(spacing: 6) {
-            Image(nsImage: IconProvider.art(for: w.pid, bundleID: bundleID).image)
+            Image(nsImage: IconProvider.art(for: w.pid, bundleID: bundleID).smallImage)
                 .resizable()
                 .frame(width: PanelMetrics.chipIcon, height: PanelMetrics.chipIcon)
                 .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.chipIcon * 0.30,

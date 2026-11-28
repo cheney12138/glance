@@ -15,9 +15,18 @@ import AppKit
 ///     后台落缓存后发 `iconCacheDidFill` 通知,由视图层触发一次重画。
 enum IconProvider {
     struct Art {
+        /// 256×256 物理像素高清图：专用于主环 / 程序坞大图标（36…120pt），杜绝挑中 64px 变糊
         let image: NSImage
+        /// 原始多分辨率 `.icns` 图标：专用于轨道/卡片 15pt 迷你芯片图标（命中系统原生 32px 手绘表示，避免大降采样过度锐化）
+        let smallImage: NSImage
         /// 画布 ÷ 画面(≥1)。外面乘进 scaleEffect,画面就正好铺满 78pt 格子
         let fill: CGFloat
+
+        init(image: NSImage, smallImage: NSImage? = nil, fill: CGFloat) {
+            self.image = image
+            self.smallImage = smallImage ?? image
+            self.fill = fill
+        }
     }
 
     /// 图标账本:pid → 画面 + **取图时的 bundle id**。bundle 记进来是为了防两类错图:
@@ -30,8 +39,20 @@ enum IconProvider {
     private struct Entry { let art: Art; let bundleID: String? }
     private static var cache: [pid_t: Entry] = [:]
 
+    /// ★★ 2026-11-25 病例(用户:「新打开的 App 加到环/程序坞之后,先是白纸图标,要等一会才有真 logo」)
+    ///   —— **二级缓存:bundleID → 真图标**。
+    ///   pid 账本只认进程,而**重开一个 App 就是新 pid**;未启动环里早已加载过图标的 App,
+    ///   真跑起来又是新 pid ⇒ 两条路都必然 miss ⇒ 各自白纸一次起 ✗
+    ///   图标本身跟进程无关(它只跟 bundle 有关)⇒ 按 bundleID 再兜一层,命中就 0ms 出真 logo ✓
+    ///   ⚠️ **只存真图标,永不存 placeholder**(白纸一旦进二级缓存,所有入口就都顶着它了 ✗)
+    ///   ⚠️ 只在主线程读写(与 `cache` 同一线程纪律 ✓)
+    private static var bundleCache: [String: Art] = [:]
+
     /// 正在后台解析的 pid(去重:同一帧里多个格子/多次询问只发一次后台任务)
     private static var inflight: Set<pid_t> = []
+
+    /// 「新 App 启动」观察者已注册(幂等闸)
+    nonisolated(unsafe) private static var observingLaunches = false
 
     /// 后台解析完成的通知:object = pid。视图层监听并触发一次重画。
     static let iconCacheDidFill = Notification.Name("glance.iconCacheDidFill")
@@ -49,33 +70,136 @@ enum IconProvider {
         if let e = cache[pid] {
             if bundleID == nil || e.bundleID == nil || bundleID == e.bundleID { return e.art }
         }
+        // ★★ pid 未命中 ⇒ **先按 bundleID 查二级缓存**(0ms 出真图标,不画白纸)。
+        //   这条路覆盖两种以前必 miss 的情形:重开 App(新 pid)、未启动环里早就加载过的 App。
+        if let bid = bundleID, let hit = fillFromBundleCache(pid: pid, bundleID: bid) { return hit }
         // ★ 2026-11-19 病例(见文件头):未命中 → 后台解析,主线程只给占位。
         //   这里连 `NSRunningApplication(processIdentifier:)` 都不在主线程做
         //   (LaunchServices 查询本身也是一次同步 XPC,系统忙时同样会卡帧)。
         //   去重:inflight 有它 = 后台已经在路上,直接占位。
-        if inflight.contains(pid) { return placeholder }
+        resolveInBackground(pid: pid, bundleID: bundleID) { $0?.icon }
+        return placeholder
+    }
+
+    /// 后台解析一枚图标并落账(「去重 → 后台解析 → 回主线程落表 + 广播」只有这一份写法 ✓)
+    /// - Parameter image: 在**后台线程**上从已查到的 App 上取图(拿不到就返回 nil ⇒ 不落缓存,下次再试 ✓)
+    private static func resolveInBackground(pid: pid_t, bundleID: String?,
+                                            image: @escaping (NSRunningApplication?) -> NSImage?) {
+        guard !inflight.contains(pid) else { return }
         inflight.insert(pid)
         DispatchQueue.global(qos: .userInitiated).async {
-            defer { DispatchQueue.main.async { self.inflight.remove(pid) } }
-            guard let app = NSRunningApplication(processIdentifier: pid), let img = app.icon else {
-                return // 查不到:不落缓存(9-18 病例语义),主线程下一帧重试
-            }
-            let a = Art(image: img, fill: fillRatio(of: img))
+            defer { DispatchQueue.main.async { inflight.remove(pid) } }
+            let app = NSRunningApplication(processIdentifier: pid)
+            // 查不到 / 刚拉起的进程还没有图标 ⇒ **不落缓存**(9-18 病例语义:占位绝不许固化),下次重试 ✓
+            guard let img = image(app) else { return }
+            let crisp = crispImage(from: img)
+            let art = Art(image: crisp, smallImage: img, fill: fillRatio(of: crisp))
             DispatchQueue.main.async {
-                cache[pid] = Entry(art: a, bundleID: app.bundleIdentifier)
-                NotificationCenter.default.post(name: iconCacheDidFill, object: pid)
+                store(pid: pid, bundleID: app?.bundleIdentifier ?? bundleID, art: art)
             }
         }
-        return placeholder
+    }
+
+    /// bundleID 二级缓存命中 ⇒ **当场**回填 pid 主缓存并返回(0ms 出真 logo ✓)。未命中返回 nil。
+    ///
+    /// ⚠️ 为什么命中之后还要派一次后台复核:二级缓存是**跨 pid** 的 —— 一个 App 升级换了图标,
+    ///   它不会自己失效(那就变成"换了图标重启 App,Glance 里还是旧图"✗)。
+    ///   复核成本很低:每个 pid **只发一次**(`inflight` 去重),图标没变时原地覆盖、零视觉变化 ✓
+    private static func fillFromBundleCache(pid: pid_t, bundleID: String) -> Art? {
+        guard let hit = bundleCache[bundleID] else { return nil }
+        cache[pid] = Entry(art: hit, bundleID: bundleID)
+        resolveInBackground(pid: pid, bundleID: bundleID) { $0?.icon }
+        return hit
+    }
+
+    /// 落账(**只许主线程调**):pid 主缓存 + bundleID 二级缓存 + 广播一次 ✓
+    private static func store(pid: pid_t, bundleID: String?, art: Art) {
+        cache[pid] = Entry(art: art, bundleID: bundleID)
+        if let bid = bundleID, !bid.isEmpty { bundleCache[bid] = art }
+        NotificationCenter.default.post(name: iconCacheDidFill, object: pid)
     }
 
     /// 后台预热单枚图标(由启动保温在后台线程调用:计算 fillRatio 也在后台完成,回主线程仅落表)
     static func prewarm(pid: pid_t, bundleID: String?, image: NSImage) {
-        let a = Art(image: image, fill: fillRatio(of: image))
+        let crisp = crispImage(from: image)
+        let a = Art(image: crisp, smallImage: image, fill: fillRatio(of: crisp))
         DispatchQueue.main.async {
+            // 二级缓存先落(它跟 pid 无关,谁先到都算数 ✓;已有真图标就不覆盖)
+            if let bid = bundleID, !bid.isEmpty, bundleCache[bid] == nil { bundleCache[bid] = a }
             if let e = cache[pid], bundleID == nil || e.bundleID == nil || bundleID == e.bundleID { return }
             cache[pid] = Entry(art: a, bundleID: bundleID)
         }
+    }
+
+    /// **给二级缓存预填**一枚真图标(供 `DockAppsProvider` 在后台加载"未启动 App"图标时顺手调 ✓)。
+    /// 为什么需要它:未启动环 / 系统 Dock 里的 App 早就被 `NSWorkspace.icon(forFile:)` 加载过一遍真图标了 ——
+    /// 它一旦真跑起来,面板/程序坞那张图**本来就在手里**,没必要再从 pid 重新解析一次(那一次就是白纸 ✓)。
+    /// ⚠️ 已有就不覆盖(先落的那份一定来自真实进程/真实 bundle,可信度更高 ✓)
+    /// ⚠️ 可在任意线程调用:二级缓存是主线程账本,后台线程写一律切回主线程 ✓
+    static func seedBundleCache(bundleID: String, image: NSImage, smallImage: NSImage, fill: CGFloat) {
+        guard !bundleID.isEmpty else { return }
+        let art = Art(image: image, smallImage: smallImage, fill: fill)
+        if Thread.isMainThread {
+            if bundleCache[bundleID] == nil { bundleCache[bundleID] = art }
+        } else {
+            DispatchQueue.main.async {
+                if bundleCache[bundleID] == nil { bundleCache[bundleID] = art }
+            }
+        }
+    }
+
+    /// ★★ 根因 A 修复(2026-11-25):**新拉起的 App 也必须有人预热**。
+    /// 原来只有 `warmIconsInBackground` 在 Glance 启动那一刻给"当时的"在跑 App 预热;
+    /// 之后新开的 App 谁也管不到 ⇒ 首次被画到必然 miss ⇒ 先白纸,等后台解析落账才换真 logo ✗
+    /// ⇒ 挂 `didLaunchApplication` 通知:新 App 一落地就在后台把它那枚图标解析好,
+    ///   等用户唤起面板/程序坞时它**已经在账上**了(0ms 出真 logo ✓)。
+    /// 幂等:只注册一次 ✓
+    static func startObservingLaunches() {
+        guard !observingLaunches else { return }
+        observingLaunches = true
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            let pid = app.processIdentifier
+            let bid = app.bundleIdentifier
+            // 已在账上且 bundle 对得上 ⇒ 不用动(pid 复用/重复通知都在这里挡住 ✓)
+            if let e = cache[pid], bid == nil || e.bundleID == nil || bid == e.bundleID { return }
+            if let bid, fillFromBundleCache(pid: pid, bundleID: bid) != nil { return }
+            // ⚠️ 刚拉起的一瞬 `icon` 可能还是 nil ⇒ 不落缓存(见 `resolveInBackground`),
+            //   下一帧 `art(for:)` 看到 inflight 清空会自己重试 ✓
+            resolveInBackground(pid: pid, bundleID: bid) { _ in app.icon }
+        }
+    }
+
+    /// 把"还没命中的"新 pid 一次性派给后台预热 —— 兜住**不产生 `didLaunch` 通知**的那些进程
+    /// (辅助 App、由别的进程拉起且系统没发通知的、以及我们自己启动得太快的那一瞬 ✓)。
+    /// 幂等且便宜:已命中/已 inflight 的直接跳过,主线程只做字典查询 ✓
+    static func prewarmMissing(for apps: [(pid: pid_t, bundleID: String?)]) {
+        for app in apps {
+            if let e = cache[app.pid], app.bundleID == nil || e.bundleID == nil || app.bundleID == e.bundleID {
+                continue
+            }
+            if let bid = app.bundleID, fillFromBundleCache(pid: app.pid, bundleID: bid) != nil { continue }
+            resolveInBackground(pid: app.pid, bundleID: app.bundleID) { $0?.icon }
+        }
+    }
+
+    /// 从多分辨率 `.icns` `NSImage` 中显式提取 256×256 物理像素的高清位图（128×128pt @2x）。
+    ///
+    /// 病例(2026-11-24 用户实拍反馈程序坞图标缩小后变糊):
+    /// `NSRunningApplication.icon` 默认 `size = 32×32 pt`，SwiftUI `Image(nsImage:)` 在缩放时可能挑中
+    /// 64×64px 低分表示再放大到 56pt×1.24(140px 物理像素)，导致边缘发虚。
+    /// 在后台线程显式提 256px 源图后，任意 36…120pt 展示都走高清下采样，边缘与原生 Retina 一致锐利。
+    nonisolated static func crispImage(from source: NSImage, pixels: Int = 256) -> NSImage {
+        var rect = NSRect(x: 0, y: 0, width: pixels, height: pixels)
+        let hints: [NSImageRep.HintKey: Any] = [.interpolation: NSImageInterpolation.high.rawValue]
+        guard let cg = source.cgImage(forProposedRect: &rect, context: nil, hints: hints) else {
+            return source
+        }
+        let logical = CGFloat(pixels) / 2.0
+        return NSImage(cgImage: cg, size: NSSize(width: logical, height: logical))
     }
 
     /// 量画面占画布的比例(取倒数 = 补偿倍率)。

@@ -42,11 +42,85 @@ private func getProcessForPID(_ pid: pid_t, _ psn: UnsafeMutablePointer<ProcessS
 
 @MainActor
 enum WindowFocuser {
+    /// SLPSMode.allWindows: 仅在确认系统全屏只有目标这一扇可见窗时与 userGenerated 合用，
+    /// 让 WindowServer 在 t=0ms 直接抬升该窗 Z 序，跳过跨进程 AX IPC 排队，且绝不级联拉起多窗 App 的其他窗 ✓
+    private static let modeAllWindows: UInt32 = 0x100
     /// SLPSMode.userGenerated:把这次前置标记为用户发起,防止被系统抑制
     private static let modeUserGenerated: UInt32 = 0x200
 
     /// 降级只警告一次(ADR-0002:首次降级弹一次告警,之后静默)
     private static var degradedWarned = false
+    /// 聚焦代号:每次 `focus(window:)` 自增,用于取消过期的延迟核验与重试(绝不抢走用户新切的 App ✓)
+    private static var focusEpoch: UInt64 = 0
+    /// 后台 AX raise 独立超时(秒):覆盖全仓 0.5s 全局短超时,避免 Chrome/Electron 收到激活重绘时被 500ms 一刀切超时
+    private static let raiseMessagingTimeout: Float = 1.2
+
+    // MARK: - AX 窗口元素缓存（消掉多窗 App 每次点击重扫 kAXWindowsAttribute 的 50~150ms IPC）
+
+    private struct CachedAXWindow {
+        let pid: pid_t
+        let element: AXUIElement
+        let cachedAt: CFAbsoluteTime
+    }
+    private static let axCacheLock = NSLock()
+    private static let axCacheTTL: CFAbsoluteTime = 60
+    private static let axCacheLimit = 64
+    private nonisolated(unsafe) static var axElementCache: [CGWindowID: CachedAXWindow] = [:]
+    private nonisolated(unsafe) static var axPrewarmInFlight: Set<CGWindowID> = []
+
+    /// 悬停预热目标窗的 `AXUIElement`（Dock hover / 切选窗时后台提前做完 `kAXWindowsAttribute` 扫描），
+    /// 点击瞬间 `raiseWithinApp` 直接发 1 条 `kAXRaiseAction` IPC，跳过整套窗口枚举 ✓
+    nonisolated static func prewarmAXElement(pid: pid_t, wid: CGWindowID) {
+        guard wid != 0, pid != getpid() else { return }
+        if cachedAXElement(pid: pid, wid: wid) != nil { return }
+        axCacheLock.lock()
+        let inserted = axPrewarmInFlight.insert(wid).inserted
+        axCacheLock.unlock()
+        guard inserted else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer {
+                axCacheLock.lock()
+                axPrewarmInFlight.remove(wid)
+                axCacheLock.unlock()
+            }
+            _ = axWindowElement(pid: pid, wid: wid, timeout: 0.5)
+        }
+    }
+
+    nonisolated private static func cachedAXElement(pid: pid_t, wid: CGWindowID) -> AXUIElement? {
+        axCacheLock.lock()
+        defer { axCacheLock.unlock() }
+        guard let entry = axElementCache[wid] else { return nil }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard entry.pid == pid, now - entry.cachedAt <= axCacheTTL else {
+            axElementCache.removeValue(forKey: wid)
+            return nil
+        }
+        return entry.element
+    }
+
+    nonisolated private static func storeAXElement(_ element: AXUIElement, pid: pid_t, wid: CGWindowID) {
+        axCacheLock.lock()
+        defer { axCacheLock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        axElementCache[wid] = CachedAXWindow(pid: pid, element: element, cachedAt: now)
+        if axElementCache.count > axCacheLimit {
+            // 先清过期项，仍超上限则踢最旧的一批
+            axElementCache = axElementCache.filter { now - $0.value.cachedAt <= axCacheTTL }
+            if axElementCache.count > axCacheLimit {
+                let oldest = axElementCache.sorted { $0.value.cachedAt < $1.value.cachedAt }
+                for (oldWID, _) in oldest.prefix(axElementCache.count - axCacheLimit) {
+                    axElementCache.removeValue(forKey: oldWID)
+                }
+            }
+        }
+    }
+
+    nonisolated private static func evictAXElement(wid: CGWindowID) {
+        axCacheLock.lock()
+        defer { axCacheLock.unlock() }
+        axElementCache.removeValue(forKey: wid)
+    }
 
     /// 确认语义的唯一生效动作:聚焦这扇窗,世界其余部分纹丝不动。
     /// 三步(与 alt-tab 收敛同一处实):
@@ -94,6 +168,15 @@ enum WindowFocuser {
             focusOwnWindow(w)
             return
         }
+        focusEpoch &+= 1
+        let epoch = focusEpoch
+        let beforePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let beforeName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+
+        // 隐藏态 App(⌘H)的缓存条目万一被点到,先 unhide 再前置,避免菜单栏换了却不出窗 ✓
+        if let app = NSRunningApplication(processIdentifier: w.pid), app.isHidden {
+            app.unhide()
+        }
         yieldActivationIfWeAreActive(pid: w.pid)   // ★ 见上:不让位的话后面全是"成功谎言" ✗
         var psn = ProcessSerialNumber()
         guard getProcessForPID(w.pid, &psn) == noErr else {
@@ -104,8 +187,22 @@ enum WindowFocuser {
             degrade(w, reason: "私有符号 _SLPSSetFrontProcessWithOptions 不存在(系统版本抽风?)")
             return
         }
+        // ★★ 2026-11-27 三修（361 笔 trace.log 实测证据）：
+        //   ① 二修传 `0x100 | 0x200`（0x300）配非零 `w.wid`，在 macOS 26 SkyLight 里仍按单窗 `kCPSUserGenerated`
+        //      处理（focus-without-raise）：360 次「单窗SLPS直抬」里凡是后台 `kAXRaiseAction > 60ms`
+        //      100% 触发 60ms Z 序未置顶 —— 证明 `0x300 + wid` 并未在 t=0ms 抬窗 ✗；
+        //   ② `SLPSMode` 是互斥枚举（0x100 allWindows / 0x200 userGenerated / 0x400 noWindows）：
+        //      确认全系统该进程仅有 `w.wid` 这一扇可见窗（零级联拉起风险）时，传 `(wid: 0, mode: 0x100)`
+        //      走纯粹的 `allWindows` 直抬路，失败再退回 `(wid: w.wid, mode: 0x200)`；
+        //      多窗 / 跨屏多窗 App 严格保持 `(wid: w.wid, mode: 0x200)` 单窗语义，走预缓存 AXUIElement 快路 ✓
+        let singleWindowFastPath = isSingleVisibleWindowSystemWide(pid: w.pid, wid: w.wid)
+        let primaryWid: CGWindowID = singleWindowFastPath ? 0 : w.wid
+        let primaryMode: UInt32 = singleWindowFastPath ? modeAllWindows : modeUserGenerated
         let t0 = CFAbsoluteTimeGetCurrent()
-        let frontErr = setFront(&psn, w.wid, modeUserGenerated)
+        var frontErr = setFront(&psn, primaryWid, primaryMode)
+        if singleWindowFastPath, frontErr != .success {
+            frontErr = setFront(&psn, w.wid, modeUserGenerated)
+        }
         guard frontErr == .success else {
             degrade(w, reason: "_SLPSSetFrontProcessWithOptions err=\(frontErr.rawValue)")
             return
@@ -113,71 +210,212 @@ enum WindowFocuser {
         let t1 = CFAbsoluteTimeGetCurrent()
         makeKeyWindow(&psn, wid: w.wid)
         let t2 = CFAbsoluteTimeGetCurrent()
-        // ★★ 2026-09-24:**AX raise 挪到后台**。它是"这一 App 里哪扇窗在最上"的校正,
-        //   不该挡住切换本身 —— 实测它在忙的 App 上要 48–83ms ✗,而用户在按下去的那一刻
-        //   已经切过去了(设前台 + 补 key 都已完成 ✓)。放在主线程 = 白等 ✗
-        //   (同一 App 的落焦窗在绝大多数情况下本来就是对的 ⇒ 晚几十毫秒的校正看不出来 ✓)
+        // ★★ 2026-09-24:**AX raise 挪到后台**。
+        // ★★ 2026-11-25 / 11-27:
+        //   ① 后台 raise 独立设 1.2s 超时 + `.userInteractive` 优先级 + `AXUIElement` 缓存快路（命中跳过 kAXWindowsAttribute 扫描）；
+        //   ② 失败时若仍在同一聚焦代号,0.12s 后补重试一次；
+        //   ③ 0.06s 快检 + 0.18s 兜底核验(`verifyFronted`):应对 macOS 26 偶发“进程已前台且 AX 返回 success 但窗仍被压住”(AltTab #6064) ✓
         let pid = w.pid, wid = w.wid, owner = w.ownerName
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInteractive).async {
             let t3 = CFAbsoluteTimeGetCurrent()
-            raiseWithinApp(pid: pid, wid: wid)
+            let outcome = raiseWithinApp(pid: pid, wid: wid, timeout: Self.raiseMessagingTimeout)
             if isTraceEnabled, (CFAbsoluteTimeGetCurrent() - t3) * 1000 >= 20 {
-                glog(String(format: "[T7] AX raise(后台) 用时 %.0fms @%@",
-                            (CFAbsoluteTimeGetCurrent() - t3) * 1000, owner))
+                glog(String(format: "[T7] AX raise(后台) 用时 %.0fms ok=%@ cache=%@ @%@",
+                            (CFAbsoluteTimeGetCurrent() - t3) * 1000,
+                            outcome.raised ? "true" : "false",
+                            outcome.cacheHit ? "hit" : "miss",
+                            owner))
+            }
+            if !outcome.raised {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    guard epoch == Self.focusEpoch else { return }
+                    let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    guard front == pid || front == beforePID else { return }
+                    DispatchQueue.global(qos: .userInteractive).async {
+                        _ = raiseWithinApp(pid: pid, wid: wid, timeout: Self.raiseMessagingTimeout)
+                    }
+                }
             }
         }
         if isTraceEnabled, (t2 - t0) * 1000 >= 20 {
-            glog(String(format: "[T7] 同步段 %.0fms(设前台 %.0f · 补 key %.0f) @%@ —— AX raise 已挪后台 ✓",
-                        (t2 - t0) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000, owner))
+            glog(String(format: "[T7] 同步段 %.0fms(设前台 %.0f · 补 key %.0f · mode=0x%X) @%@ —— AX raise 已挪后台 ✓",
+                        (t2 - t0) * 1000, (t1 - t0) * 1000, (t2 - t1) * 1000, primaryMode, owner))
         }
-        glog("[T7] 已聚焦: \(w.ownerName) — \(w.title)")
-        verifyFronted(w, since: t0)
+        glog("[T7] 已聚焦\(singleWindowFastPath ? "(单窗SLPS-0x100)" : ""): \(w.ownerName) — \(w.title)")
+        verifyFronted(w, beforePID: beforePID, beforeName: beforeName, epoch: epoch, singleWindowFastPath: singleWindowFastPath)
     }
 
-    /// ★★ 聚焦**事后核验 + 降级补发**(2026-09-25,用户实报「点 Ghostty 唤不起来,点 App/点卡都不行」)。
+    /// ★★ 聚焦**事后核验 + Z 序复核 + 降级补发**(2026-09-25 首建,2026-11-25 补齐 Z 序盲区,2026-11-27 补 60ms 快检)。
     ///
-    /// 病例(日志铁证):`已聚焦: Ghostty` 打出后 **371ms**,用户再按 ⌘Tab,面板开局仍报
-    ///   `当前=Apifox` —— 也就是说 `_SLPSSetFrontProcessWithOptions` 返回了 `.success`,
-    ///   而前置**根本没发生** ✗。私有 API 的"成功谎言"在日志里完全看不见(三步全绿),
-    ///   用户看到的是"点了没反应,而且个别 App 才这样"。
-    /// 处方(与 D1 毒账本同一哲学:判卷不跑 = 沉默失效 ⇒ 必须有人复核):
-    ///   0.5s 后看一眼**谁是真前台** ——
-    ///     · 已是目标 ✓ ⇒ 收工;
-    ///     · 还是**原来那个** App ⇒ SLPS 静默失败实锤 ⇒ 公共 API `activate` 补一发
-    ///       (级联拉起,但"唤得醒"是底线 —— 与 degrade 同一口径);
-    ///     · 是**第三个** App ⇒ 用户已经去了别处 ⇒ **别抢** ✗(这条最重要)。
-    private static func verifyFronted(_ w: WindowRecord, since t0: CFAbsoluteTime) {
-        // 此刻(确认那一拍)的前台 = 用户正要离开的那个 App(我们的面板 nonactivating,不占前台)
-        guard let before = NSWorkspace.shared.frontmostApplication,
-              before.processIdentifier != w.pid else { return }   // 重激活当前 App:必然"成功",不用验
-        let beforePID = before.processIdentifier
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            guard front != w.pid else { return }                       // ✓ 成了
-            guard front == beforePID else { return }                   // 用户去了第三处 ⇒ 不抢
-            DiagnosticRingBuffer.shared.recordSLPSVerifyFallback()
-            glog("[T7] ⚠️ 聚焦核验:0.5s 后仍是 \(before.localizedName ?? "?") 在前台 ⇒ "
-                 + "SLPS 成功是谎言,降级 activate 补一发 @\(w.ownerName)")
-            NSRunningApplication(processIdentifier: w.pid)?.activate(options: [])
+    /// 两条失败模式都要兜住:
+    ///   1. 进程根本没前置(`front == beforePID != w.pid`)⇒ SLPS 静默失败 ⇒ 公共 `activate` 补一发;
+    ///   2. 进程已前置(`front == w.pid`,MRU 已变第 1 位),但 `CGWindowList` Z 序里这扇窗仍被
+    ///      其他进程的普通窗盖着(macOS 26 偶发首轮 raise 落在激活完成前被目标 App 静默吞掉,AltTab #6064)⇒
+    ///      60ms 轻量 CG 快检发现即刻重发 SLPS + AX raise;180ms 做最终兜底 ✓
+    /// 若期间用户又发了新切换(`epoch != focusEpoch`)或去了第三处(`front != w.pid && front != beforePID`)⇒ 绝不抢 ✓
+    private static func verifyFronted(
+        _ w: WindowRecord,
+        beforePID: pid_t?,
+        beforeName: String,
+        epoch: UInt64,
+        singleWindowFastPath: Bool
+    ) {
+        // 60ms 快检：仅在进程已前置且窗口仍被别进程普通窗压住时才补发一次 raise（已置顶 = 0 副作用、~0.4ms CG 查询）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            guard epoch == Self.focusEpoch else { return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == w.pid else { return }
+            guard isWindowOccludedOnScreen(wid: w.wid, pid: w.pid, bounds: w.bounds) else { return }
+            if isTraceEnabled {
+                glog("[T7] ⚡ 60ms Z 序快检未置顶(wid=\(w.wid)) ⇒ 补发 SLPS + AX raise @\(w.ownerName)")
+            }
+            var psn = ProcessSerialNumber()
+            if getProcessForPID(w.pid, &psn) == noErr, let setFront = SLPS.setFrontProcess {
+                if singleWindowFastPath {
+                    if setFront(&psn, 0, modeAllWindows) != .success {
+                        _ = setFront(&psn, w.wid, modeUserGenerated)
+                    }
+                } else {
+                    _ = setFront(&psn, w.wid, modeUserGenerated)
+                }
+            }
+            let pid = w.pid, wid = w.wid
+            DispatchQueue.global(qos: .userInteractive).async {
+                _ = raiseWithinApp(pid: pid, wid: wid, timeout: Self.raiseMessagingTimeout)
+            }
         }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            guard epoch == Self.focusEpoch else { return }
+            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+            if front != w.pid {
+                guard let beforePID, front == beforePID else { return }    // 用户去了第三处 ⇒ 不抢
+                DiagnosticRingBuffer.shared.recordSLPSVerifyFallback()
+                glog("[T7] ⚠️ 聚焦核验:0.18s 后仍是 \(beforeName) 在前台 ⇒ "
+                     + "SLPS 成功是谎言,降级 activate 补一发 @\(w.ownerName)")
+                if let app = NSRunningApplication(processIdentifier: w.pid) {
+                    if app.isHidden { app.unhide() }
+                    app.activate(options: [])
+                }
+                let pid = w.pid, wid = w.wid
+                DispatchQueue.global(qos: .userInteractive).async {
+                    _ = raiseWithinApp(pid: pid, wid: wid, timeout: Self.raiseMessagingTimeout)
+                }
+                return
+            }
+
+            // 进程已是目标(MRU 已更新)⇒ 再核验一遍窗口 Z 序,防止"菜单栏变了、窗口还埋在下面"
+            guard isWindowOccludedOnScreen(wid: w.wid, pid: w.pid, bounds: w.bounds) else { return }
+            DiagnosticRingBuffer.shared.recordSLPSVerifyFallback()
+            glog("[T7] ⚠️ 窗口 Z 序核验未置顶(wid=\(w.wid)) ⇒ 进程已前台但窗被压住,补发 SLPS + activate + AX raise @\(w.ownerName)")
+            var psn = ProcessSerialNumber()
+            if getProcessForPID(w.pid, &psn) == noErr {
+                if let setFront = SLPS.setFrontProcess {
+                    if setFront(&psn, 0, modeAllWindows) != .success {
+                        _ = setFront(&psn, w.wid, modeUserGenerated)
+                    }
+                }
+                makeKeyWindow(&psn, wid: w.wid)
+            }
+            if let app = NSRunningApplication(processIdentifier: w.pid) {
+                if app.isHidden { app.unhide() }
+                app.activate(options: .activateAllWindows)
+            }
+            let pid = w.pid, wid = w.wid
+            DispatchQueue.global(qos: .userInteractive).async {
+                _ = raiseWithinApp(pid: pid, wid: wid, timeout: Self.raiseMessagingTimeout)
+            }
+        }
+    }
+
+    /// 纯 CG 快速检查（~0.4ms）：目标进程全系统可见普通窗是否严格仅有 `wid` 这一扇。
+    /// 仅在正向确认 `matchedCount == 1 && seenTarget` 时允许走 `modeAllWindows | modeUserGenerated` 0ms 直抬，
+    /// 多窗、跨屏双窗、隐藏态或跨 Space 不可见窗一律返回 false，绝不破坏“不级联拉起其他窗”的核心定位 ✓
+    nonisolated private static func isSingleVisibleWindowSystemWide(pid: pid_t, wid: CGWindowID) -> Bool {
+        guard let list = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+
+        var matchedCount = 0
+        var seenTarget = false
+        for info in list {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID == pid,
+                  let num = info[kCGWindowNumber as String] as? Int,
+                  let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0.01,
+                  let b = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: b),
+                  rect.width > 60, rect.height > 60 else { continue }
+            matchedCount += 1
+            if CGWindowID(num) == wid {
+                seenTarget = true
+            }
+            if matchedCount > 1 {
+                return false
+            }
+        }
+        return matchedCount == 1 && seenTarget
+    }
+
+    /// 只读 Z 序核验:在 `CGWindowList` 从前到后的普通层窗口里,目标窗 `wid` 是否被其他进程的
+    /// 普通窗口明显遮挡(或根本不在在屏列表里)。纯 CoreGraphics 毫秒级查询,不碰 AX ✓
+    nonisolated private static func isWindowOccludedOnScreen(
+        wid: CGWindowID,
+        pid: pid_t,
+        bounds targetBounds: CGRect
+    ) -> Bool {
+        let targetArea = targetBounds.width * targetBounds.height
+        guard targetArea > 0,
+              let list = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+              ) as? [[String: Any]] else { return false }
+
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        for info in list {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID != ownPID,
+                  let num = info[kCGWindowNumber as String] as? Int else { continue }
+            let currentWID = CGWindowID(num)
+            if currentWID == wid {
+                // 在遇到它之前没碰见任何盖住它的别进程普通窗 ⇒ 已在最前 ✓
+                return false
+            }
+            if ownerPID == pid { continue }
+            guard let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0.01,
+                  let b = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: b),
+                  rect.width > 60, rect.height > 60 else { continue }
+            let inter = rect.intersection(targetBounds)
+            if !inter.isNull, !inter.isEmpty,
+               (inter.width * inter.height) / targetArea >= 0.25 {
+                return true
+            }
+        }
+        // 在屏列表里根本没找到它(可能被隐藏或最小化没还出来)⇒ 视为未置顶
+        return true
     }
 
     // MARK: - 私有区(以下不许被外部调用,也不许离开这个文件)
 
-    /// macOS 14 之后公共 API 无法跨进程设 key 窗。合成一条 mouse-down 投递给 WindowServer,
-    /// 落点远在 300000,300000——按 alt-tab 实测:只发 down 就能完成 makeKey,
-    /// 且"半条点击"永远无法激活任何控件(down-only、off-content 落点,alt-tab #5381 的教训)
+    /// macOS 14 之后公共 API 无法跨进程设 key 窗。向 WindowServer 投递配对的合成 mouse-down + mouse-up，
+    /// 全局坐标（0x10）与窗内坐标（0x20）均落在内容区之外的 (300000, 300000)——对齐 AltTab WindowFocusEventSpecs：
+    /// 成对 down/up 避免 Chromium/Electron/SDL 停留在悬空 mouse-down 状态，且离内容区落点永不误触任何控件 ✓
     private static func makeKeyWindow(_ psn: inout ProcessSerialNumber, wid: CGWindowID) {
         guard let postEvent = SLPS.postEventRecord else { return }
         var mutableWid = wid
         var point = CGPoint(x: 300_000, y: 300_000)
         var bytes = [UInt8](repeating: 0, count: 0x100)
-        bytes[0x04] = 0xF8 // 记录自身声明长度
-        bytes[0x3A] = 0x10 // 未文档化标志(yabai/Hammerspoon 同值)
-        memcpy(&bytes[0x3C], &mutableWid, MemoryLayout<CGWindowID>.size)
+        bytes[0x04] = 0xF8 // 记录自身声明长度（0x100 缓冲区给 macOS 14.7.4+ 留安全零填充）
+        bytes[0x3A] = 0x10 // 未文档化标志(yabai/Hammerspoon/AltTab 同值)
+        memcpy(&bytes[0x10], &point, MemoryLayout<CGPoint>.size)
         memcpy(&bytes[0x20], &point, MemoryLayout<CGPoint>.size)
-        bytes[0x08] = 0x01 // kCGEventLeftMouseDown(只发 down)
-        _ = postEvent(&psn, &bytes)   // CGError 不用:补焦是"尽人事",失败不该中断流程 ✓
+        memcpy(&bytes[0x3C], &mutableWid, MemoryLayout<CGWindowID>.size)
+        bytes[0x08] = 0x01 // kCGEventLeftMouseDown
+        _ = postEvent(&psn, &bytes)
+        bytes[0x08] = 0x02 // kCGEventLeftMouseUp（配对闭合，防止目标 App 挂起 pending focus click）
+        _ = postEvent(&psn, &bytes)
     }
 
     /// 聚焦**自家的窗**(设置/权限)—— 公开配方,不用私有 SLPS ✓
@@ -193,32 +431,60 @@ enum WindowFocuser {
         glog("[T7] 已聚焦(自家窗): \(w.ownerName) — \(w.title)")
     }
 
-    /// AX raise:在 App 自己的窗口栈里把它顶到最上。元素→wid 只能枚举比对,失败静默
-    private static func raiseWithinApp(pid: pid_t, wid: CGWindowID) {
-        guard let element = axWindowElement(pid: pid, wid: wid) else {
+    /// AX raise:在 App 自己的窗口栈里把它顶到最上。优先走预缓存的 `AXUIElement`（1 次 IPC），
+    /// 未命中或失效时自动淘汰并退回全量枚举，返回是否成功及是否命中缓存供诊断与重试。
+    @discardableResult
+    nonisolated private static func raiseWithinApp(
+        pid: pid_t,
+        wid: CGWindowID,
+        timeout: Float? = nil
+    ) -> (raised: Bool, cacheHit: Bool) {
+        if let cached = cachedAXElement(pid: pid, wid: wid) {
+            if let timeout {
+                AXUIElementSetMessagingTimeout(cached, timeout)
+            }
+            if AXUIElementPerformAction(cached, kAXRaiseAction as CFString) == .success {
+                _ = AXUIElementSetAttributeValue(cached, kAXMainAttribute as CFString, kCFBooleanTrue)
+                return (true, true)
+            }
+            // 缓存元素已失效（窗口重建/关闭）⇒ 淘汰并走慢路重找
+            evictAXElement(wid: wid)
+        }
+        guard let element = axWindowElement(pid: pid, wid: wid, timeout: timeout) else {
             if isTraceEnabled { glog("[T7] ⚠️ AX raise 没找到窗口元素(wid=\(wid))⇒ 这一发没抬起来") }
-            return
+            return (false, false)
+        }
+        if let timeout {
+            AXUIElementSetMessagingTimeout(element, timeout)
         }
         let err = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
-        if err != .success, isTraceEnabled {
-            glog("[T7] ⚠️ AX raise 失败 err=\(err.rawValue) wid=\(wid)")
+        if err != .success {
+            evictAXElement(wid: wid)
+            if isTraceEnabled { glog("[T7] ⚠️ AX raise 失败 err=\(err.rawValue) wid=\(wid)") }
+            return (false, false)
         }
+        _ = AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        return (true, false)
     }
 
     /// wid → AX 元素(唯一正统桥:枚举该 App 所有窗逐个比对,alt-tab 同法)
-    private static func axWindowElement(pid: pid_t, wid: CGWindowID) -> AXUIElement? {
+    nonisolated private static func axWindowElement(pid: pid_t, wid: CGWindowID, timeout: Float? = nil) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
+        if let timeout {
+            AXUIElementSetMessagingTimeout(app, timeout)
+        }
         // ⚠️⚠️ 2026-09-24 **不要**在这里加短超时限制(踩过):
         //   我一度给它压了 80ms(为了"切换不等 AX")—— 但实测 AX raise 本身就要 **42–92ms**
         //   (忙的 App 更久)⇒ 80ms 正好把它们压超时 ⇒ `axWindowElement` 返回 nil
         //   ⇒ **raise 静默失败** ⇒ 用户看到的是「点击 App 唤不起来,而且个别 App 才这样」✗✗
-        //   而"切换不等 AX"这件事**已经由后台分发解决了**(见 focus 里那段 ✓)⇒ 这里不需要上限 ✓
+        //   而"切换不等 AX"这件事**已经由后台分发解决了**(见 focus 里那段 ✓)⇒ 后台路径允许传 1.2s 覆写全局 0.5s ✓
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let elements = value as? [AXUIElement] else { return nil }
         for element in elements {
             var elementWid: CGWindowID = 0
             if _AXUIElementGetWindow(element, &elementWid) == .success, elementWid == wid {
+                storeAXElement(element, pid: pid, wid: wid)
                 return element
             }
         }

@@ -479,6 +479,9 @@ extension PanelController {
     ///   false = 只补缺图 —— 「陈旧名单 → 新鲜枚举」那一趟用它,免得在入场那几帧里重拍已有的图
     func applyRefreshed(_ raw: [AppGroup], keepPID: pid_t?, keepWin: Int,
                         forceReshoot: Bool = true, resizeWindow: Bool = true) {
+        // ★★ 2026-11-25:重枚举里冒出来的新 App(刚启动/刚接活的)先派后台预热 ——
+        //   已命中 bundleID 二级缓存的当场 0ms 回填,其余抢在本帧之后尽快落账 ✓
+        IconProvider.prewarmMissing(for: raw.map { (pid: $0.pid, bundleID: $0.bundleID) })
         reconcileMinimizedMarks(raw)
         applyList(mergeRefreshed(raw), keepPID: keepPID, keepWin: keepWin,
                   forceReshoot: forceReshoot, resizeWindow: resizeWindow)
