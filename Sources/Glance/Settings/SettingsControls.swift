@@ -149,7 +149,9 @@ struct SettingsRow<Trailing: View>: View {
                     .padding(.vertical, 2)
             }
             .onHover { over in
-                withAnimation(MotionPolicy.animation(.easeOut(duration: 0.14))) { hovered = over }
+                // hover 淡底走 `SettingsMotion.hover`(2026-11-25:原来这里是一条裸 `.easeOut(0.14)`,
+                // 绕过 token ⇒ 改 hover 手感时要改两处;收回 `SettingsMotion.hover` 后一处生效 ✓)
+                withAnimation(MotionPolicy.animation(SettingsMotion.hover)) { hovered = over }
             }
 
             if hairline {
@@ -207,6 +209,9 @@ struct KeyChip: View {
                     // 描边在 = 能改;描边满 = 正在录。只读的那枚一根线都没有
                     .opacity(highlighted ? 1 : (editable ? 0.4 : 0))
             )
+            // 录制点灯/熄灭:描边、底色、前景色一起柔和过渡(参数驱动 ⇒ 减少动效下也在演 ✓)
+            // 挂在最外层,一处覆盖上面三处色值
+            .animation(MotionPolicy.animation(SettingsMotion.status), value: highlighted)
     }
 }
 
@@ -222,7 +227,11 @@ struct PermissionBadge: View {
             Text(granted ? "已授权" : "未授权")
                 .font(SettingsFont.rowValue)
                 .foregroundStyle(SettingsTheme.ink2)
+                // 文字换内容时交叉淡化(不是硬跳);与圆点变色同一条曲线、同一拍 ✓
+                .contentTransition(.opacity)
         }
+        // 授权状态是**异步到达**的(系统弹窗点完之后才变):平滑过渡才不会读成"闪了一下" ✓
+        .animation(MotionPolicy.animation(SettingsMotion.status), value: granted)
     }
 }
 
@@ -231,6 +240,10 @@ struct PermissionBadge: View {
 /// demo `.switch`:关闭是玻璃灰轨道,打开是那条唯一的强调蓝。
 /// 自绘而非 `Toggle(.switch)`:原生开关是 51×31 的固定尺寸,跟这张纸的行节奏不成比例
 /// (demo 是 34×20 的小号),且 macOS 原生开关没有"轨道染色"这一档。
+///
+/// **2026-11-25 补物理手感**(覆盖全设置页 19 个开关):hover 轨道提亮 + 按住时拨杆**横向拉宽**。
+/// 拉宽而不是等比放大,是与原生 iOS/macOS 拨杆对齐的做法:按住那一刻读作"捏住了它",
+/// 松手后胶囊先收回圆形、再弹到另一端 ✓
 struct BeamSwitch: View {
     @Binding var isOn: Bool
 
@@ -242,24 +255,64 @@ struct BeamSwitch: View {
         Button {
             isOn.toggle()
         } label: {
+            // 视觉全部在 `BeamSwitchStyle` 里画:按下态只有 ButtonStyle 拿得到
+            // (SwiftUI 没有"正在按下"的环境值;拿 `LongPressGesture` 拼会在快速连点时丢事件 ✗)
+            Color.clear.frame(width: SettingsMetrics.switchW, height: SettingsMetrics.switchH)
+        }
+        .buttonStyle(BeamSwitchStyle(isOn: isOn, travel: travel))
+        .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+        .accessibilityLabel(isOn ? "已开启" : "已关闭")
+    }
+}
+
+/// 开关本体的画法(按下拉宽 + hover 提亮)。独立成类型只为拿到 `configuration.isPressed` ✓
+private struct BeamSwitchStyle: ButtonStyle {
+    let isOn: Bool
+    let travel: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        Knob(configuration: configuration, isOn: isOn, travel: travel)
+    }
+
+    private struct Knob: View {
+        let configuration: Configuration
+        let isOn: Bool
+        let travel: CGFloat
+        @State private var hovering = false
+
+        /// 按住时多出来的 4pt(原生拨杆同样是 16 → 20 那一档)
+        private var stretch: CGFloat { configuration.isPressed ? 4 : 0 }
+        private var knobWidth: CGFloat { SettingsMetrics.switchKnob + stretch }
+        /// 拉宽的左缘:**靠向哪一端由 isOn 决定** —— 开着时右缘不动(向左长),关着时左缘不动 ✓
+        /// (居中向两边长会读成"变胖",不是"被捏住")
+        private var knobOffsetX: CGFloat {
+            let resting = isOn ? SettingsMetrics.switchInset + travel : SettingsMetrics.switchInset
+            return isOn ? resting - stretch : resting
+        }
+
+        var body: some View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(isOn ? SettingsTheme.beam : SettingsTheme.trackOff)
+                    // hover:轨道叠一层薄白 + 一圈极浅投影 = "这里有反应"的物理反馈
+                    .overlay(Capsule().fill(Color.white.opacity(hovering ? 0.10 : 0)))
+                    .shadow(color: .black.opacity(hovering ? 0.10 : 0), radius: 2, y: 1)
                     // ★ 2026-10-08:同上 —— 设置面板自己的动效也必须归 Glance 的开关管 ✓
                     .animation(MotionPolicy.animation(SettingsMotion.tint), value: isOn)
-                Circle()
+                    .animation(MotionPolicy.animation(SettingsMotion.hover), value: hovering)
+                // 拨杆:静止时宽=高 ⇒ 就是个圆;Capsule 只是为了能横向拉长
+                Capsule()
                     .fill(.white)
-                    .frame(width: SettingsMetrics.switchKnob, height: SettingsMetrics.switchKnob)
+                    .frame(width: knobWidth, height: SettingsMetrics.switchKnob)
                     .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
-                    .offset(x: isOn ? SettingsMetrics.switchInset + travel : SettingsMetrics.switchInset)
+                    .offset(x: knobOffsetX)
                     .animation(MotionPolicy.animation(SettingsMotion.knob), value: isOn)
+                    .animation(MotionPolicy.animation(SettingsMotion.press), value: configuration.isPressed)
             }
             .frame(width: SettingsMetrics.switchW, height: SettingsMetrics.switchH)
             .contentShape(Capsule())
+            .onHover { hovering = $0 }
         }
-        .buttonStyle(.plain) // 用 Button 而不是 onTapGesture:焦点与 VoiceOver 白拿
-        .focusEffectDisabled(!SettingsTheme.showsFocusRing)
-        .accessibilityLabel(isOn ? "已开启" : "已关闭")
     }
 }
 
@@ -383,6 +436,9 @@ struct SettingsTabRail: View {
     /// ★ 2026-11-12 二修:舌头(puck)自己的页 —— 与 `page` 分家(见 tab() 里的病例注释)
     @State private var puckPage: SettingsView.Page = .general
     @State private var greetingSeed = 0
+    /// 当前页子菜单的**淡入**系数(2026-11-25:替掉原来那条 `.transition`,见 body 里的病例注释)。
+    /// 参数驱动 ⇒ 系统开着「减弱动态效果」也照样演(opacity 不受框架降级影响 ✓)
+    @State private var submenuReveal: Double = 1
     @Namespace private var puckNS
 
     /// 时辰问候:按中国传统的一天分八段(晨/上午/正午/午后/黄昏/夜晚/深夜/破晓前),
@@ -415,8 +471,14 @@ struct SettingsTabRail: View {
                             //   ⇒ 旧子菜单**瞬移退场**(removal .identity:不淡、不滑、立刻让位 ✓);
                             //   新子菜单快速淡入(只动 opacity,不碰布局 ✓);行位移继续平滑下移 ✓
                             //   舌头(puck)照常滑 —— 它挂在页面行上,与子菜单的过渡互不相干 ✓
-                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                            //
+                            // ★ 2026-11-25 改参数驱动(原来这里是 `.transition(.asymmetric(...))`):
+                            //   本机 `com.apple.universalAccess reduceMotion = 1`,SwiftUI 会把 `.transition`
+                            //   直接抹成瞬切 ⇒ 那段"新子菜单淡入"根本看不见 ✗
+                            //   换成 `submenuReveal`(opacity)后:旧子菜单仍**当帧让位**(布局瞬切、不淡出 ⇒ 不叠影 ✓),
+                            //   新子菜单按 `SettingsMotion.contentSwap` 柔和浮现 —— 不依赖框架的过渡处理 ✓
                     }
+                    .opacity(submenuReveal)
                 }
             }
             .padding(.horizontal, SettingsMetrics.sidebarInset)   // 选中块内缩,不贴侧栏边
@@ -446,6 +508,19 @@ struct SettingsTabRail: View {
             .padding(.leading, SettingsMetrics.sidebarInset + SettingsMetrics.sidebarRowPadX)
             .padding(.trailing, SettingsMetrics.sidebarInset)
             .padding(.bottom, SettingsMetrics.tabsBottom + 4)
+        }
+        .onChange(of: page) { _, _ in
+            // 换页的子菜单淡入分两拍(与 SettingsView 的切页淡入同一套写法):
+            //   第一拍归零 —— 用 `disablesAnimations` 的事务,保证旧子菜单**不淡出**当帧让位;
+            //   第二拍淡回 —— 走 `SettingsMotion.contentSwap`,已被 `MotionPolicy` 纳管 ✓
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { submenuReveal = 0 }
+            DispatchQueue.main.async {
+                withAnimation(MotionPolicy.animation(SettingsMotion.contentSwap)) {
+                    submenuReveal = 1
+                }
+            }
         }
     }
 
@@ -501,6 +576,9 @@ struct SettingsTabRail: View {
     /// 组子菜单:缩进挂在页面行下,点击 = 页内滚到该组。选中 = 墨色加粗,不再铺块(避免与页面行的 puck 打架)
     /// 层级三线拉开(2026-09-19 用户实评「主副菜单不够明显」,判据见 settings-spec §4-11):
     /// 比主行小一档半(11.5 vs 13)、常规字重、未选与选中都灰(选中只加重转墨,不上色不上块)
+    ///
+    /// 2026-11-25:hover 淡底 + 按压微缩交给 `SettingsButtonStyle`(与全窗其余可点元素同一层手感),
+    /// 选中态的颜色变化走 `SettingsMotion.hover` —— 跟手反馈不能比指针慢一档 ✓
     private func subTab(page p: SettingsView.Page, group g: String) -> some View {
         let id = p.anchor(g)
         return Button {
@@ -510,12 +588,15 @@ struct SettingsTabRail: View {
                 .font(.system(size: 11.5, weight: selection == id ? .semibold : .regular))
                 .foregroundStyle(selection == id ? SettingsTheme.ink : SettingsTheme.ink2)
                 .padding(.leading, 22)          // 缩进:正好落在页面行文字的起点下
+                .padding(.trailing, 8)
                 .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsButtonStyle(scale: 0.98, hoverTint: true, cornerRadius: 6))
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+        // 字重不可插值,颜色可以:选中/未选之间文字颜色淡入淡出
+        .animation(MotionPolicy.animation(SettingsMotion.hover), value: selection)
     }
 }
 
@@ -534,6 +615,8 @@ struct BeamSegmented: View {
 
     let options: [Option]
     @Binding var value: String
+    /// 未选中项的 hover 淡底(选中项的舌头已由 puck 表达,hover 不再叠一层)
+    @State private var hoveredID: String?
     @Namespace private var segNS
 
     var body: some View {
@@ -549,6 +632,10 @@ struct BeamSegmented: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 3)
                         .background {
+                            // hover 淡底:**只给未选中项**(选中的舌头本身就是那层底,再叠会发脏 ✗)
+                            RoundedRectangle(cornerRadius: SettingsMetrics.puckRadius, style: .continuous)
+                                .fill(SettingsTheme.tabRail
+                                    .opacity(hoveredID == o.id && value != o.id ? 0.9 : 0))
                             if value == o.id {
                                 RoundedRectangle(cornerRadius: SettingsMetrics.puckRadius,
                                                  style: .continuous)
@@ -567,8 +654,16 @@ struct BeamSegmented: View {
                         }
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // 按压微缩:hover 底色自己画(见上面背景层),这里只要"按住有反应" ✓
+                .buttonStyle(SettingsButtonStyle(scale: 0.96, hoverTint: false))
                 .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                .onHover { over in
+                    withAnimation(MotionPolicy.animation(SettingsMotion.hover)) {
+                        if over { hoveredID = o.id } else if hoveredID == o.id { hoveredID = nil }
+                    }
+                }
+                // 换档那一拍:文字颜色(墨 ↔ 灰)跟着舌头一起过渡,不是硬跳 ✓
+                .animation(MotionPolicy.animation(SettingsMotion.tint), value: value)
                 .accessibilityAddTraits(value == o.id ? [.isSelected] : [])
             }
         }

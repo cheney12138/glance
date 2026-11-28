@@ -24,6 +24,7 @@ enum NativeHotkeyGuards {
         ) { _ in
             print("[T13] 正常退出:归还原生切换器热键")
             NativeHotkeys.restoreAll()
+            NativeDockTakeover.restoreIfNeeded()
         }
 
         NSSetUncaughtExceptionHandler(emergencyRestoreAfterException)
@@ -34,6 +35,7 @@ enum NativeHotkeyGuards {
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler {
                 NativeHotkeys.restoreAll()
+                NativeDockTakeover.restoreIfNeeded()
                 print("[T13] 收到信号 \(sig),已归还原生热键后退出")
                 exit(0)
             }
@@ -50,5 +52,7 @@ enum NativeHotkeyGuards {
 /// 而 `NSSetUncaughtExceptionHandler` 要的正是 C 函数指针。
 private func emergencyRestoreAfterException(_ exception: NSException) {
     NativeHotkeys.restoreAll()
+    // 崩溃路径专用：绝不阻塞（进程可能崩在持锁那一瞬，`restoreIfNeeded()` 会死锁在 `lock.lock()`）
+    NativeDockTakeover.emergencyRestoreOnCrash()
     print("[T13] 未捕获异常,已归还原生热键:\(exception)")
 }

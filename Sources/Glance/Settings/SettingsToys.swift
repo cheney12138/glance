@@ -173,6 +173,8 @@ struct TrayLayoutToy: View {
     let fps: Int
 
     @State private var selectedChip = 0
+    /// 版式切换的入场系数(2026-11-25):0.35 → 1。参数驱动 ⇒ 系统开着「减弱动态效果」也照演 ✓
+    @State private var layoutReveal: Double = 1
     @Namespace private var chipNS
 
     var body: some View {
@@ -216,6 +218,8 @@ struct TrayLayoutToy: View {
                     }
                 }
             }
+            .opacity(layoutReveal)
+            .scaleEffect(0.97 + 0.03 * layoutReveal)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
@@ -227,11 +231,7 @@ struct TrayLayoutToy: View {
                     )
             )
             .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(MotionPolicy.animation(SettingsMotion.puck)) {
-                    useChipRail.toggle()
-                }
-            }
+            .onTapGesture { swapLayout() }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -245,6 +245,22 @@ struct TrayLayoutToy: View {
         )
         .padding(.top, 4)
         .padding(.bottom, 6)
+    }
+
+    /// 版式切换(2026-11-25:原来只是一条 `useChipRail.toggle()`,而 if/else 两分支的内容替换
+    /// 压根没过渡 —— 小图景"叭"地就换了 ✗)。两件事分开做:
+    /// ① 版式换过去仍旧走 `SettingsMotion.puck` —— `matchedGeometryEffect` 的卡片位移靠这个事务
+    ///   (放进禁用动画的事务里,卡片会瞬间跳过去 ✗);
+    /// ② 再叠一层"入场":当拍把示意图压暗缩小(禁动画),下一拍用 `SettingsMotion.contentSwap` 收回。
+    ///   全程不靠 `.transition` —— 系统「减弱动态效果」会把过渡抹成瞬切,参数动画不受影响 ✓
+    private func swapLayout() {
+        withAnimation(MotionPolicy.animation(SettingsMotion.puck)) { useChipRail.toggle() }
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) { layoutReveal = 0.35 }
+        DispatchQueue.main.async {
+            withAnimation(MotionPolicy.animation(SettingsMotion.contentSwap)) { layoutReveal = 1 }
+        }
     }
 
     private func miniWindowCard(active: Bool, width: CGFloat, height: CGFloat) -> some View {
@@ -318,6 +334,10 @@ struct KoalaAboutHero: View {
     @State private var boopTilt: Double = 0
     @State private var patCount = 0
     @State private var noteText: String?
+    /// 小纸条的"在场"标志(2026-11-25)。纸条与标语**两层常驻**在一个 ZStack 里,
+    /// 出场只改 opacity/scale 这两个参数 —— 不再用 `.transition`
+    /// (本机 `reduceMotion = 1`,框架会把过渡抹成瞬切 ⇒ 轻拍考拉几乎没反馈 ✗)
+    @State private var noteVisible = false
     @State private var hideNoteWork: DispatchWorkItem?
 
     private let whispers = [
@@ -385,24 +405,32 @@ struct KoalaAboutHero: View {
                         )
                 }
 
-                if let noteText {
-                    Text(noteText)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(SettingsTheme.beam)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(SettingsTheme.beam.opacity(0.10))
-                                .overlay(Capsule().strokeBorder(SettingsTheme.beam.opacity(0.25), lineWidth: 0.75))
-                        )
-                        .transition(.scale(scale: 0.92).combined(with: .opacity))
-                } else {
+                // 纸条与标语同层常驻,靠 `noteVisible` 交叉淡入淡出(参数驱动,不靠 `.transition`)
+                ZStack {
                     Text("每一个窗口，都值得被单独看见")
                         .font(.system(size: 12))
                         .foregroundStyle(SettingsTheme.ink2)
-                        .transition(.opacity)
+                        .opacity(noteVisible ? 0 : 1)
+                    if let noteText {
+                        Text(noteText)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(SettingsTheme.beam)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(SettingsTheme.beam.opacity(0.10))
+                                    .overlay(Capsule().strokeBorder(SettingsTheme.beam.opacity(0.25), lineWidth: 0.75))
+                            )
+                            // 连着拍好几次时,新句子自己淡化换代(不硬跳)
+                            .contentTransition(.opacity)
+                            .opacity(noteVisible ? 1 : 0)
+                            .scaleEffect(noteVisible ? 1 : 0.92)
+                            .allowsHitTesting(false)
+                    }
                 }
+                .animation(MotionPolicy.animation(SettingsMotion.status), value: noteText)
+                .animation(MotionPolicy.animation(SettingsMotion.status), value: noteVisible)
             }
         }
         .frame(maxWidth: .infinity)
@@ -413,7 +441,8 @@ struct KoalaAboutHero: View {
     private func patKoala() {
         patCount += 1
         let tiltDirection = patCount.isMultiple(of: 2) ? 4.5 : -4.5
-        if let anim = MotionPolicy.animation(.spring(response: 0.24, dampingFraction: 0.5)) {
+        // 轻拍的弹跳收回 token(`SettingsMotion.press`):与全窗按钮同一根弹簧(0.18 / 0.72)
+        if let anim = MotionPolicy.animation(SettingsMotion.press) {
             withAnimation(anim) {
                 boopScale = 0.91
                 boopTilt = tiltDirection
@@ -428,12 +457,15 @@ struct KoalaAboutHero: View {
         let message = patCount >= 5 && patCount.isMultiple(of: 3)
             ? "被顺毛了 \(patCount) 次，心情很好 ✓"
             : whispers[(patCount - 1) % whispers.count]
-        withAnimation(MotionPolicy.animation(SettingsMotion.tint)) {
-            noteText = message
-        }
+        // 画面过渡归 `noteVisible` 的 `.animation(_, value:)` 管,这里只改数值
+        noteText = message
+        noteVisible = true
         hideNoteWork?.cancel()
         let work = DispatchWorkItem {
-            withAnimation(MotionPolicy.animation(SettingsMotion.tint)) {
+            noteVisible = false
+            // 淡出走完再清文字:提前清会让纸条"啪"地消失(动画中途换内容 = 硬跳 ✗)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                guard !noteVisible else { return }
                 noteText = nil
             }
         }

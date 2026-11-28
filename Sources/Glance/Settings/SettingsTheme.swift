@@ -198,4 +198,69 @@ enum SettingsMotion {
     static let knob = Animation.spring(response: 0.22, dampingFraction: 0.72)
     /// 纯状态色过渡(demo 的 `.2s ease`)
     static let tint = Animation.easeOut(duration: 0.2)
+    /// **hover 淡底 / 提亮**(2026-11-25 新增):鼠标划过行、子菜单、分段控件未选项时的底色浮现。
+    /// 比 `tint` 快一档 —— hover 是"跟手"的反馈,慢了会读成掉帧 ✓
+    static let hover = Animation.easeOut(duration: 0.14)
+    /// **按压回弹**:按钮按下时的微缩放(`SettingsButtonStyle`)。
+    /// response 小 = 脆(按下即给反应),damping 0.72 = 松手回位时带一点点过冲,
+    /// 与开关拨杆(`knob` 0.72)同一档手感 —— 这一个 App 里"按"只该有一种弹性 ✓
+    static let press = Animation.spring(response: 0.18, dampingFraction: 0.72)
+    /// **状态色/状态形**(权限圆点、快捷键录制描边、勾选、考拉小纸条):比 `tint` 略快
+    /// 因为它常与"内容真的变了"同时发生(已授权/未授权),慢半拍会像没跟上 ✓
+    static let status = Animation.easeOut(duration: 0.18)
+    /// **内容切换**(切步 / 版式切换 / 子菜单淡入):参数驱动那一套(opacity + 位移)用的曲线。
+    /// ⚠️ 它不是给 `.transition` 用的 —— 本仓禁用 `.transition`(见 `MotionPolicy` 的框架降级说明)✓
+    static let contentSwap = Animation.easeOut(duration: 0.16)
+}
+
+// MARK: - 按钮手感(按下微缩放 + hover 淡底)
+
+/// 设置窗里所有"可点的东西"共用的一层物理手感:**按住微缩 + hover 淡底**。
+///
+/// 为什么 hover 的底色要由**独立的子视图**持有(`@State private var hovering`):
+/// `ButtonStyle.makeBody` 里 `@State` 不会在每次重算时保持(ConditionalContent 反复重建),
+/// 把状态挂在独立的子视图上,SwiftUI 才会按身份持久化它 ✓
+/// ⚠️ 那个子视图**不能叫 `Body`**:`ButtonStyle` 自带一个 `Body` 关联类型,
+/// 同名嵌套类型会被当成它的实现 ⇒ 编译报"must be as accessible as its enclosing type" ✗
+///
+/// 为什么缩放**不是** `.transition`:本机 `reduceMotion = 1`,SwiftUI 会把过渡抹成瞬切;
+/// `scaleEffect`/`opacity` 这些**参数**动画不受影响 ✓(见 `MotionPolicy` 那段消元结论)
+struct SettingsButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.96
+    var hoverTint: Bool = true
+    var cornerRadius: CGFloat = 6
+
+    init(scale: CGFloat = 0.96, hoverTint: Bool = true, cornerRadius: CGFloat = 6) {
+        self.scale = scale
+        self.hoverTint = hoverTint
+        self.cornerRadius = cornerRadius
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        PressedLabel(configuration: configuration,
+                     scale: scale, hoverTint: hoverTint, cornerRadius: cornerRadius)
+    }
+
+    private struct PressedLabel: View {
+        let configuration: Configuration
+        let scale: CGFloat
+        let hoverTint: Bool
+        let cornerRadius: CGFloat
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                // hover:一层柔和圆角底色(与 `SettingsRow` 的 hover 同源同色,全窗只有一种 hover 语言)
+                .background {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(SettingsTheme.tabRail.opacity(hoverTint && hovering ? 0.75 : 0))
+                        .animation(MotionPolicy.animation(SettingsMotion.hover), value: hovering)
+                }
+                .scaleEffect(configuration.isPressed ? scale : 1)
+                .opacity(configuration.isPressed ? 0.86 : 1.0)
+                .animation(MotionPolicy.animation(SettingsMotion.press), value: configuration.isPressed)
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .onHover { hovering = $0 }
+        }
+    }
 }

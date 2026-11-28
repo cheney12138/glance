@@ -208,6 +208,26 @@ enum Keys {
 
     /// `app.onboardingCompleted` —— 首次 30 秒轻引导是否已完成（老用户启动时自动静默置 true）
     static let appOnboardingCompleted = "app.onboardingCompleted"
+
+    // MARK: dock —— 原生 Dock 替代（ADR-0018）
+
+    /// `dock.enabled` —— 是否启用 Glance 原生 Dock 替代（默认关，opt-in）
+    static let dockEnabled = "dock.enabled"
+    /// `dock.position` —— 贴边唤起位置（`bottom` / `left` / `right`）
+    static let dockPosition = "dock.position"
+    /// `dock.displayMode` —— 程序坞显示方式（`autoHide` 自动隐藏 / `alwaysOn` 常驻显示）。
+    /// 常驻模式（方案 A：悬浮常驻 + 全屏自动避让）的**总开关**就这一个键 ✓
+    static let dockDisplayMode = "dock.displayMode"
+    /// `dock.dwellMs` —— 指针贴边驻留唤起阈值（毫秒；默认 100）
+    static let dockDwellMs = "dock.dwellMs"
+    /// `dock.iconSize` —— 程序坞图标目标尺寸（pt，范围 36…96，默认 56；独立于 ⌘Tab 的 120% 固定尺寸）
+    static let dockIconSize = "dock.iconSize"
+    /// `dock.previewScale` —— 程序坞窗口预览尺寸百分比（范围 80…150，默认 120，与 ⌘Tab 一致）
+    static let dockPreviewScale = "dock.previewScale"
+    /// `dock.centerTray` —— 程序坞窗口预览托盘是否始终居中（默认开；关闭后跟随悬停图标移动）
+    static let dockCenterTray = "dock.centerTray"
+    /// `dock.nativeSnapshot` —— 接管前备份的原生 `com.apple.dock` 偏好快照（JSON，不暴露在设置页）
+    static let dockSavedSnapshot = "dock.nativeSnapshot"
 }
 
 /// **出厂默认值的唯一来源**(2026-09-22 立)。
@@ -261,6 +281,51 @@ extension Keys {
 
     static var onboardingCompleted: Bool {
         UserDefaults.standard.object(forKey: appOnboardingCompleted) as? Bool ?? KeyDefaults.onboardingCompleted
+    }
+
+    static var isDockEnabled: Bool {
+        UserDefaults.standard.object(forKey: dockEnabled) as? Bool ?? KeyDefaults.dockEnabled
+    }
+
+    static var currentDockPosition: DockPosition {
+        let raw = UserDefaults.standard.string(forKey: dockPosition) ?? KeyDefaults.dockPosition
+        return DockPosition(rawValue: raw) ?? .bottom
+    }
+
+    /// 程序坞显示方式的**唯一读取点**。没写过 / 写成垃圾值都回退 `.autoHide`
+    /// （常驻模式是新能力，读不到就必须等价于老行为 ✓）
+    static var currentDockDisplayMode: DockDisplayMode {
+        let raw = UserDefaults.standard.string(forKey: dockDisplayMode) ?? KeyDefaults.dockDisplayMode
+        return DockDisplayMode(rawValue: raw) ?? .autoHide
+    }
+
+    /// 常驻模式是否开启（调用点可读性用：比每次比较枚举干净）
+    static var isDockAlwaysOn: Bool { currentDockDisplayMode == .alwaysOn }
+
+    static var dockDwellMsValue: Int {
+        let v = (UserDefaults.standard.object(forKey: dockDwellMs) as? NSNumber)?.intValue
+        return max(0, v ?? KeyDefaults.dockDwellMs)
+    }
+
+    static var dockDwellSeconds: Double {
+        Double(dockDwellMsValue) / 1000.0
+    }
+
+    /// 程序坞图标尺寸（pt，夹紧在 36…96，默认 56）
+    static var dockIconSizePt: CGFloat {
+        let v = (UserDefaults.standard.object(forKey: dockIconSize) as? NSNumber)?.doubleValue
+        return CGFloat(min(max(v ?? KeyDefaults.dockIconSize, 36), 96))
+    }
+
+    /// 程序坞预览窗口倍率（0.80…1.50，默认 1.20，独立于图标尺寸）
+    static var dockPreviewScaleRatio: CGFloat {
+        let v = (UserDefaults.standard.object(forKey: dockPreviewScale) as? NSNumber)?.doubleValue
+        return CGFloat(min(max(v ?? KeyDefaults.dockPreviewScale, 80), 150)) / 100.0
+    }
+
+    /// 程序坞预览卡片是否始终相对程序坞居中（默认开）
+    static var isDockTrayCentered: Bool {
+        UserDefaults.standard.object(forKey: dockCenterTray) as? Bool ?? KeyDefaults.dockCenterTray
     }
 
     /// 老用户免打扰迁移：若从未写过 `app.onboardingCompleted`，但已存在历史运行配置键，
@@ -358,4 +423,18 @@ enum KeyDefaults {
     static let takeoverGraveCyclesWindows = true
     /// 首次 30 秒轻引导默认未完成（老用户会在启动迁移中自动标 true）
     static let onboardingCompleted = false
+    /// 原生 Dock 替代（默认关，opt-in，见 ADR-0018）
+    static let dockEnabled = false
+    /// Dock 停靠位置（`bottom` / `left` / `right`）
+    static let dockPosition = "bottom"
+    /// 程序坞默认**自动隐藏** —— 老行为（100% 兼容已装机用户：这个键没写过就还是老样子 ✓）
+    static let dockDisplayMode = DockDisplayMode.autoHide.rawValue
+    /// 指针贴边驻留唤起阈值（毫秒）
+    static let dockDwellMs = 100
+    /// 程序坞图标默认尺寸（pt；作为屏幕边缘栏位比 ⌘Tab 紧凑）
+    static let dockIconSize: Double = 56
+    /// 程序坞预览窗口默认尺寸（百分比；120% 与 ⌘Tab 对齐，确保实时预览清晰可见）
+    static let dockPreviewScale: Double = 120
+    /// 程序坞预览卡片默认始终居中（与 ⌘Tab 一致）
+    static let dockCenterTray = true
 }

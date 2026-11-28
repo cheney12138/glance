@@ -1,11 +1,48 @@
 import SwiftUI
 import GlanceCore
 
+/// 冷启动装配兜底代理：macOS SwiftUI `MenuBarExtra.label.onAppear` 在重启后常延迟到
+/// 点击菜单栏图标或开窗时才触发，导致权限刷新、热键/Dock 装配全部滞后。
+/// 通过 `NSApplicationDelegate.applicationDidFinishLaunching` 与 `.onAppear` 双入口
+/// 驱动同一个幂等装配方法（谁先到谁跑，只跑一次）。
+@MainActor
+final class GlanceAppDelegate: NSObject, NSApplicationDelegate {
+    var onDidFinishLaunching: (() -> Void)? {
+        didSet {
+            guard didFinishLaunching, !didTrigger, onDidFinishLaunching != nil else { return }
+            Task { @MainActor [weak self] in
+                self?.triggerIfNeeded()
+            }
+        }
+    }
+
+    private var didFinishLaunching = false
+    private var didTrigger = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        didFinishLaunching = true
+        triggerIfNeeded()
+    }
+
+    private func triggerIfNeeded() {
+        guard didFinishLaunching, !didTrigger, let onDidFinishLaunching else { return }
+        didTrigger = true
+        onDidFinishLaunching()
+    }
+}
+
+private final class LaunchGate {
+    var didSetup = false
+    var didScheduleWarmup = false
+}
+
 // Glance 入口。T1 范围:菜单栏图标 + 设置占位 + 退出。
 // T2 追加:权限门禁——缺权限时启动即弹引导窗,菜单栏图标带警示态,菜单第一行实时报门禁。
 // 结构备忘:MenuBarExtra 取代 AppDelegate+StatusBarController;T9 设置面板同样走 openWindow。
 @main
 struct GlanceApp: App {
+    @NSApplicationDelegateAdaptor(GlanceAppDelegate.self) private var appDelegate
+    private let launchGate = LaunchGate()
     /// 碰一下那个全局 let:惰性初始化只在被访问时才跑,而它必须在任何 print 之前生效
     init() {
         // ★ 快照与 live/静帧"三源一把尺"的接线(依赖倒置 ✓):Snapshotter(Inventory 层)
@@ -55,8 +92,16 @@ struct GlanceApp: App {
     @Environment(\.dismissWindow) private var dismissWindow
     private let hotkeys = HotkeyTapCenter()
     private let panelController = PanelController()
+    private let dockController = DockController()
+    private let dockEdgeSensor = DockEdgeSensor()
 
     var body: some Scene {
+        let _ = {
+            appDelegate.onDidFinishLaunching = {
+                performLaunchSetupIfNeeded()
+            }
+        }()
+
         MenuBarExtra {
             // 权限行只在缺权时出现——授权完成后日日看它 = 视觉纳税(用户评审拍板)
             if !permissions.allGranted {
@@ -90,95 +135,36 @@ struct GlanceApp: App {
                     Image(systemName: "exclamationmark.triangle")
                 }
             }
-                .onAppear {
-                    // 恢复守卫 + 启动自愈要先装:上一次运行如果被 SIGKILL,原生 ⌘Tab 会一直死着
-                    // (见 NativeSwitcherHotkeys),这件事与权限是否齐备无关
-                    NativeHotkeyGuards.install()
-                    NativeHotkeys.restoreAll()
-                    permissions.refresh()
-                    // ★ 弹窗决策帄到 onChange(见权限 Window 的注释):这里只记读数供对账
-                    glog("[权限] 启动读数 AX=\(permissions.accessibilityGranted) 录屏=\(permissions.screenCaptureGranted)")
-                    MruEvidence.shared.start()
-                    // ★ 按屏的"最近用过"账簿(2026-09-22 用户实报后加:落点被全局 MRU 跨屏污染 ✗)
-                    ScreenRecency.shared.start()
-                    // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
-                    ThumbnailRefresher.shared.start()
-                    // 僵尸查看器自动退出:预览 / QuickTime / 文本编辑关光全部窗口并切走后自动安静退出
-                    ZombieAppReaper.shared.start()
-                    // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
-                    //   (Trigger 不许反向依赖 App 层 ⇒ 只能在 App 层装配,见 SameAppScreenCycler 头注 ✓)
-                    hotkeys.onSameAppScreenCycle = { forward in
-                        Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
-                    }
-                    // ★ 2026-10-26 复原(用户:「去看之前 ⌘` 覆盖系统级是什么语义、怎么实现的」):
-                    //   ⌘` 的接管语义 = **只在当前屏内循环同一个 App 的窗口**,实现就是
-                    //   `SameAppScreenCycler.step`(带屏隔离,见 ScreenScopedSwitching.swift)。
-                    //   我上一版自己造了"开局 + moveWindow + 定时确认"一套 ⇒ 语义跑偏 ✗
-                    //   ⇒ 回到既有实现,⌘` 正向、⌘⇧` 反向,两条都走同一个入口 ✓
-                    hotkeys.onRaisePreview = { forward in
-                        Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
-                    }
-                    // ⌘` 新语义(2026-10-27):唤起"只有窗口"的一局(托盘 / 芯片轨道,**没有环**),
-                    // 默认先切一扇;松手才真正切窗(确认由触发层的 `.confirm` 发下来)✓
-                    hotkeys.onWindowsSession = { [weak panelController] forward in
-                        panelController?.beginWindows(reverse: !forward) ?? false
-                    }
-                    hotkeys.onAction = { [weak panelController] a in panelController?.handle(a) }
-                    hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
-                    // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
-                    // 开关 key: pointer.doubleOptionJumps(触发键 2026-09-17 由 ⌃ 改 ⌥:与 IDEA 冲突)
-                    DoubleOptionTap.shared.start()
-                    // ★ 双击 ⌥ 的"跳屏 + 落焦"整件事在 App 层(Trigger 只报"发生了" ✓)
-                    DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
-                    // 跨屏送窗(ADR-0016):走**独立注册的快捷键**(默认 ⌘⇧M,可在设置里录 ✓)
-                    // —— 脱面板:和面板开没开、选中哪一格都无关 ✓
-                    // ★ 2026-11-12 三修改 async(搬窗要等一拍再设尺寸,见 WindowFocuser.move 的病例注释)⇒ Task 托管 ✓
-                    hotkeys.onMoveWindowToNextScreen = { Task { @MainActor in await MoveFocusedWindowToNextScreen.run() } }
-                    // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
-                    // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
-                    ThreeFingerTap.shared.onFire = { hotkeys.beginPinnedSession() }
-                    // ★ 三指/四指轻点与"三指起拖"分不开(拖移锁定时更是如此 ✗)⇒
-                    //   生效后 0.3s 若系统真在拖拽,就撤销这次唤起(见 cancelIfDragStarted ✓)
-                    ThreeFingerTap.onDragMisfire = { [weak panelController] in
-                        panelController?.dismissAfterGestureMisfire()
-                    }
-                    // 四指轻点(T91)= **唤起并直接进未启动环**。同一枚检测器,手指越多越具体:
-                    // 三指 = 打开这个工具;四指 = 跳过已启动的,直接看没启动的。
-                    // 走控制器自己的入口(闸都在它手里:launchables 空 / 已经在未启动环里 ⇒ 安静不动)
-                    ThreeFingerTap.shared.onFireFour = { [weak panelController] in
-                        hotkeys.beginPinnedSession()
-                        panelController?.requestLaunchRing()   // ⚠️ 只记意图:此刻 launchables 还是上一局的
-                    }
-                    // ★ 门禁(2026-11-09 用户实报「没给权限三指也能唤起」):三指/四指走
-                    //   MultitouchSupport,**不需要辅助功能权限** —— 启动就缺权时不能装它。
-                    //   Trigger 禁引 PermissionMonitor ⇒ 由 App 层在这里决定装不装。
-                    //   权限齐了之后的重装走下面 onChange 的 granted 分支 ✓
-                    if permissions.allGranted { ThreeFingerTap.shared.start() }
-                    hotkeys.onScroll = { [weak panelController] e in panelController?.handleScrollEvent(e) }
-                    // T91 表一 ⑤:别处的键盘输入 ⇒ 钉住的那一局自己收("牛皮糖")
-                    hotkeys.onElsewhereInput = { [weak panelController] in
-                        panelController?.dismissForOutsideInput()
-                    }
-                    panelController.onSessionEnd = { [weak hotkeys] in
-                        hotkeys?.endSession()
-                        ZombieAppReaper.shared.sweepSoon(delay: 0.15)
-                    }
-                    panelController.onOpenCheatSheet = { showCheatSheet() }
-                    if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
-                }
-                // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠上面 onAppear)
-                .onChange(of: permissions.allGranted) { _, granted in
-                    if granted {
-                        hotkeys.start(); scheduleWarmup()
-                        // 门禁关过 = MT 通道被拆过(started 已复位)⇒ 重新装配(start 幂等 ✓)
-                        ThreeFingerTap.shared.start()
-                    }
-                    // ★ 权限被删(2026-11-05 死机病例):拆 tap + 拒重开,否则吞键 tap 的
-                    //   「系统停 → 我们重开」循环会冻死全系统事件(能点状态栏但哪都点不了)
-                    else { hotkeys.closePermissionGate() }
-                }
+            .id(permissions.allGranted)
+            .onAppear {
+                performLaunchSetupIfNeeded()
+            }
         }
         .menuBarExtraStyle(.menu)
+        // 门禁从缺到齐的那一瞬,触发层上线(首次启动已齐则靠 performLaunchSetupIfNeeded)
+        // 挂在 Scene 上而非 label 上,避免 MenuBarExtra.label 在重启后延迟挂载导致漏触发
+        .onChange(of: permissions.allGranted) { _, granted in
+            if granted {
+                hotkeys.start(); scheduleWarmup()
+                // 门禁关过 = MT 通道被拆过(started 已复位)⇒ 重新装配(start 幂等 ✓)
+                ThreeFingerTap.shared.start()
+            }
+            // ★ 权限被删(2026-11-05 死机病例):拆 tap + 拒重开,否则吞键 tap 的
+            //   「系统停 → 我们重开」循环会冻死全系统事件(能点状态栏但哪都点不了)
+            else { hotkeys.closePermissionGate() }
+            syncDockSubsystem(permissionsGranted: granted)
+        }
+        // ★ 冷启动 TCC 暖机复核**落定**那一拍收口(审查 P2)。
+        //   复核在途时 `syncDockSubsystem` 只敢停自家传感器,**不动原生 Dock**(见那里的注释);
+        //   落定后两种结局:
+        //   · 权限其实齐着 ⇒ `allGranted` false→true 已经走上面那条 onChange 接管过了,
+        //     这里 `guard !permissions.allGranted` 拦住,不重复下发 ✓
+        //   · 权限**确实没给** ⇒ `allGranted` 一直是 false、那条 onChange 永远不会来
+        //     ⇒ 必须在这里补一刀,否则原生 Dock 永远停在"没还原"的状态 ✗
+        .onChange(of: permissions.isLaunchRechecking) { _, rechecking in
+            guard !rechecking, !permissions.allGranted else { return }
+            syncDockSubsystem(permissionsGranted: false)
+        }
 
         Window("Glance 权限", id: "permissions") {
             if permissions.allGranted && !Keys.onboardingCompleted {
@@ -225,7 +211,13 @@ struct GlanceApp: App {
                     DiagnosticCollector.buildJSON(permissions: permissions, hotkeys: hotkeys)
                 },
                 onOpenCheatSheet: { showCheatSheet() },
-                onOpenOnboarding: { showOnboarding() }
+                onOpenOnboarding: { showOnboarding() },
+                onDockConfigChanged: {
+                    syncDockSubsystem(permissionsGranted: permissions.allGranted, dismissIfVisible: true)
+                },
+                onRestoreNativeDock: {
+                    restoreNativeDockManually()
+                }
             )
         }
         .windowResizability(.contentSize)
@@ -305,6 +297,263 @@ struct GlanceApp: App {
         showWindow(id: "onboarding")
     }
 
+    /// 幂等冷启动装配：由 `GlanceAppDelegate.applicationDidFinishLaunching` 与
+    /// `MenuBarExtra.label.onAppear` 双入口触发（谁先到谁跑，只执行一次）。
+    private func performLaunchSetupIfNeeded() {
+        guard !launchGate.didSetup else { return }
+        launchGate.didSetup = true
+
+        // 恢复守卫 + 启动自愈要先装:上一次运行如果被 SIGKILL,原生 ⌘Tab 会一直死着
+        // (见 NativeSwitcherHotkeys),这件事与权限是否齐备无关
+        NativeHotkeyGuards.install()
+        NativeHotkeys.restoreAll()
+        NativeDockTakeover.recoverDirtyTakeoverOnLaunchIfNeeded()
+        permissions.refresh()
+        // ★ 弹窗决策帄到 onChange(见权限 Window 的注释):这里只记读数供对账
+        glog("[权限] 启动读数 AX=\(permissions.accessibilityGranted) 录屏=\(permissions.screenCaptureGranted)")
+        MruEvidence.shared.start()
+        // ★★ 2026-11-25 根因 A:「新打开的 App 进环/程序坞后先显示白纸图标,要等一会才有真 logo」
+        //   原来只有 `PanelController.warmIconsInBackground` 在**启动那一刻**给当时的在跑 App 预热,
+        //   之后新拉起的 App 没人管 ⇒ 首次被画到必然 cache miss ⇒ 先白纸 ✗
+        //   ⇒ 挂系统「App 已启动」通知,新 App 一落地就后台解析好那枚图标(幂等,只注册一次)✓
+        IconProvider.startObservingLaunches()
+        // ★ 按屏的"最近用过"账簿(2026-09-22 用户实报后加:落点被全局 MRU 跨屏污染 ✗)
+        ScreenRecency.shared.start()
+        // 缩略图保温:App 激活时就把它那几扇窗拍好(AltTab 的取法,见 ThumbnailRefresher)
+        ThumbnailRefresher.shared.start()
+        // 僵尸查看器自动退出:预览 / QuickTime / 文本编辑关光全部窗口并切走后自动安静退出
+        ZombieAppReaper.shared.start()
+        // ★ ⌘` 接管:App 层把「Trigger 的钩子」与「App 层的循环器」接起来 ✓
+        //   (Trigger 不许反向依赖 App 层 ⇒ 只能在 App 层装配,见 SameAppScreenCycler 头注 ✓)
+        hotkeys.onSameAppScreenCycle = { forward in
+            Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+        }
+        // ★ 2026-10-26 复原(用户:「去看之前 ⌘` 覆盖系统级是什么语义、怎么实现的」):
+        //   ⌘` 的接管语义 = **只在当前屏内循环同一个 App 的窗口**,实现就是
+        //   `SameAppScreenCycler.step`(带屏隔离,见 ScreenScopedSwitching.swift)。
+        //   我上一版自己造了"开局 + moveWindow + 定时确认"一套 ⇒ 语义跑偏 ✗
+        //   ⇒ 回到既有实现,⌘` 正向、⌘⇧` 反向,两条都走同一个入口 ✓
+        hotkeys.onRaisePreview = { forward in
+            Task { @MainActor in SameAppScreenCycler.step(forward: forward) }
+        }
+        // ⌘` 新语义(2026-10-27):唤起"只有窗口"的一局(托盘 / 芯片轨道,**没有环**),
+        // 默认先切一扇;松手才真正切窗(确认由触发层的 `.confirm` 发下来)✓
+        hotkeys.onWindowsSession = { [weak panelController] forward in
+            yieldDockForSwitcher(reason: "切换器唤起互斥")
+            return panelController?.beginWindows(reverse: !forward) ?? false
+        }
+        hotkeys.onAction = { [weak panelController] a in
+            switch a {
+            case .begin, .beginReverse:
+                yieldDockForSwitcher(reason: "切换器唤起互斥")
+            default:
+                break
+            }
+            panelController?.handle(a)
+        }
+        hotkeys.onCmdClick = { point in CmdClickFix.handle(point: point) }
+        // 双击 ⌥ 把指针送到下一块屏（仅"旁观"事件流，绝不吞键）。默认关，
+        // 开关 key: pointer.doubleOptionJumps(触发键 2026-09-17 由 ⌃ 改 ⌥:与 IDEA 冲突)
+        DoubleOptionTap.shared.start()
+        // ★ 双击 ⌥ 的"跳屏 + 落焦"整件事在 App 层(Trigger 只报"发生了" ✓)
+        DoubleOptionTap.shared.onJumpToNextDisplay = { DoubleOptionJump.jumpToNextDisplay() }
+        // 跨屏送窗(ADR-0016):走**独立注册的快捷键**(默认 ⌘⇧M,可在设置里录 ✓)
+        // —— 脱面板:和面板开没开、选中哪一格都无关 ✓
+        // ★ 2026-11-12 三修改 async(搬窗要等一拍再设尺寸,见 WindowFocuser.move 的病例注释)⇒ Task 托管 ✓
+        hotkeys.onMoveWindowToNextScreen = { Task { @MainActor in await MoveFocusedWindowToNextScreen.run() } }
+        // ★ 常驻程序坞 + 跨屏送窗的**留白**接线(ADR-0018):目标屏若有常驻条带占位,
+        //   "撑满屏幕"要按 `DockController` 算出的剩余可见区算,
+        //   否则窗口正好压在条带上(底部那条被遮)。没占位 ⇒ 返回 nil ⇒ 退回系统可见区 ✓
+        MoveFocusedWindowToNextScreen.reservedVisibleFrameProvider = { [weak dockController] screen in
+            dockController?.reservedQuartzVisibleFrame(for: screen)
+        }
+        // 三指点按 = 唤起面板且**这一局不散场**(见 ThreeFingerTap:原始触摸只在私有框架里)。
+        // 默认关;开着三指拖移也能共存 —— 判据是"恰好三指且 ≤0.3s"
+        ThreeFingerTap.shared.onFire = {
+            yieldDockForSwitcher(reason: "三指唤起互斥")
+            hotkeys.beginPinnedSession()
+        }
+        // ★ 三指/四指轻点与"三指起拖"分不开(拖移锁定时更是如此 ✗)⇒
+        //   生效后 0.3s 若系统真在拖拽,就撤销这次唤起(见 cancelIfDragStarted ✓)
+        ThreeFingerTap.onDragMisfire = { [weak panelController] in
+            panelController?.dismissAfterGestureMisfire()
+        }
+        // 四指轻点(T91)= **唤起并直接进未启动环**。同一枚检测器,手指越多越具体:
+        // 三指 = 打开这个工具;四指 = 跳过已启动的,直接看没启动的。
+        // 走控制器自己的入口(闸都在它手里:launchables 空 / 已经在未启动环里 ⇒ 安静不动)
+        ThreeFingerTap.shared.onFireFour = { [weak panelController] in
+            yieldDockForSwitcher(reason: "四指唤起互斥")
+            hotkeys.beginPinnedSession()
+            panelController?.requestLaunchRing()   // ⚠️ 只记意图:此刻 launchables 还是上一局的
+        }
+        // ★ 门禁(2026-11-09 用户实报「没给权限三指也能唤起」):三指/四指走
+        //   MultitouchSupport,**不需要辅助功能权限** —— 启动就缺权时不能装它。
+        //   Trigger 禁引 PermissionMonitor ⇒ 由 App 层在这里决定装不装。
+        //   权限齐了之后的重装走 MenuBarExtra.onChange 的 granted 分支 ✓
+        if permissions.allGranted { ThreeFingerTap.shared.start() }
+        hotkeys.onScroll = { [weak panelController] e in panelController?.handleScrollEvent(e) }
+        // T91 表一 ⑤:别处的键盘输入 ⇒ 钉住的那一局自己收("牛皮糖")
+        hotkeys.onElsewhereInput = { [weak panelController] in
+            panelController?.dismissForOutsideInput()
+        }
+        panelController.onSessionEnd = { [weak hotkeys] in
+            hotkeys?.endSession()
+            ZombieAppReaper.shared.sweepSoon(delay: 0.15)
+        }
+        panelController.isPinnedSession = { [weak hotkeys] in
+            hotkeys?.isPinnedSession ?? false
+        }
+        panelController.onOpenCheatSheet = { showCheatSheet() }
+        // 独立程序坞装配（ADR-0018）：与 PanelController 通过 App 层双向互斥
+        dockController.onWillOpen = { [weak panelController] in
+            if panelController?.isVisible == true {
+                panelController?.handle(.cancel)
+            }
+        }
+        dockController.onDidDismiss = { [weak dockEdgeSensor] in
+            dockEdgeSensor?.notifyDockClosedExternally()
+        }
+        dockController.onAlwaysOnDisplayStateChanged = { [weak dockEdgeSensor] ignoredDisplayID in
+            dockEdgeSensor?.ignoredDisplayID = ignoredDisplayID
+            // ★ 审查 P2：进入全屏避让 / 关闭常驻时，传感器需被通知一次「那只 Dock 已经关了」。
+            //   否则它的状态机停在 `.open(displayID:)` 且 50ms 轮询定时器不退：
+            //   · 回全屏空间后不会再重新触发 `.edgeEntered`（回到 .open 被去重）⇒ 该屏常驻条带点不出来；
+            //   · 空转的轮询每秒跑 20 次，白烧 CPU。
+            if ignoredDisplayID == nil {
+                dockEdgeSensor?.notifyDockClosedExternally()
+            }
+        }
+        dockEdgeSensor.onOpenDock = { [weak dockController, weak dockEdgeSensor] displayID in
+            guard let dockController else { return }
+            if dockController.isAlwaysOnActive {
+                if dockController.isHiddenForFullscreen && dockController.alwaysOnDisplayID == displayID {
+                    dockController.open(on: displayID)
+                    if dockController.isVisible {
+                        dockEdgeSensor?.notifyDockOpened(displayID: displayID)
+                    }
+                } else {
+                    dockController.moveAlwaysOn(to: displayID)
+                    // ★ 状态机复位(审查修复):常驻条带已经"开着"(只是换了一块屏)⇒
+                    //   上面那条 `isVisible` 分支回不去 ⇒ 传感器会一直停在自己的 `.open(displayID:)` 里,
+                    //   50ms 轮询空转不退;而且它自认为"还开着" ⇒ 换屏后**无法立刻响应再切回另一块屏** ✗
+                    //   ⇒ 换屏落地后把「那只 Dock 已经关了」通知给它:状态回 idle,
+                    //     下一块屏的贴边立刻能重新进入 3.0s 跨屏停边(见 DockEdgeSensor.effectiveDwellDuration)✓
+                    if dockController.isShowingPersistentStrip {
+                        dockEdgeSensor?.notifyDockClosedExternally()
+                    }
+                }
+                return
+            }
+            dockController.open(on: displayID)
+            if dockController.isVisible {
+                dockEdgeSensor?.notifyDockOpened(displayID: displayID)
+            }
+        }
+        dockEdgeSensor.onCloseDock = { [weak dockController] in
+            guard let dockController else { return }
+            // 仅在自动隐藏或全屏临时唤起态由边缘传感器驱动收起；常驻可见态由近场门控自管收托盘
+            if !dockController.isAlwaysOnActive || dockController.isHiddenForFullscreen {
+                dockController.dismiss(reason: "鼠标移出程序坞交互区")
+            }
+        }
+        dockEdgeSensor.onEdgePrewarm = { [weak dockController] displayID in
+            dockController?.prewarm(on: displayID)
+        }
+        dockEdgeSensor.isSuppressed = { [weak panelController, weak hotkeys] in
+            (panelController?.isVisible ?? false) || hotkeys?.state == .navigating
+        }
+        dockEdgeSensor.isPointerInsideDockSurface = { [weak dockController] point in
+            dockController?.isPointInInteractiveRegion(point) ?? false
+        }
+        if permissions.allGranted { hotkeys.start(); scheduleWarmup() }
+        syncDockSubsystem(permissionsGranted: permissions.allGranted)
+    }
+
+    /// 切换器（⌘Tab / ⌘` / 三指 / 四指）唤起时与程序坞的互斥策略：
+    /// 自动隐藏或全屏临时浮出态下收起整条程序坞；正常常驻态下仅收起预览托盘、保留常驻条带。
+    private func yieldDockForSwitcher(reason: String) {
+        // ★ 审查 P2：用**运行态**判据而非设置值。常驻模式关掉（或本次会话未激活常驻）时
+        //   `Keys.currentDockDisplayMode` 仍可能是 `.alwaysOn`（用户改了设置但本次没激活，
+        //   或激活失败），那样会误走“只收托盘”分支 ⇒ 整条 Dock 霸占屏幕不收 ✗
+        let effectiveMode: DockDisplayMode = dockController.isAlwaysOnActive
+            ? Keys.currentDockDisplayMode
+            : .autoHide
+        if DockAlwaysOnPolicy.shouldDismissStripForSwitcher(
+            mode: effectiveMode,
+            isHiddenForFullscreen: dockController.isHiddenForFullscreen
+        ) {
+            if dockController.isVisible {
+                dockController.dismiss(reason: reason)
+            }
+        } else {
+            dockController.dismissTrayOnly(reason: reason)
+        }
+    }
+
+    /// 同步原生程序坞接管与边缘传感器（权限缺失或开关关闭时立即停传感器并归还原生程序坞）。
+    private func syncDockSubsystem(permissionsGranted: Bool, dismissIfVisible: Bool = false) {
+        let shouldRun = permissionsGranted && Keys.isDockEnabled
+        // ★ 审查 P2:冷启动 TCC 暖机复核还在途(+0.35s / +1.0s)时,`permissionsGranted == false`
+        //   很可能是**假阴性** —— 重启后前 1s 内 AX / 录屏探测偶发返回 false。
+        //   此时**绝不能**下 `NativeDockTakeover.apply(enabled: false)`:它不是空操作,
+        //   它会把上一次真接管写下的快照还原(autohide 改回 + `killall Dock` 一次);
+        //   等复核落定"其实权限是齐的",又 `apply(enabled: true)` 再改回来 + `killall Dock` 第二次
+        //   ⇒ 冷启动原生 Dock 被连根拔两遍(用户看到 Dock 闪两次 / 桌面跳一下)✗
+        //   ⇒ 这一拍只停**自家**传感器与面板(纯本进程状态,可逆、无系统副作用),
+        //     原生 Dock 原样**保持不动**,等复核落定后由
+        //     `onChange(of: permissions.allGranted)` / `onChange(of: permissions.isLaunchRechecking)` 收口 ✓
+        if !shouldRun && permissions.isLaunchRechecking {
+            dockEdgeSensor.stop()
+            dockEdgeSensor.ignoredDisplayID = nil
+            if dockController.isAlwaysOnActive {
+                dockController.setAlwaysOnMode(false)
+            } else if dockController.isVisible {
+                dockController.dismiss(reason: "权限待复核")
+            }
+            return
+        }
+        if shouldRun {
+            NativeDockTakeover.apply(enabled: true)
+            if Keys.isDockAlwaysOn {
+                if dockController.isAlwaysOnActive {
+                    dockController.reloadAlwaysOnLayoutIfNeeded()
+                } else {
+                    dockController.setAlwaysOnMode(true)
+                }
+            } else {
+                if dockController.isAlwaysOnActive {
+                    dockController.setAlwaysOnMode(false)
+                } else if dismissIfVisible && dockController.isVisible {
+                    dockController.dismiss(reason: "程序坞配置变更")
+                }
+                dockEdgeSensor.ignoredDisplayID = nil
+            }
+            dockEdgeSensor.start()
+            dockEdgeSensor.reloadConfiguration()
+        } else {
+            dockEdgeSensor.stop()
+            dockEdgeSensor.ignoredDisplayID = nil
+            if dockController.isAlwaysOnActive {
+                dockController.setAlwaysOnMode(false)
+            } else if dockController.isVisible {
+                dockController.dismiss(reason: permissionsGranted ? "关闭替代程序坞" : "权限收回")
+            }
+            NativeDockTakeover.apply(enabled: false)
+        }
+    }
+
+    /// 设置页应急还原按钮：停传感器、收起面板并强制恢复系统原生程序坞。
+    private func restoreNativeDockManually() {
+        dockEdgeSensor.stop()
+        dockEdgeSensor.ignoredDisplayID = nil
+        if dockController.isAlwaysOnActive {
+            dockController.setAlwaysOnMode(false)
+        } else if dockController.isVisible {
+            dockController.dismiss(reason: "手动还原系统程序坞")
+        }
+        NativeDockTakeover.forceRestoreNativeDock()
+    }
+
     /// 冷启动预热(T86):启动后空闲 2.5s 干两件没人看的事 ——
     /// ① 语境屏枚举 + 预截一遍:把冷枚举管线(T85 实测 256ms:CGWindowList / AX 首连 / SCK 全是
     ///    第一次)与空缓存整个暖掉,首局唤起直接吃热路径(实测上屏 353ms → 84ms);
@@ -320,6 +569,8 @@ struct GlanceApp: App {
     /// 这样"启动后立刻唤起"也有预热过的合成器与建好的窗口,冷启动的白光没有可乘之机
     /// (扫屏还没跑只影响"第一眼有没有图",那是另一件事,不闪)。
     private func scheduleWarmup() {
+        guard !launchGate.didScheduleWarmup else { return }
+        launchGate.didScheduleWarmup = true
         // 2026-11-14 审查:0.6 → 0.15。保温(建窗+首帧+图标解码)只花几十 ms,
         //   晚 0.45s 的窗口里用户若按下 ⌥⇥,撞上的是"同步建窗 ~80ms"的裸奔窗(按下没动静然后突然出来)。
         //   扫屏(coldStartSweep)仍留 2.5s —— 那一支才是真贵的(百 ms 级 AX/CGWindowList/SCK)。

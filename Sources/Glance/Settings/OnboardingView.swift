@@ -12,6 +12,11 @@ struct OnboardingView: View {
     let onFinish: () -> Void
 
     @State private var step = 0
+    /// 切步动效的两个参数(2026-11-25)。**不用 `.transition`**:系统开着「减弱动态效果」时
+    /// SwiftUI 会把过渡抹成瞬切,而 opacity/位移这些**参数**动画不受影响 ✓
+    /// 两拍写法与 `SettingsView` 的切页淡入同一套(推初值 → 下一拍收回)
+    @State private var stepOpacity: Double = 1
+    @State private var stepOffsetY: CGFloat = 0
     @State private var triedSummon = false
     @State private var trigger = TriggerConfig.load()
     @State private var takeover = TriggerConfig.takeoverEnabled
@@ -32,7 +37,8 @@ struct OnboardingView: View {
                         Capsule()
                             .fill(idx == step ? SettingsTheme.beam : SettingsTheme.trackOff)
                             .frame(width: idx == step ? 18 : 6, height: 6)
-                            .animation(.easeOut(duration: 0.18), value: step)
+                            // 步点指示器:宽度/颜色跟着 `step` 走 token(原来是一条裸 `.easeOut(0.18)`)
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: step)
                     }
                 }
 
@@ -59,6 +65,9 @@ struct OnboardingView: View {
                 default: stepThreeShortcuts
                 }
             }
+            // 切步的"入场系数":新正文从 0.15 淡回 1、从下方 6pt 浮回原位(由 onChange 驱动 ✓)
+            .opacity(stepOpacity)
+            .offset(y: stepOffsetY)
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
             .frame(minHeight: 235, alignment: .topLeading)
@@ -69,7 +78,7 @@ struct OnboardingView: View {
             HStack {
                 if step > 0 {
                     Button("上一步") {
-                        withAnimation(.easeOut(duration: 0.16)) { step -= 1 }
+                        step -= 1   // 动画全在 `.onChange(of: step)` 里(参数驱动,与下一步同一套)
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12.5))
@@ -80,7 +89,7 @@ struct OnboardingView: View {
                     if step == totalSteps - 1 {
                         finish()
                     } else {
-                        withAnimation(.easeOut(duration: 0.16)) { step += 1 }
+                        step += 1   // 同上:切步动效由 `.onChange(of: step)` 统一驱动
                     }
                 }
                 .buttonStyle(.plain)
@@ -101,6 +110,23 @@ struct OnboardingView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+        // 切步:两拍 —— ①禁用动画的事务把正文推到半透明 + 下移 6pt(即拍生效);
+        //   ②下一拍用 `SettingsMotion.contentSwap` 收回。参数驱动的柔和切步,
+        //   不靠 `.transition` ⇒ 系统减少动效时照样演,只是被 `MotionPolicy` 折成短线 ✓
+        .onChange(of: step) { _, _ in
+            var push = Transaction()
+            push.disablesAnimations = true
+            withTransaction(push) {
+                stepOpacity = 0.15
+                stepOffsetY = 6
+            }
+            DispatchQueue.main.async {
+                withAnimation(MotionPolicy.animation(SettingsMotion.contentSwap)) {
+                    stepOpacity = 1
+                    stepOffsetY = 0
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .glancePanelDidSummon)) { _ in
             triedSummon = true
         }
@@ -159,14 +185,14 @@ struct OnboardingView: View {
                 .foregroundStyle(SettingsTheme.ink)
 
             HStack(spacing: 10) {
-                layoutChoice(title: "卡片行",
-                             desc: "同 App 多窗并排平铺，适合窗口不多时一眼扫完。",
-                             selected: windowLayoutRaw == WindowLayout.row.rawValue) {
+                OnboardingLayoutCard(title: "卡片行",
+                                     desc: "同 App 多窗并排平铺，适合窗口不多时一眼扫完。",
+                                     selected: windowLayoutRaw == WindowLayout.row.rawValue) {
                     windowLayoutRaw = WindowLayout.row.rawValue
                 }
-                layoutChoice(title: "芯片轨道",
-                             desc: "左侧大图预览 + 右侧标题目录，专治 IDEA / 浏览器多窗。",
-                             selected: windowLayoutRaw == WindowLayout.rail.rawValue) {
+                OnboardingLayoutCard(title: "芯片轨道",
+                                     desc: "左侧大图预览 + 右侧标题目录，专治 IDEA / 浏览器多窗。",
+                                     selected: windowLayoutRaw == WindowLayout.rail.rawValue) {
                     windowLayoutRaw = WindowLayout.rail.rawValue
                 }
             }
@@ -186,55 +212,27 @@ struct OnboardingView: View {
         }
     }
 
-    private func layoutChoice(title: String, desc: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SettingsTheme.ink)
-                    Spacer()
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 14))
-                        .foregroundStyle(selected ? SettingsTheme.beam : SettingsTheme.ink2)
-                }
-                Text(desc)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(SettingsTheme.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(SettingsTheme.tabRail)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(selected ? SettingsTheme.beam : SettingsTheme.hairline,
-                                          lineWidth: selected ? 1.5 : 1)
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
     private func appearancePill(_ title: String, value: String) -> some View {
         let on = appearance == value
-        return Button(title) {
+        // 胶囊底挪进 label:①整颗胶囊都能点(原来只有文字是命中区 ✗);
+        // ②按压微缩缩的是"整颗胶囊",不是只缩文字 ✓
+        return Button {
             appearance = value
             AppearancePreference.apply()
+        } label: {
+            Text(title)
+                .font(.system(size: 11.5, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? .white : SettingsTheme.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(on ? SettingsTheme.beam : SettingsTheme.tabRail)
+                )
+                .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        .font(.system(size: 11.5, weight: on ? .semibold : .regular))
-        .foregroundStyle(on ? .white : SettingsTheme.ink)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(
-            Capsule().fill(on ? SettingsTheme.beam : SettingsTheme.tabRail)
-        )
-        .contentShape(Capsule())
+        .buttonStyle(SettingsButtonStyle(scale: 0.96, hoverTint: false, cornerRadius: 10))
+        // 换主题:底色(蓝 ↔ 灰)与文字颜色平滑过渡
+        .animation(MotionPolicy.animation(SettingsMotion.status), value: on)
     }
 
     // MARK: - Step 3：高频效率开关
@@ -280,5 +278,62 @@ struct OnboardingView: View {
     private func finish() {
         UserDefaults.standard.set(true, forKey: Keys.appOnboardingCompleted)
         onFinish()
+    }
+}
+
+// MARK: - 版式选择卡
+
+/// 引导第二步的两张版式卡(原先内联在 `OnboardingView.layoutChoice` 里)。
+/// 提成独立 view 只为一件事:**hover 需要 `@State`**(内联的 `some View` 方法没法持有状态)。
+/// 按压微缩交给 `SettingsButtonStyle`;卡本身已有底色,再叠一层 hover 底会发脏 ⇒ 只提一层极浅白 ✓
+private struct OnboardingLayoutCard: View {
+    let title: String
+    let desc: String
+    let selected: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.ink)
+                    Spacer()
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(selected ? SettingsTheme.beam : SettingsTheme.ink2)
+                        .contentTransition(.opacity)
+                }
+                Text(desc)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(SettingsTheme.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(SettingsTheme.tabRail)
+                    .overlay(
+                        // 选中态:发丝 → 强调蓝 + 描边加粗(参数动画,不做 .transition)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(selected ? SettingsTheme.beam : SettingsTheme.hairline,
+                                          lineWidth: selected ? 1.5 : 1)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(hovering ? 0.10 : 0))
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(SettingsButtonStyle(scale: 0.98, hoverTint: false, cornerRadius: 12))
+        .onHover { hovering = $0 }
+        .animation(MotionPolicy.animation(SettingsMotion.status), value: selected)
+        .animation(MotionPolicy.animation(SettingsMotion.hover), value: hovering)
     }
 }

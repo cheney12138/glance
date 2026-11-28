@@ -51,7 +51,10 @@ struct SettingsView: View {
     var buildDiagnosticsJSON: (() -> String)? = nil
     var onOpenCheatSheet: (() -> Void)? = nil
     var onOpenOnboarding: (() -> Void)? = nil
+    var onDockConfigChanged: (() -> Void)? = nil
+    var onRestoreNativeDock: (() -> Void)? = nil
     @State private var diagnosticsCopied = false
+    @State private var dockRestored = false
 
     enum Page: String, CaseIterable, Identifiable {
         case general = "通用"
@@ -70,7 +73,7 @@ struct SettingsView: View {
         /// 方便点击,不用用户在每个目录里找」)。顺序即页内顺序;锚点 id = "\(rawValue):\(组名)"。
         var groups: [String] {
             switch self {
-            case .general: return ["外观", "实时预览", "应用与面板", "手势操控", "触感", "未启动环", "动效"]
+            case .general: return ["外观", "实时预览", "应用与面板", "程序坞", "手势操控", "触感", "未启动环", "动效"]
             case .shortcut: return ["触发", "导航", "窗口操作"]
             case .about: return ["权限", "诊断", "帮助"]
             }
@@ -82,6 +85,14 @@ struct SettingsView: View {
     private final class ScrollBottomBox { var value: CGFloat? }
 
     @State private var page: Page = .general
+    /// 右侧内容页**切页淡入**的两个参数(2026-11-25)。
+    /// 为什么不用 `.transition`:本机开着系统「减弱动态效果」(`reduceMotion = 1`),
+    /// SwiftUI 会把 `.transition(...)` 直接吞掉 ⇒ 切页硬闪。改成**参数驱动**:
+    /// 同一拍把 opacity/位移推到初值(`disablesAnimations`),下一拍再用
+    /// `SettingsMotion.contentSwap` 收回到终值 —— 减少动效时由 `MotionPolicy` 折成短线 easeOut,
+    /// 依然柔和,且永远不依赖 `.transition` ✓
+    @State private var pageContentOpacity: Double = 1
+    @State private var pageContentOffsetY: CGFloat = 0
     @State private var scrollBottomBox = ScrollBottomBox()
     /// 侧栏当前锚点(锚点 id = "\(页):\(组名)")。页行点击 = 切页 + 跳到该页第一组;
     /// 子菜单点击 = 页内滚动定位。nil = 不定位
@@ -133,6 +144,13 @@ struct SettingsView: View {
     @AppStorage(Keys.panelSheen) private var sheen = KeyDefaults.sheen
     /// 系统"减弱动态效果"的实时值(改完系统设置回来重开这个面板即可刷新)
     @State private var systemReduced = MotionPolicy.systemReduced
+    @AppStorage(Keys.dockEnabled) private var dockEnabled = KeyDefaults.dockEnabled
+    @AppStorage(Keys.dockPosition) private var dockPosition = KeyDefaults.dockPosition
+    @AppStorage(Keys.dockDisplayMode) private var dockDisplayMode = KeyDefaults.dockDisplayMode
+    @AppStorage(Keys.dockDwellMs) private var dockDwellMs = KeyDefaults.dockDwellMs
+    @AppStorage(Keys.dockIconSize) private var dockIconSize: Double = KeyDefaults.dockIconSize
+    @AppStorage(Keys.dockPreviewScale) private var dockPreviewScale: Double = KeyDefaults.dockPreviewScale
+    @AppStorage(Keys.dockCenterTray) private var dockCenterTray = KeyDefaults.dockCenterTray
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,6 +215,10 @@ struct SettingsView: View {
                 .padding(.horizontal, SettingsMetrics.contentPadX)
                 .padding(.top, SettingsMetrics.contentPadTop)
                 .padding(.bottom, SettingsMetrics.contentPadBottom)
+                // ★ 切页淡入(参数驱动,见 `pageContentOpacity` 的注释):只影响**右侧内容**,
+                //   侧栏切换本身照旧利落 ✓
+                .opacity(pageContentOpacity)
+                .offset(y: pageContentOffsetY)
                 // ★ 底部哨兵(零布局成本):报出"内容真正的底"在滚动坐标系里的 maxY ✓
                 //   与视口高度一比 ⇒ 到底没有 ✓(病例见 `ContentBottomKey`)
                 .background(
@@ -232,6 +254,22 @@ struct SettingsView: View {
             //   ③ 0.4s 静默期过后,"滚动 → 导航跟着走"的回写把它**确认**成当前项 ✓(看着就像它自己跳过去的)
             // ⇒ 口径:切页必须①选中第一组 ②**等新页布局好**再滚(下一拍 + 50ms 各试一次),③静默期照旧 ✓
             .onChange(of: page) { _, newPage in
+                // ★ 右侧内容**柔和切页**:先(无动画)推到半透明 + 下移 4pt,下一拍再收回。
+                //   用 `withTransaction` 的 disablesAnimations 保证第一拍不插值(否则等于没换页),
+                //   第二拍才走 `SettingsMotion.contentSwap` ✓
+                var push = Transaction()
+                push.disablesAnimations = true
+                withTransaction(push) {
+                    pageContentOpacity = 0.25
+                    pageContentOffsetY = 4
+                }
+                DispatchQueue.main.async {
+                    guard page == newPage else { return }
+                    withAnimation(MotionPolicy.animation(SettingsMotion.contentSwap)) {
+                        pageContentOpacity = 1
+                        pageContentOffsetY = 0
+                    }
+                }
                 let first = newPage.anchor(newPage.groups[0])
                 navSelection = first
                 func pushScroll() {
@@ -325,6 +363,9 @@ struct SettingsView: View {
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()
                             .frame(width: 46, alignment: .trailing)
+                            // 读数丝滑滚动:数字位数字化变 + 参数动画(不用 .transition ✓)
+                            .contentTransition(.numericText())
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: Int(iconClearance))
                     }
                 }
                 AppearanceRingToy(clearance: iconClearance, sheen: sheen, appearance: appearance)
@@ -362,6 +403,8 @@ struct SettingsView: View {
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()
                             .frame(width: 46, alignment: .trailing)
+                            .contentTransition(.numericText())
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: Int(liveTier))
                     }
                 }
             }
@@ -390,6 +433,98 @@ struct SettingsView: View {
                     BeamSwitch(isOn: $pinPanel)
                 }
             }
+
+            SettingsGroup(label: "程序坞", icon: "dock.rectangle", anchor: Page.general.anchor("程序坞")) {
+                SettingsRow(title: "替代系统程序坞",
+                            desc: "隐藏系统程序坞，鼠标贴边时在当前屏唤起 Glance 面板。按 ⌥⌘D 可临时呼出系统程序坞。") {
+                    BeamSwitch(isOn: $dockEnabled)
+                }
+                SettingsRow(title: "屏幕位置") {
+                    BeamSegmented(
+                        options: DockPosition.allCases.map { .init(id: $0.rawValue, label: $0.label) },
+                        value: $dockPosition
+                    )
+                }
+                // ★ 常驻模式（方案 A：悬浮常驻 + 全屏自动避让）的**入口就这一行**。
+                //   常驻 = 条带一直停在屏边，但全屏应用时自动避让（不盖别人的全屏）
+                SettingsRow(title: "显示方式",
+                            desc: "自动隐藏时鼠标贴边浮出；常驻显示时固定停靠在屏边，全屏应用自动避让。") {
+                    BeamSegmented(
+                        options: DockDisplayMode.allCases.map { .init(id: $0.rawValue, label: $0.label) },
+                        value: $dockDisplayMode
+                    )
+                }
+                SettingsRow(title: "图标尺寸", desc: "调整程序坞图标大小，超出屏幕时自动缩放。") {
+                    HStack(spacing: 8) {
+                        Slider(value: dockIconSizeBinding, in: 36...96)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text("\(Int(dockIconSize)) pt")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                            .contentTransition(.numericText())
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: Int(dockIconSize))
+                    }
+                }
+                SettingsRow(title: "预览窗口尺寸", desc: "独立调整悬停预览卡片与实时画面大小。") {
+                    HStack(spacing: 8) {
+                        Slider(value: dockPreviewScaleBinding, in: 80...150)
+                            .controlSize(.small)
+                            .frame(width: 150)
+                            .focusEffectDisabled(!SettingsTheme.showsFocusRing)
+                        Text("\(Int(dockPreviewScale))%")
+                            .font(SettingsFont.rowValue)
+                            .foregroundStyle(SettingsTheme.ink2)
+                            .monospacedDigit()
+                            .frame(width: 46, alignment: .trailing)
+                            .contentTransition(.numericText())
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: Int(dockPreviewScale))
+                    }
+                }
+                // 常驻模式下这个值仍在用（托盘/预览的浮出、以及全屏避让后的召回），
+                // 只是量级上不再主导观感 ⇒ 降透明度提示“次要”，**不禁用**（用户随时可以改）
+                SettingsRow(title: "贴边触发延迟", desc: "自动隐藏或全屏避让时生效。") {
+                    BeamSegmented(
+                        options: [
+                            .init(id: "50", label: "50ms"),
+                            .init(id: "100", label: "100ms"),
+                            .init(id: "180", label: "180ms"),
+                            .init(id: "280", label: "280ms"),
+                        ],
+                        value: dockDwellBinding
+                    )
+                }
+                .opacity(dockDisplayMode == DockDisplayMode.alwaysOn.rawValue ? 0.6 : 1)
+                // 主从置灰的**参数动画**:开关一拨,从属行柔和暗下去/亮起来,不再硬闪
+                .animation(MotionPolicy.animation(SettingsMotion.status),
+                           value: dockDisplayMode == DockDisplayMode.alwaysOn.rawValue)
+                SettingsRow(title: "预览卡片居中",
+                            desc: "开启后预览卡片始终相对程序坞居中；关闭则跟随悬停的图标移动。") {
+                    BeamSwitch(isOn: $dockCenterTray)
+                }
+                SettingsRow(title: "还原系统程序坞",
+                            desc: "若系统程序坞未自动恢复，可手动还原为系统设置。",
+                            hairline: false) {
+                    capsuleActionButton(dockRestored ? "已还原" : "还原") {
+                        onRestoreNativeDock?()
+                        // 文案翻转走参数动画(不带 .transition —— reduceMotion 会把它吞掉)
+                        withAnimation(MotionPolicy.animation(SettingsMotion.status)) { dockRestored = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation(MotionPolicy.animation(SettingsMotion.status)) { dockRestored = false }
+                        }
+                    }
+                }
+            }
+            .onChange(of: dockEnabled) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockPosition) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockDisplayMode) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockIconSize) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockPreviewScale) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockCenterTray) { _, _ in onDockConfigChanged?() }
+            .onChange(of: dockDwellMs) { _, _ in onDockConfigChanged?() }
 
             // **手势操控**(2026-09-19,用户:「这次也做成开关吧」):两枚真开关直读既有
             // defaults 键 —— 此前这两个功能只能 `defaults write` 开,没有 UI(病例:另一台
@@ -437,6 +572,7 @@ struct SettingsView: View {
                                   value: $hapticStrength)
                         .disabled(!hapticEnabled)
                         .opacity(hapticEnabled ? 1 : 0.4)
+                        .animation(MotionPolicy.animation(SettingsMotion.status), value: hapticEnabled)
                 }
             }
             .onChange(of: hapticEnabled) { _, on in
@@ -475,6 +611,8 @@ struct SettingsView: View {
             SettingsGroup(label: "动效", icon: "sparkles", anchor: Page.general.anchor("动效")) {
                 SettingsRow(title: "系统减弱动态效果") {
                     RowValue(systemReduced ? "已开启" : "未开启")
+                        .contentTransition(.opacity)
+                        .animation(MotionPolicy.animation(SettingsMotion.status), value: systemReduced)
                 }
                 SettingsRow(title: "强制完整动效", desc: "关闭后遵循系统设置。") {
                     BeamSwitch(isOn: $alwaysAnimate)
@@ -512,9 +650,9 @@ struct SettingsView: View {
                                 let json = buildJSON()
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(json, forType: .string)
-                                diagnosticsCopied = true
+                                withAnimation(MotionPolicy.animation(SettingsMotion.status)) { diagnosticsCopied = true }
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                    diagnosticsCopied = false
+                                    withAnimation(MotionPolicy.animation(SettingsMotion.status)) { diagnosticsCopied = false }
                                 }
                             }
                             capsuleActionButton("导出…") {
@@ -555,6 +693,23 @@ struct SettingsView: View {
         Binding(get: { iconClearance }, set: { iconClearance = $0.rounded() })
     }
 
+    private var dockIconSizeBinding: Binding<Double> {
+        Binding(get: { dockIconSize }, set: { dockIconSize = $0.rounded() })
+    }
+
+    private var dockPreviewScaleBinding: Binding<Double> {
+        Binding(get: { dockPreviewScale }, set: { dockPreviewScale = $0.rounded() })
+    }
+
+    private var dockDwellBinding: Binding<String> {
+        Binding(
+            get: { String(dockDwellMs) },
+            set: { raw in
+                if let ms = Int(raw) { dockDwellMs = ms }
+            }
+        )
+    }
+
     /// 名单行尾部的操作入口:描边胶囊「N 个 ›」—— 之前的裸数字读不出"能点",
     /// 用户实评「你倒是给我添加操作入口啊」。胶囊 = 这一页"可点"的通用暗示,不另立语言。
     private func listCountButton(_ kind: LaunchListEditor.Kind) -> some View {
@@ -578,7 +733,8 @@ struct SettingsView: View {
             //   不补 contentShape 的话只有文字能点(用户实报「只能点到 4 上面」)
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        // 胶囊形:圆角给到 999(等价于 Capsule),按压缩一档 + 悬停淡色由 `SettingsButtonStyle` 统一
+        .buttonStyle(SettingsButtonStyle(cornerRadius: 999))
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
     }
 
@@ -587,6 +743,8 @@ struct SettingsView: View {
             Text(title)
                 .font(SettingsFont.rowValue)
                 .foregroundStyle(SettingsTheme.ink)
+                // 文案翻转(「还原」⇄「已还原」、「复制 JSON」⇄「已复制」)柔和浮现/淡出
+                .contentTransition(.opacity)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 5)
                 .background(
@@ -594,7 +752,8 @@ struct SettingsView: View {
                 )
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsButtonStyle(cornerRadius: 999))
+        .animation(MotionPolicy.animation(SettingsMotion.status), value: title)
         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
     }
 
@@ -704,24 +863,29 @@ private struct LaunchListEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
                 .padding(.top, 4)
-            if ids.isEmpty {
-                Text("还没有 App。点下面「添加 App…」挑一个。")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 16)
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(ids, id: \.self) { id in
-                            listRow(id)
+            // ★ 空态 ↔ 列表:柔和淡入淡出 —— 用一个**容器 + `contentSwap` 动画**(参数驱动),
+            //   不用 `.transition(...)`(本机 reduceMotion=1 会把显式过渡直接吞掉 ✓)
+            VStack(alignment: .leading, spacing: 0) {
+                if ids.isEmpty {
+                    Text("还没有 App。点下面「添加 App…」挑一个。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 16)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(ids, id: \.self) { id in
+                                listRow(id)
+                            }
                         }
+                        .padding(.horizontal, 24)
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.top, 10)
                 }
-                .padding(.top, 10)
             }
+            .animation(MotionPolicy.animation(SettingsMotion.contentSwap), value: ids.isEmpty)
             HStack {
                 Button {
                     showingPicker = true
@@ -729,7 +893,7 @@ private struct LaunchListEditor: View {
                     Text("添加 App…")
                         .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsButtonStyle(cornerRadius: 6))
                 // 蓝框 = 系统焦点环(2026-09-19 用户:「不要这个蓝框」);这一页的按钮都不吃焦点
                 .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                 Spacer()
@@ -772,7 +936,8 @@ private struct LaunchListEditor: View {
                 Image(systemName: "minus.circle.fill")
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            // 行内小按钮:缩放幅度比胶囊小一档,悬停淡色照旧(统一手感的入口就这一处)
+            .buttonStyle(SettingsButtonStyle(scale: 0.92, cornerRadius: 999))
             .focusEffectDisabled(!SettingsTheme.showsFocusRing)
             .help("从名单移除")
         }
@@ -857,11 +1022,15 @@ private struct AppPicker: View {
                     }
                 }
                 .padding(.horizontal, 24)
+                // ★ 加载态 ↔ 列表:参数驱动淡入淡出。挂在 LazyVStack 上而不是再包一层容器 ——
+                //   多包一个 VStack 会让 LazyVStack 失去惰性(整盘 App 一次性建行 ✗)
+                .animation(MotionPolicy.animation(SettingsMotion.contentSwap), value: isLoading)
             }
             .padding(.top, 10)
             HStack {
                 Spacer()
                 Button("完成") { dismiss() }
+                    .buttonStyle(SettingsButtonStyle(cornerRadius: 6))
                     .keyboardShortcut(.defaultAction)
                     .focusEffectDisabled(!SettingsTheme.showsFocusRing)
             }
@@ -921,7 +1090,8 @@ private struct AppPicker: View {
             .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // 列表行:行宽整条可点 ⇒ 按压缩得更轻(0.99),圆角 6
+        .buttonStyle(SettingsButtonStyle(scale: 0.99, cornerRadius: 6))
     }
 }
 
@@ -975,6 +1145,7 @@ struct ShortcutPane: View {
                         .frame(width: 150)
                         .disabled(!scrollMovesSelection)      // 开关关掉时置灰:主从关系一眼可见
                         .opacity(scrollMovesSelection ? 1 : 0.4)
+                        .animation(MotionPolicy.animation(SettingsMotion.status), value: scrollMovesSelection)
                         .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                     Text("\(Int(scrollSpeed)) 次/秒")
                         .font(SettingsFont.rowValue)
@@ -982,6 +1153,10 @@ struct ShortcutPane: View {
                         .monospacedDigit()
                         .frame(width: 62, alignment: .trailing)
                         .opacity(scrollMovesSelection ? 1 : 0.4)
+                        .contentTransition(.numericText())
+                        // 一个 modifier 同时看两个值(读数 + 主开关):[Int] 天然 Equatable
+                        .animation(MotionPolicy.animation(SettingsMotion.status),
+                                   value: [Int(scrollSpeed), scrollMovesSelection ? 1 : 0])
                 }
             }
                 SettingsRow(title: "接管系统 ⌘Tab",
@@ -1023,7 +1198,8 @@ struct ShortcutPane: View {
                         KeyChip(text: recordingMove ? "按下新组合…" : chip(moveConfig),
                                 editable: true, highlighted: recordingMove)
                     }
-                    .buttonStyle(.plain)
+                    // 录制触发钮:胶囊键帽的自带动效照旧,只补统一的按压/悬停手感
+                    .buttonStyle(SettingsButtonStyle(cornerRadius: 6))
                     .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                     .help(recordingMove ? "按 Esc 取消录制" : "点一下开始录制新的快捷键")
                 }
@@ -1042,6 +1218,8 @@ struct ShortcutPane: View {
                             .foregroundStyle(SettingsTheme.ink2)
                             .monospacedDigit()
                             .frame(width: 40, alignment: .trailing)
+                            .contentTransition(.numericText())
+                            .animation(MotionPolicy.animation(SettingsMotion.status), value: Int(moveFillMinRatio))
                     }
                 }
                 SettingsRow(title: "触发键",
@@ -1053,7 +1231,7 @@ struct ShortcutPane: View {
                         KeyChip(text: recording ? "按下新组合…" : chip(config),
                                 editable: true, highlighted: recording)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SettingsButtonStyle(cornerRadius: 6))
                     .focusEffectDisabled(!SettingsTheme.showsFocusRing)
                     .help(recording ? "按 Esc 取消录制" : "点一下开始录制新的触发键")
                 }

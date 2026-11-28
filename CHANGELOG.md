@@ -4,10 +4,27 @@
 
 ## [Unreleased]
 
+---
+
+## [v1.3.0] - 2026-11-28
+
 ### Added
+- **原生程序坞替代（`Dock` 独立模块）**：新增 [ADR-0018](docs/adr/0018-dock-replacement-isolation.md)、`GlanceCore/Dock/` 纯核与 `Sources/Glance/Dock/`，与 `Panel/` 架构硬隔离：
+  - 支持接管隐藏 macOS 原生程序坞（默认关闭，持久化备份 `autohide`/`autohide-delay`，接入四重退出恢复守卫与 `Tools/NativeDock.swift` 应急还原脚本）；
+  - 支持**左 / 下 / 右**三向位置与**自动隐藏 / 常驻悬浮（含全屏自动避让）**双显示模式；
+  - 严格按语境屏隔离、MRU 排序并兼容最小化窗口，尾部提供纯点击 2×2 未启动文件夹入口切换已启动/未启动应用；
+  - 窗口预览托盘跟随全局布局（卡片行 / 芯片轨道），侧边提供 macOS 通知式不透明阶梯芯片叠卡与 Safe-Triangle 斜向护航；
+  - 设置页新增「程序坞」独立分节（显示方式、屏幕位置、图标尺寸、预览尺寸、贴边延迟、预览居中与一键还原）。
+- **统一液态玻璃容器 `RingGlassSurface`**：程序坞条带与 `⌘Tab` 主环共用同一套液态玻璃材质（macOS 26+ 原生 `.glassEffect(.clear)`，macOS 14–25 自动降级为毛玻璃 + 光学补偿层）。
 - **0 窗僵尸查看器自动安静退出**：新增 `ZombieAppReaper.swift`、`AXWindowList.hasZeroRealWindows` 与设置项「自动退出无窗僵尸应用」（`ring.autoQuitZombies`，默认开启）；针对 `预览`、`QuickTime Player`、`文本编辑`，在关光全部实窗并切走后约 `0.6s` 自动安静 `terminate`，过渡期内亦不再占据切换器列表。
 
+### Changed
+- **程序坞与面板点击落焦提速**：单可见窗 App 走纯 `(wid: 0, mode: 0x100)` SLPS 前置路径；程序坞悬停增加 120ms 驻留后再起 `SCStream`/抓图（0ms 先垫缓存帧与预热 `AXUIElement`），点击确认立即摘屏并延后 250ms 拆流、延后 450ms 刷新后台枚举，实测 Dock 落焦中位耗时由 79ms 降至 36ms 并消除 500ms 级主线程卡顿。
+
 ### Fixed
+- **修复外接鼠标 / 跨屏键鼠共享工具频繁误触发三指自重启与菜单栏闪黑**：`ThreeFingerTap` 死亡检测从 `leftMouseDown` 迁至物理触控板专属硬件事件（精密滚动 / Force Touch 压感 / 多指手势且 `eventSourceUnixProcessID == 0`）；同时补齐 `screensDidWakeNotification` / `sessionDidBecomeActiveNotification` 监听，修复睡醒/屏变/久闲对同硬件 ID 内建板空跑跳过与 `frameAt == 0` 无法自重启的缺口。
+- **修复三指唤起后点击芯片轨道上半截打不开窗口**：修正 `ClickThroughHostingView.hitTest(_:)` 在 `NSHostingView.isFlipped == true` 下将 `padTop = 0` 的 96pt 底部阴影留白错扣到顶部的坐标系反转问题。
+- **根治面板首帧灰/黑矩形闪烁与程序坞细节打磨**：新增 `FirstFrameRevealGate` 门控显影、修复退出应用后程序坞斜上方滑出及分割线间距、优化深/浅模式下叠卡不透明阶梯层次。
 - **修复三指唤起 / 钉住态下裸按 `Q / W / M / F / H` 误触发窗口动作**：`HotkeyTap.swift` 对动作键收紧门禁，三指/四指唤起或已松开触发修饰键时仅响应全匹配 `⌘Q / ⌘W / ⌘M / ⌘F / ⌘H`，单独按字母直接按别处输入收起面板并放行；同步更新设置页与快捷键速查键位文案。
 
 ---
